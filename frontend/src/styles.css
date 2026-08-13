@@ -152,3 +152,43 @@ body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "M
 .tool-step-status.error { color: var(--danger); }
 .tool-step-toggle { flex-shrink: 0; color: var(--muted); font-size: 10px; }
 .tool-step-body { background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 8px 10px; }
+
+
+/* ============ 产品体验闭环 ============ */
+
+/* 停止按钮（busy 时替代发送） */
+.btn-stop {
+  padding: 10px 18px;
+  border: 1px solid var(--danger, #dc2626);
+  border-radius: 8px;
+  background: var(--danger, #dc2626);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-stop:hover { opacity: 0.85; }
+
+/* 文件面板折叠 */
+.fp-head-actions { display: flex; gap: 6px; align-items: center; }
+.file-panel .fp-body { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.file-panel.collapsed .fp-body { display: none; }
+.file-panel.collapsed { width: 44px; min-width: 44px; }
+
+/* ============ 移动端适配 ============ */
+@media (max-width: 900px) {
+  .app-main { flex-direction: column; }
+  .chat-panel { border-right: none; border-bottom: 1px solid var(--border); }
+  .file-panel { width: 100%; max-height: 40vh; border-top: 1px solid var(--border); }
+  .file-panel.collapsed { width: 100%; max-height: none; }
+  .session-list { width: 100%; max-height: 120px; overflow-x: auto; display: flex; flex-direction: row; gap: 6px; }
+  .sl-item { flex-shrink: 0; }
+}
+
+@media (max-width: 480px) {
+  .app-header { padding: 8px 12px; }
+  .logo { font-size: 15px; }
+  .input-bar { padding: 8px; }
+  .input-bar input { font-size: 15px; }
+  .bubble { font-size: 14px; max-width: 100%; }
+  .msg-row { padding: 4px 8px; }
+}

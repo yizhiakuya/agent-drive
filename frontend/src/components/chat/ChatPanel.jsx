@@ -102,62 +102,12 @@ export function PlanCard({ plan }) {
   );
 }
 
-/** 工具调用卡片：按工具类型结构化渲染 */
-function TraceCard({ t }) {
-  const [open, setOpen] = useState(false);
-  const parsed = t.parsed;
-
-  let body;
-  if (t.tool === "list_files" && Array.isArray(parsed)) {
-    body = (
-      <table className="trace-table">
-        <thead><tr><th>名称</th><th>类型</th><th>大小</th></tr></thead>
-        <tbody>
-          {parsed.map((f, i) => (
-            <tr key={i}>
-              <td>{f.is_dir ? "📂" : "📄"} {f.name}</td>
-              <td>{f.is_dir ? "文件夹" : "文件"}</td>
-              <td>{f.is_dir ? "—" : fmtSize(f.size)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  } else if (t.tool === "search_files" && Array.isArray(parsed)) {
-    body = (
-      <div className="trace-cards">
-        {parsed.map((f, i) => (
-          <div key={i} className="trace-card">
-            {f.is_dir ? "📂" : "📄"} <b>{f.name}</b> · {fmtSize(f.size || 0)}
-          </div>
-        ))}
-      </div>
-    );
-  } else if (parsed && parsed.ok === false) {
-    body = <div className="trace-error">❌ {parsed.error}</div>;
-  } else {
-    body = <code className="trace-raw">{t.output}</code>;
-  }
-
-  return (
-    <div className="trace-item">
-      <div className="trace-head" onClick={() => setOpen(!open)}>
-        <span className="tool-name">{t.tool}</span>
-        <code className="trace-args">{JSON.stringify(t.arguments)}</code>
-        <span className="trace-toggle">{open ? "▲" : "▼"}</span>
-      </div>
-      {open && <div className="trace-body">{body}</div>}
-    </div>
-  );
-}
-
 export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [messages, setMessages] = useState([
     { type: "assistant", content: "你好！我是你的文件管家 🦋 我可以让你搜索文件、整理资料、配置系统……例如：\n\n- \"看看网盘里有什么文件\"\n- \"帮我建一个叫 项目 的文件夹\"\n- \"把 LLM 换成 DeepSeek\"\n- \"以后下载的文件自动归档\"" },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [trace, setTrace] = useState([]);
   const [pending, setPending] = useState(null);
   const [plan, setPlan] = useState([]);
   const [contextUsage, setContextUsage] = useState(null);
@@ -184,7 +134,6 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
         loadSession(sessionId);
       } else {
         setMessages([]);
-        setTrace([]);
         setPlan([]);
         setContextUsage(null);
       }
@@ -211,9 +160,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
           return { type: m.role, content: m.content || "" };
         });
       setMessages(msgs.length ? msgs : []);
-      setTrace([]);
       setPlan([]);
-      setContextUsage(null);
       setContextUsage(null);
     } catch (e) {
       setMessages([]);
@@ -228,11 +175,10 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     const history = messages
       .filter((m) => (m.type === "user" || m.type === "assistant"))
       .map((m) => ({ role: m.type, content: m.content }))
-      .slice(-30);
+      .slice(-80);  // 窗口加大：后端按 token 预算再截断（压缩阈值 14.4K）
     setMessages((m) => [...m, { type: "user", content: msg }]);
     setBusy(true);
     setPending(null);
-    setTrace([]);
     setPlan([]);
     setContextUsage(null);
     // 在途流控制器（切换会话时 abort）
@@ -262,7 +208,13 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
           // 内联步骤节点：执行中状态
           setMessages((m) => [...m, { type: "tool_step", status: "running", ...data }]);
         } else if (event === "tool_trace") {
-          setTrace((t) => [...t, data]);
+          // 文件变更广播：files 组工具执行后通知 FilePanel 联动刷新
+          const FILES_TOOLS = ["list_files", "search_files", "read_file", "write_file", "append_file",
+            "copy_file", "create_folder", "rename_file", "move_file", "delete_file", "get_storage_info",
+            "read_document", "search_content", "semantic_search", "index_stats"];
+          if (FILES_TOOLS.includes(data.tool)) {
+            window.dispatchEvent(new CustomEvent("agent-drive:files-changed"));
+          }
           // 更新对应步骤节点为完成/失败
           setMessages((m) => {
             const copy = [...m];
@@ -333,6 +285,24 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     setPending(null);
   }
 
+  function stop() {
+    // 停止按钮：中止在途流请求（Agent 侧会自然停在当前步）
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setBusy(false);
+    setMessages((m) => {
+      const copy = [...m];
+      if (copy.length && copy[copy.length - 1].type === "assistant" && copy[copy.length - 1].content === "") {
+        copy[copy.length - 1] = { type: "system", content: "⏹️ 已停止本次任务" };
+      } else {
+        copy.push({ type: "system", content: "⏹️ 已停止本次任务" });
+      }
+      return copy;
+    });
+  }
+
   return (
     <section className="chat-panel">
       <div className="messages">
@@ -380,7 +350,11 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
           placeholder="和你的 Agent 对话，管理网盘…"
           disabled={busy}
         />
-        <button onClick={() => send()} disabled={busy || !input.trim()}>发送</button>
+        {busy ? (
+          <button className="btn-stop" onClick={stop}>⏹ 停止</button>
+        ) : (
+          <button onClick={() => send()} disabled={!input.trim()}>发送</button>
+        )}
       </div>
     </section>
   );
