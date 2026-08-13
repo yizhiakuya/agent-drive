@@ -138,3 +138,17 @@ body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "M
 .bubble a:hover { text-decoration: underline; }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
 .bubble strong { font-weight: 600; }
+
+/* 内联工具步骤节点 */
+.tool-step { margin: 4px 0 4px 24px; max-width: 85%; font-size: 13px; }
+.tool-step-head { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.tool-step-head:hover { border-color: var(--accent); }
+.tool-step-icon { flex-shrink: 0; }
+.tool-step-name { font-weight: 600; flex-shrink: 0; }
+.tool-step-args { font-size: 11px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-step-status { flex-shrink: 0; font-size: 12px; }
+.tool-step-status.running { color: var(--accent2); animation: pulse 1.2s infinite; }
+.tool-step-status.done { color: #15803d; }
+.tool-step-status.error { color: var(--danger); }
+.tool-step-toggle { flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.tool-step-body { background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 8px 10px; }

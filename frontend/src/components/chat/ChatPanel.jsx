@@ -33,6 +33,58 @@ function ContextBar({ usage }) {
   );
 }
 
+/** 内联工具步骤节点（OpenClaw 式：执行中/完成/失败 + 可展开结果） */
+const TOOL_ICONS = {
+  list_files: "📂", search_files: "🔍", read_file: "📖", write_file: "✍️",
+  append_file: "➕", copy_file: "📄", create_folder: "📁", rename_file: "✏️",
+  move_file: "🚚", delete_file: "🗑️", get_storage_info: "💾",
+  get_system_status: "⚙️", set_llm_provider: "🔌", test_llm_connection: "📡",
+  set_preference: "🎛️", add_rule: "📏", remove_rule: "➖", view_audit_log: "🧾",
+  analyze_failures: "🔬", set_plan: "📋", update_plan: "📋",
+  remember: "🧠", memory_search: "🔎", memory_get: "📇", read_skill: "📚",
+};
+const STEP_STATUS = { running: ["🔄", "执行中"], done: ["✅", "完成"], error: ["❌", "失败"] };
+
+function ToolStep({ step }) {
+  const [open, setOpen] = useState(false);
+  const [statusIcon, statusText] = STEP_STATUS[step.status] || ["•", ""];
+  const icon = TOOL_ICONS[step.tool] || "🔧";
+  const argsBrief = JSON.stringify(step.arguments || {});
+  return (
+    <div className={`tool-step ${step.status}`}>
+      <div className="tool-step-head" onClick={() => setOpen(!open)}>
+        <span className="tool-step-icon">{icon}</span>
+        <span className="tool-step-name">{step.tool}</span>
+        <code className="tool-step-args">{argsBrief.length > 60 ? argsBrief.slice(0, 60) + "…" : argsBrief}</code>
+        <span className={`tool-step-status ${step.status}`}>{statusIcon} {statusText}</span>
+        <span className="tool-step-toggle">{open ? "▲" : "▼"}</span>
+      </div>
+      {open && step.output && (
+        <div className="tool-step-body">
+          {step.parsed && step.parsed.ok === false ? (
+            <div className="trace-error">❌ {step.parsed.error}</div>
+          ) : step.parsed && step.tool === "list_files" && Array.isArray(step.parsed) ? (
+            <table className="trace-table">
+              <thead><tr><th>名称</th><th>类型</th><th>大小</th></tr></thead>
+              <tbody>
+                {step.parsed.map((f, i) => (
+                  <tr key={i}>
+                    <td>{f.is_dir ? "📂" : "📄"} {f.name}</td>
+                    <td>{f.is_dir ? "文件夹" : "文件"}</td>
+                    <td>{f.is_dir ? "—" : fmtSize(f.size)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <code className="trace-raw">{step.output}</code>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 任务计划卡片：逐步状态可视化 */
 function PlanCard({ plan }) {
   const icons = { pending: "⏳", in_progress: "🔄", done: "✅", skipped: "⏭️", failed: "❌" };
@@ -101,7 +153,7 @@ function TraceCard({ t }) {
 
 export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [messages, setMessages] = useState([
-    { role: "assistant", content: "你好！我是你的文件管家 🦋 我可以让你搜索文件、整理资料、配置系统……例如：\n\n- \"看看网盘里有什么文件\"\n- \"帮我建一个叫 项目 的文件夹\"\n- \"把 LLM 换成 DeepSeek\"\n- \"以后下载的文件自动归档\"" },
+    { type: "assistant", content: "你好！我是你的文件管家 🦋 我可以让你搜索文件、整理资料、配置系统……例如：\n\n- \"看看网盘里有什么文件\"\n- \"帮我建一个叫 项目 的文件夹\"\n- \"把 LLM 换成 DeepSeek\"\n- \"以后下载的文件自动归档\"" },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -143,7 +195,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       const r = await getSession(sidToLoad);
       const msgs = (r.messages || [])
         .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role, content: m.content || "" }));
+        .map((m) => ({ type: m.role, content: m.content || "" }));
       setMessages(msgs.length ? msgs : []);
       setTrace([]);
       setPlan([]);
@@ -159,8 +211,11 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     if (!msg || busy) return;
     if (!message) setInput("");
     // 只传窗口内历史（最近 30 条），后端按 token 预算再截断
-    const history = messages.filter((m) => m.role !== "system" && m.role !== "tool").slice(-30);
-    setMessages((m) => [...m, { role: "user", content: msg }]);
+    const history = messages
+      .filter((m) => (m.type === "user" || m.type === "assistant"))
+      .map((m) => ({ role: m.type, content: m.content }))
+      .slice(-30);
+    setMessages((m) => [...m, { type: "user", content: msg }]);
     setBusy(true);
     setPending(null);
     setTrace([]);
@@ -173,7 +228,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
 
     // 占位：流式文本写入这条 assistant 消息
     let replyRef = "";
-    setMessages((m) => [...m, { role: "assistant", content: "" }]);
+    setMessages((m) => [...m, { type: "assistant", content: "" }]);
 
     try {
       const r = await chatStream(msg, history, sid, confirmations, (event, data) => {
@@ -182,11 +237,31 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
           replyRef += data;
           setMessages((m) => {
             const copy = [...m];
-            copy[copy.length - 1] = { role: "assistant", content: replyRef };
+            // 最后一条若是 tool_step，先把占位 assistant 补上
+            if (copy.length && copy[copy.length - 1].type === "tool_step") {
+              copy.push({ type: "assistant", content: "" });
+            }
+            copy[copy.length - 1] = { type: "assistant", content: replyRef };
             return copy;
           });
+        } else if (event === "tool_start") {
+          // 内联步骤节点：执行中状态
+          setMessages((m) => [...m, { type: "tool_step", status: "running", ...data }]);
         } else if (event === "tool_trace") {
           setTrace((t) => [...t, data]);
+          // 更新对应步骤节点为完成/失败
+          setMessages((m) => {
+            const copy = [...m];
+            const failed = data.parsed && data.parsed.ok === false;
+            for (let i = copy.length - 1; i >= 0; i--) {
+              const node = copy[i];
+              if (node.type === "tool_step" && node.tool === data.tool && node.status === "running") {
+                copy[i] = { ...node, status: failed ? "error" : "done", output: data.output, parsed: data.parsed };
+                break;
+              }
+            }
+            return copy;
+          });
           if ((data.tool === "set_plan" || data.tool === "update_plan") && data.parsed?.plan) {
             setPlan(data.parsed.plan);
           }
@@ -205,7 +280,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       }
       // 步数耗尽警告（truncated）
       if (r?.truncated) {
-        setMessages((m) => [...m, { role: "system", content: "⚠️ 任务达到最大步数，可能未完成，回复「继续」可接着做" }]);
+        setMessages((m) => [...m, { type: "system", content: "⚠️ 任务达到最大步数，可能未完成，回复「继续」可接着做" }]);
       }
       if (r?.pending_confirmation) setPending(r.pending_confirmation);
       if (r?.needs_summary && r?.session_id) {
@@ -216,7 +291,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       if (e.name === "AbortError") return; // 主动中止：静默
       setMessages((m) => {
         const copy = [...m];
-        copy[copy.length - 1] = { role: "assistant", content: `⚠️ 出错了：${e.message}` };
+        copy[copy.length - 1] = { type: "assistant", content: `⚠️ 出错了：${e.message}` };
         return copy;
       });
     } finally {
@@ -234,13 +309,13 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       ts: pending.ts,
       signature: pending.signature,
     }];
-    setMessages((m) => [...m, { role: "user", content: `✅ 我确认执行：${pending.tool}` }]);
+    setMessages((m) => [...m, { type: "user", content: `✅ 我确认执行：${pending.tool}` }]);
     setPending(null);
     send(`请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`, confirmed);
   }
 
   function confirmNo() {
-    setMessages((m) => [...m, { role: "assistant", content: "好的，已取消该高风险操作 ✅" }]);
+    setMessages((m) => [...m, { type: "assistant", content: "好的，已取消该高风险操作 ✅" }]);
     setPending(null);
   }
 
@@ -248,11 +323,12 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     <section className="chat-panel">
       <div className="messages">
         {messages.map((m, i) => {
-          const isThinking = busy && m.role === "assistant" && m.content === "" && i === messages.length - 1;
+          if (m.type === "tool_step") return <ToolStep key={i} step={m} />;
+          const isThinking = busy && m.type === "assistant" && m.content === "" && i === messages.length - 1;
           return (
-            <div key={i} className={`msg-row ${m.role}`}>
+            <div key={i} className={`msg-row ${m.type}`}>
               <div className={`bubble ${isThinking ? "typing" : ""}`}>
-                {isThinking ? "Agent 思考中…" : m.role === "assistant" ? (
+                {isThinking ? "Agent 思考中…" : m.type === "assistant" ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                 ) : (
                   m.content
@@ -281,13 +357,6 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       {plan.length > 0 && <PlanCard plan={plan} />}
 
       {contextUsage && <ContextBar usage={contextUsage} />}
-
-      {trace.length > 0 && (
-        <div className="trace">
-          <b>🔧 本轮工具调用</b>
-          {trace.map((t, i) => <TraceCard key={i} t={t} />)}
-        </div>
-      )}
 
       <div className="input-bar">
         <input

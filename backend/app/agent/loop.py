@@ -299,6 +299,7 @@ class AgentLoop:
             if approved:
                 ptool, pargs = stored_pending.get("tool"), stored_pending.get("arguments", {})
                 self.audit(f"[confirmed-exec:{ptool}] {json.dumps(pargs, ensure_ascii=False)}")
+                yield ("tool_start", {"step": 1, "tool": ptool, "arguments": pargs})
                 output, entry = await self._execute_tool(ptool, pargs, 1)
                 tool_trace.append(entry)
                 yield ("tool_trace", entry)
@@ -439,6 +440,12 @@ class AgentLoop:
                         })
                         return
 
+                # 工具执行前发 tool_start（前端内联步骤：执行中状态）
+                yield ("tool_start", {
+                    "step": step + 1,
+                    "tool": tc.name,
+                    "arguments": tc.arguments,
+                })
                 # 防重放：确认后的整轮重放会再次"调用"已执行过的工具 →
                 # 复用上次执行结果（避免 append/remember 等 yellow 工具双写）
                 prev = None
