@@ -45,6 +45,14 @@ class LLMProvider(Protocol):
         tools: list[ToolSpec] | None = None,
     ) -> LLMResult: ...
 
+    def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpec] | None = None,
+    ) -> "AsyncIterator[str]":
+        """流式生成（异步迭代文本块）。默认退化为非流式。"""
+        raise NotImplementedError
+
     async def test_connection(self) -> dict[str, Any]:
         """返回诊断信息: {ok, model, context_window, supports_tools, latency_ms, error?}"""
         ...

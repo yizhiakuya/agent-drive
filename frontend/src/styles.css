@@ -91,3 +91,15 @@ body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "M
 .sl-sub { font-size: 12px; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sl-del { position: absolute; top: 8px; right: 8px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
 .sl-del:hover { color: var(--danger); }
+
+/* 工具调用卡片 */
+.trace-head { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px 0; }
+.trace-toggle { margin-left: auto; color: var(--muted); font-size: 10px; }
+.trace-body { margin-top: 6px; }
+.trace-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.trace-table th, .trace-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.trace-cards { display: flex; flex-wrap: wrap; gap: 6px; }
+.trace-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; }
+.trace-error { color: var(--danger); font-size: 12px; }
+.trace-raw { font-size: 11px; color: var(--muted); word-break: break-all; display: block; max-height: 120px; overflow-y: auto; }
+.trace-args { font-size: 11px; color: var(--muted); }

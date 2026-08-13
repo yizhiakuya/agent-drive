@@ -18,3 +18,32 @@ async def chat(req: ChatRequest, container=Depends(get_container)):
         raise HTTPException(400, e.message)
     result = await loop.run(req.message, req.history, req.confirmations, req.session_id)
     return ChatResponse(**result)
+
+
+@router.post("/stream")
+async def chat_stream(req: ChatRequest, container=Depends(get_container)):
+    """SSE 流式对话：text 事件逐块推送，tool_trace 事件推送工具调用，done 事件汇总。"""
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    try:
+        loop = container.build_agent()
+    except ConfigError as e:
+        raise HTTPException(400, e.message)
+
+    async def event_stream():
+        try:
+            async for event, payload in loop.run_stream(
+                req.message, req.history, req.confirmations, req.session_id
+            ):
+                data = _json.dumps(payload, ensure_ascii=False)
+                yield f"event: {event}\ndata: {data}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {_json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

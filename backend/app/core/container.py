@@ -12,6 +12,7 @@ from ..agent.loop import AgentLoop
 from ..agent.memory.preferences import MemoryStore
 from ..agent.memory.sessions import SessionStore
 from ..agent.onboarding import Onboarding
+from ..agent.skills import SkillsRegistry
 from ..agent.tools.analytics import register_analytics_tools
 from ..agent.tools.files import register_file_tools
 from ..agent.tools.registry import ToolRegistry
@@ -38,6 +39,7 @@ class Container:
         self.memory = MemoryStore(self.settings.system_path / "memory.json")
         self.sessions = SessionStore(self.settings.sessions_path)
         self.onboarding = Onboarding(self.llm, self.memory)
+        self.skills = SkillsRegistry(self.settings.backend_dir / "skills")
 
     # ---- 工厂 ----
     def build_tool_registry(self) -> ToolRegistry:
@@ -55,6 +57,7 @@ class Container:
             provider, reg, self.memory,
             audit=lambda msg: self.audit.record(msg),
             sessions=self.sessions,
+            skills=self.skills,
         )
 
     def close(self) -> None:

@@ -113,7 +113,7 @@ async def main():
         (lambda u, h, m: not h, lambda c, m: _tool_call("read_file", {"path": "不存在.txt"})),
         (lambda u, h, m: h, lambda c, m: LLMResult(content="完成", tool_calls=[])),
     ])
-    r = await AgentLoop(prov_a, reg3, memory3).run("读文件")
+    r = await AgentLoop(prov_a, reg3, memory3).run("帮我读一下文件 不存在.txt")
     tool_out = r["tool_trace"][0]["output"]
     d = json.loads(tool_out)
     assert d.get("ok") is False and "FileNotFoundError" in d.get("error", ""), f"错误应结构化: {tool_out}"
@@ -129,14 +129,14 @@ async def main():
         (lambda u, h, m: not h, lambda c, m: _tool_call("delete_file", {"path": "机密.txt"})),
         (lambda u, h, m: h, lambda c, m: LLMResult(content="完成", tool_calls=[])),
     ])
-    r = await AgentLoop(prov_red, reg4, memory4).run("删除机密文件")
+    r = await AgentLoop(prov_red, reg4, memory4).run("删除机密文件 机密.txt")
     assert r.get("pending_confirmation"), "red 级操作必须返回 pending_confirmation"
     assert storage4.exists("机密.txt"), "未确认前文件必须还在"
     print(f"  未确认的 delete_file → 返回 pending_confirmation，文件保留 ✅")
 
     # 4b: 确认后执行
     r2 = await AgentLoop(prov_red, reg4, memory4).run(
-        "删除机密文件", confirmations=[{"tool": "delete_file", "arguments": {"path": "机密.txt"}}]
+        "删除机密文件 机密.txt", confirmations=[{"tool": "delete_file", "arguments": {"path": "机密.txt"}}]
     )
     assert not storage4.exists("机密.txt"), "确认后文件应被删除"
     print(f"  携带确认后 → 文件已删除 ✅")
@@ -152,7 +152,7 @@ async def main():
         async def chat(self, messages, tools=None):
             return _tool_call("list_files", {}, cid=f"c{self.calls}")
 
-    r4 = await AgentLoop(LoopProvider([]), reg4, memory4).run("无限循环测试")
+    r4 = await AgentLoop(LoopProvider([]), reg4, memory4).run("测试失控循环保护机制是否生效")
     assert r4.get("truncated") and r4["steps"] == 10
     print(f"  失控循环 → 第 {r4['steps']} 步被截断 ✅")
 

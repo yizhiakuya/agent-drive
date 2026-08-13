@@ -7,6 +7,7 @@ from typing import Any
 
 import anthropic
 
+from ...core.retry import with_retry
 from ..base import LLMResult, ToolCall, ToolSpec
 
 
@@ -79,7 +80,7 @@ class AnthropicProvider:
         if tools:
             kwargs["tools"] = self._to_anthropic_tools(tools)
 
-        resp = await self._client.messages.create(**kwargs)
+        resp = await with_retry(lambda: self._client.messages.create(**kwargs))
 
         content_text = []
         tool_calls = []
@@ -93,6 +94,24 @@ class AnthropicProvider:
             tool_calls=tool_calls,
             finish_reason=resp.stop_reason or "",
         )
+
+    async def stream_chat(self, messages, tools=None):
+        """流式生成文本块。"""
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": 8192,
+            "messages": self._convert_messages(messages),
+            "stream": True,
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = self._to_anthropic_tools(tools)
+        stream = await with_retry(lambda: self._client.messages.stream(**kwargs))
+        async with stream as s:
+            async for text in s.text_stream:
+                yield text
 
     async def test_connection(self) -> dict[str, Any]:
         t0 = time.time()

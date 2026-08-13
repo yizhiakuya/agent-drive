@@ -13,9 +13,12 @@ import json
 import time
 from typing import Any, Callable
 
-from ..llm.base import LLMProvider
+from ..core.retry import is_retryable_error
+from ..llm.base import LLMProvider, ToolSpec
 from .memory.preferences import MemoryStore
 from .memory.sessions import SessionStore
+from .router import classify
+from .skills import SkillsRegistry
 from .tools.registry import ToolRegistry
 
 MAX_STEPS = 10
@@ -24,12 +27,20 @@ MAX_TOOL_OUTPUT = 2000  # 单条工具结果限长
 SUMMARIZE_THRESHOLD = 12  # 消息超过该数时建议生成摘要
 
 
+def _try_parse_json(text: str):
+    """尝试把工具输出解析为结构化对象（前端渲染用）"""
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
 def _estimate_tokens(text: str) -> int:
     """粗略 token 估算：中英文混合按 1 字符 ≈ 0.6 token，4 字符保底。"""
     return max(4, int(len(text) * 0.6))
 
 
-def build_system_prompt(memory: MemoryStore, tools: ToolRegistry, status: dict[str, Any], sessions: SessionStore | None = None) -> str:
+def build_system_prompt(memory: MemoryStore, tools: ToolRegistry, status: dict[str, Any], sessions: SessionStore | None = None, skills: SkillsRegistry | None = None) -> str:
     today = datetime.date.today().isoformat()
     prefs = memory.all()
     rules = memory.list_rules()
@@ -38,6 +49,7 @@ def build_system_prompt(memory: MemoryStore, tools: ToolRegistry, status: dict[s
     llm_info = json.dumps(status.get("llm") or "未配置", ensure_ascii=False)
     tool_manual = tools.manual()
     past = sessions.recent_summaries() if sessions else "(无历史会话)"
+    skill_index = skills.index() if skills else "(暂无技能)"
 
     return f"""你是「Agent Drive」的主 Agent（File Concierge）—— 一个以 AI 为中心的私人网盘的管家。
 
@@ -47,6 +59,10 @@ def build_system_prompt(memory: MemoryStore, tools: ToolRegistry, status: dict[s
 ## 跨会话记忆（历史会话摘要）
 以下是之前会话的摘要，帮助你记住用户做过什么、关心什么。新会话中用户可能继续相关话题：
 {past}
+
+## 技能包（能力索引）
+以下是你可以使用的技能。当用户请求匹配"触发词"时，先用 read_skill 工具加载该技能的完整指令再执行：
+{skill_index}
 
 ## 当前状态
 - 今天日期: {today}（理解"今天/明天/明年"等相对时间请以此为准）
@@ -69,6 +85,12 @@ def build_system_prompt(memory: MemoryStore, tools: ToolRegistry, status: dict[s
 """
 
 
+CHAT_SYSTEM_PROMPT = """你是「Agent Drive」的管家（File Concierge）。用简洁友好的方式回复用户的聊天。
+用户偏好：{prefs}
+今天日期：{date}
+回答语言：用户偏好的语言（默认中文）。"""
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -77,18 +99,48 @@ class AgentLoop:
         memory: MemoryStore,
         audit: Callable[[str], None] | None = None,
         sessions: SessionStore | None = None,
+        skills: SkillsRegistry | None = None,
     ):
         self.llm = llm
         self.tools = tools
         self.memory = memory
         self.audit = audit or (lambda msg: None)
         self.sessions = sessions
+        self.skills = skills
+        if skills is not None:
+            self._register_skill_tool()
+
+    def _register_skill_tool(self) -> None:
+        """注册 read_skill 工具：按需加载技能完整指令。"""
+        async def read_skill(name: str) -> str:
+            if self.skills is None:
+                return json.dumps({"ok": False, "error": "技能系统未启用"}, ensure_ascii=False)
+            skill = self.skills.get(name)
+            if skill is None:
+                available = [s.name for s in self.skills.list()]
+                return json.dumps({"ok": False, "error": f"技能不存在: {name}", "available": available}, ensure_ascii=False)
+            return skill.full_text()
+
+        self.tools.register(
+            ToolSpec(
+                "read_skill",
+                "加载指定技能的完整指令（使用技能前必须调用）",
+                {"type": "object", "properties": {"name": {"type": "string", "description": "技能名"}}, "required": ["name"]},
+                doc=(
+                    "用途：加载技能包的完整操作指令。\n"
+                    "参数：name（必填）技能名，见系统提示中的技能索引。\n"
+                    "输出：技能的完整 SKILL.md 内容（步骤/格式/注意事项）。\n"
+                    "错误：技能不存在返回 {ok:false, error, available}。"
+                ),
+            ),
+            read_skill,
+        )
 
     def _build_messages(self, user_message: str, history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """上下文管理：系统提示 + 按 token 预算截断的历史 + 当前消息。"""
         status = {"llm": None}
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(self.memory, self.tools, status, self.sessions)}
+            {"role": "system", "content": build_system_prompt(self.memory, self.tools, status, self.sessions, self.skills)}
         ]
         # 反向截断：从最新的历史开始，直到预算耗尽
         budget = CONTEXT_BUDGET
@@ -125,6 +177,28 @@ class AgentLoop:
                 sid = meta["id"]
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
 
+        # ---- 意图路由：闲聊走轻量路径（无工具、精简提示）----
+        if classify(user_message) == "chat" and not confirmations:
+            prefs = "\n".join(f"- {k}: {v}" for k, v in self.memory.all().items()) or "(无)"
+            chat_messages = [
+                {"role": "system", "content": CHAT_SYSTEM_PROMPT.format(prefs=prefs, date=datetime.date.today().isoformat())}
+            ]
+            for h in (history or [])[-6:]:
+                if h.get("role") in ("user", "assistant") and h.get("content"):
+                    chat_messages.append({"role": h["role"], "content": h["content"]})
+            chat_messages.append({"role": "user", "content": user_message})
+            t0 = time.time()
+            result = await self.llm.chat(chat_messages, tools=None)
+            reply = result.content or ""
+            return {
+                "reply": reply,
+                "tool_trace": [],
+                "steps": 1,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "session_id": session_id,
+                "routed": "chat",
+            }
+
         messages = self._build_messages(user_message, history)
         confirmed = confirmations or []
         tool_trace: list[dict[str, Any]] = []
@@ -151,6 +225,7 @@ class AgentLoop:
                     "latency_ms": int((time.time() - started) * 1000),
                     "session_id": sid,
                     "needs_summary": needs_summary,
+                    "routed": "task",
                 }
 
             messages.append({
@@ -188,6 +263,10 @@ class AgentLoop:
 
                 self.audit(f"[tool:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
                 output = await self.tools.execute(tc.name, tc.arguments)
+                # 瞬态错误重试一次（鲁棒性）：超时/网络/限流
+                if is_retryable_error(output):
+                    self.audit(f"[retry:{tc.name}] 瞬态错误，重试")
+                    output = await self.tools.execute(tc.name, tc.arguments)
                 if len(output) > MAX_TOOL_OUTPUT:
                     output = output[:MAX_TOOL_OUTPUT] + "\n...[截断]"
                 tool_trace.append({
@@ -195,6 +274,7 @@ class AgentLoop:
                     "tool": tc.name,
                     "arguments": tc.arguments,
                     "output": output[:500],
+                    "parsed": _try_parse_json(output[:500]),
                 })
                 messages.append({
                     "role": "tool",
@@ -210,6 +290,117 @@ class AgentLoop:
             "truncated": True,
             "session_id": sid,
         }
+
+    async def run_stream(
+        self,
+        user_message: str,
+        history: list[dict[str, Any]] | None = None,
+        confirmations: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
+    ):
+        """流式运行 Agent（生成器版本）。
+
+        与 run() 相同逻辑，但最终回复以流式产出。
+        yields: (event_type, payload) —— "tool_trace" | "text" | "done"
+        """
+        import types
+
+        sid = session_id
+        if self.sessions is not None:
+            if sid is None or self.sessions.get(sid) is None:
+                meta = self.sessions.create()
+                sid = meta["id"]
+            self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
+
+        messages = self._build_messages(user_message, history)
+        confirmed = confirmations or []
+        tool_trace: list[dict[str, Any]] = []
+        started = time.time()
+
+        for step in range(MAX_STEPS):
+            result = await self.llm.chat(messages, tools=self.tools.specs())
+
+            if not result.tool_calls:
+                # ---- 流式输出最终回复 ----
+                full_reply = ""
+                reply_msgs = messages + [{"role": "assistant", "content": ""}]
+                try:
+                    async for chunk in self.llm.stream_chat(messages):
+                        full_reply += chunk
+                        yield ("text", chunk)
+                except (NotImplementedError, TypeError):
+                    # Provider 不支持流式 → 回退非流式
+                    full_reply = result.content or ""
+                    yield ("text", full_reply)
+                if self.sessions is not None and sid:
+                    self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
+                    meta = self.sessions.get(sid)
+                    needs_summary = (meta.get("message_count", 0) >= SUMMARIZE_THRESHOLD
+                                     and not meta.get("summary"))
+                else:
+                    needs_summary = False
+                yield ("done", {
+                    "reply": full_reply,
+                    "tool_trace": tool_trace,
+                    "steps": step + 1,
+                    "latency_ms": int((time.time() - started) * 1000),
+                    "session_id": sid,
+                    "needs_summary": needs_summary,
+                })
+                return
+
+            messages.append({
+                "role": "assistant",
+                "content": result.content or "",
+                "tool_calls": [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in result.tool_calls
+                ],
+            })
+            for tc in result.tool_calls:
+                tool = self.tools.get(tc.name)
+                if tool is not None and tool.level == "red":
+                    already_confirmed = any(
+                        c.get("tool") == tc.name and c.get("arguments") == tc.arguments
+                        for c in confirmed
+                    )
+                    if not already_confirmed:
+                        pending = {
+                            "tool": tc.name,
+                            "arguments": tc.arguments,
+                            "message": f"Agent 请求执行高风险操作：{tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})",
+                        }
+                        self.audit(f"[pending-confirm:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
+                        yield ("done", {
+                            "reply": result.content or "",
+                            "tool_trace": tool_trace,
+                            "steps": step + 1,
+                            "latency_ms": int((time.time() - started) * 1000),
+                            "pending_confirmation": pending,
+                            "session_id": sid,
+                        })
+                        return
+
+                self.audit(f"[tool:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
+                output = await self.tools.execute(tc.name, tc.arguments)
+                if is_retryable_error(output):
+                    self.audit(f"[retry:{tc.name}] 瞬态错误，重试")
+                    output = await self.tools.execute(tc.name, tc.arguments)
+                if len(output) > MAX_TOOL_OUTPUT:
+                    output = output[:MAX_TOOL_OUTPUT] + "\n...[截断]"
+                trace_entry = {"step": step + 1, "tool": tc.name, "arguments": tc.arguments, "output": output[:500], "parsed": _try_parse_json(output[:500])}
+                tool_trace.append(trace_entry)
+                yield ("tool_trace", trace_entry)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": output})
+
+        yield ("done", {
+            "reply": "已达到最大执行步数，任务可能未完成。请简化需求或检查配置。",
+            "tool_trace": tool_trace,
+            "steps": MAX_STEPS,
+            "latency_ms": int((time.time() - started) * 1000),
+            "truncated": True,
+            "session_id": sid,
+        })
 
     async def summarize_session(self, session_id: str) -> dict[str, Any]:
         """用 LLM 生成会话摘要（跨会话记忆核心）。

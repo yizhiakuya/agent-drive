@@ -24,3 +24,4 @@ class ChatResponse(BaseModel):
     pending_confirmation: dict[str, Any] | None = None
     session_id: str | None = None
     needs_summary: bool = False
+    routed: str | None = None  # chat(轻量) | task(完整loop)

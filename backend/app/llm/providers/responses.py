@@ -7,6 +7,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from ...core.retry import with_retry
 from ..base import LLMResult, ToolCall, ToolSpec
 
 
@@ -40,7 +41,7 @@ class OpenAIResponsesProvider:
         }
         if tools:
             kwargs["tools"] = self._to_responses_tools(tools)
-        resp = await self._client.responses.create(**kwargs)
+        resp = await with_retry(lambda: self._client.responses.create(**kwargs))
 
         content_parts = []
         tool_calls = []

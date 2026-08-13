@@ -1,6 +1,62 @@
 import { useEffect, useRef, useState } from "react";
-import { chat } from "../../api/chat.js";
+import { chatStream } from "../../api/chat.js";
 import { summarizeSession } from "../../api/sessions.js";
+
+function fmtSize(n) {
+  if (n > 1e9) return (n / 1e9).toFixed(1) + " GB";
+  if (n > 1e6) return (n / 1e6).toFixed(1) + " MB";
+  if (n > 1e3) return (n / 1e3).toFixed(1) + " KB";
+  return n + " B";
+}
+
+/** 工具调用卡片：按工具类型结构化渲染 */
+function TraceCard({ t }) {
+  const [open, setOpen] = useState(false);
+  const parsed = t.parsed;
+
+  let body;
+  if (t.tool === "list_files" && Array.isArray(parsed)) {
+    body = (
+      <table className="trace-table">
+        <thead><tr><th>名称</th><th>类型</th><th>大小</th></tr></thead>
+        <tbody>
+          {parsed.map((f, i) => (
+            <tr key={i}>
+              <td>{f.is_dir ? "📂" : "📄"} {f.name}</td>
+              <td>{f.is_dir ? "文件夹" : "文件"}</td>
+              <td>{f.is_dir ? "—" : fmtSize(f.size)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  } else if (t.tool === "search_files" && Array.isArray(parsed)) {
+    body = (
+      <div className="trace-cards">
+        {parsed.map((f, i) => (
+          <div key={i} className="trace-card">
+            {f.is_dir ? "📂" : "📄"} <b>{f.name}</b> · {fmtSize(f.size || 0)}
+          </div>
+        ))}
+      </div>
+    );
+  } else if (parsed && parsed.ok === false) {
+    body = <div className="trace-error">❌ {parsed.error}</div>;
+  } else {
+    body = <code className="trace-raw">{t.output}</code>;
+  }
+
+  return (
+    <div className="trace-item">
+      <div className="trace-head" onClick={() => setOpen(!open)}>
+        <span className="tool-name">{t.tool}</span>
+        <code className="trace-args">{JSON.stringify(t.arguments)}</code>
+        <span className="trace-toggle">{open ? "▲" : "▼"}</span>
+      </div>
+      {open && <div className="trace-body">{body}</div>}
+    </div>
+  );
+}
 
 export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [messages, setMessages] = useState([
@@ -31,22 +87,40 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     setMessages((m) => [...m, { role: "user", content: msg }]);
     setBusy(true);
     setPending(null);
+    setTrace([]);
+
+    // 占位：流式文本写入这条 assistant 消息
+    let replyRef = "";
+    setMessages((m) => [...m, { role: "assistant", content: "" }]);
+
     try {
-      const r = await chat(msg, history, sid, confirmations);
-      if (r.session_id) {
+      const r = await chatStream(msg, history, sid, confirmations, (event, data) => {
+        if (event === "text") {
+          replyRef += data;
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = { role: "assistant", content: replyRef };
+            return copy;
+          });
+        } else if (event === "tool_trace") {
+          setTrace((t) => [...t, data]);
+        }
+      });
+      if (r?.session_id) {
         setSid(r.session_id);
         onSessionCreated?.(r.session_id);
       }
-      setMessages((m) => [...m, { role: "assistant", content: r.reply }]);
-      if (r.tool_trace?.length) setTrace(r.tool_trace);
-      if (r.pending_confirmation) setPending(r.pending_confirmation);
-      // 多轮后自动生成会话摘要（跨会话记忆）
-      if (r.needs_summary && r.session_id) {
+      if (r?.pending_confirmation) setPending(r.pending_confirmation);
+      if (r?.needs_summary && r?.session_id) {
         summarizeSession(r.session_id).catch(() => {});
       }
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", content: `⚠️ 出错了：${e.message}` }]);
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = { role: "assistant", content: `⚠️ 出错了：${e.message}` };
+        return copy;
+      });
     } finally {
       setBusy(false);
     }
@@ -95,12 +169,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       {trace.length > 0 && (
         <div className="trace">
           <b>🔧 本轮工具调用</b>
-          {trace.map((t, i) => (
-            <div key={i} className="trace-item">
-              <span className="tool-name">{t.tool}</span>
-              <code>{JSON.stringify(t.arguments)}</code>
-            </div>
-          ))}
+          {trace.map((t, i) => <TraceCard key={i} t={t} />)}
         </div>
       )}
 
