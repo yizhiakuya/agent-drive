@@ -147,13 +147,16 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   return (
     <section className="chat-panel">
       <div className="messages">
-        {messages.map((m, i) => (
-          <div key={i} className={`msg-row ${m.role}`}>
-            <div className="bubble">{m.content}</div>
-          </div>
-        ))}
-        {busy && <div className="msg-row assistant"><div className="bubble typing">Agent 思考中…</div></div>}
-
+        {messages.map((m, i) => {
+          const isThinking = busy && m.role === "assistant" && m.content === "" && i === messages.length - 1;
+          return (
+            <div key={i} className={`msg-row ${m.role}`}>
+              <div className={`bubble ${isThinking ? "typing" : ""}`}>
+                {isThinking ? "Agent 思考中…" : m.content}
+              </div>
+            </div>
+          );
+        })}
         {pending && !busy && (
           <div className="confirm-box">
             <div className="confirm-title">⚠️ 高风险操作确认</div>
