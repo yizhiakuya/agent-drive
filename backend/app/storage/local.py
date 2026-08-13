@@ -117,6 +117,8 @@ class LocalStorage:
         """复制文件或目录到新位置。"""
         s_p = self.resolve(src)
         d_p = self.resolve(dst)
+        if s_p == d_p:
+            raise ValueError(f"源与目标相同: {src}")
         if d_p.exists() and not overwrite:
             raise FileExistsError(f"目标已存在: {dst}（需 overwrite=true）")
         if not s_p.exists():

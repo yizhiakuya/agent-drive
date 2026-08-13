@@ -5,11 +5,11 @@ repos:
         name: ruff lint
         entry: ruff check backend/app/
         language: system
-        types: [python]
+        types: [python3]
         pass_filenames: false
       - id: unit-tests
         name: unit test suites
-        entry: bash -c 'cd backend && for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python tests/unit/$t.py || exit 1; done'
+        entry: bash -c 'cd backend && for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python3 tests/unit/$t.py || exit 1; done'
         language: system
         pass_filenames: false
       - id: secret-scan

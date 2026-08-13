@@ -17,3 +17,10 @@ backend/.env
 *.log
 .DS_Store
 backend/scripts/system/
+
+# 覆盖率产物
+.coverage
+coverage/
+htmlcov/
+backend/.coverage
+frontend/coverage/

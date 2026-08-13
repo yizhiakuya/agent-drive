@@ -24,7 +24,7 @@ dev-frontend:
 test:
 	cd frontend && npm test
 	cd backend && python3 -m pytest tests/integration -q
-	@for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do \
+	@for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes test_ingest_m2; do \
 		echo "== $$t =="; \
 		(cd backend && python3 tests/unit/$$t.py) || exit 1; \
 	done

@@ -75,7 +75,7 @@ class IngestPipeline:
     # ---------- 各类型解析器 ----------
     @staticmethod
     def _extract_pdf(path: Path) -> tuple[str, str]:
-        import fitz  # PyMuPDF
+        import pymupdf as fitz  # PyMuPDF（新 API，fitz 已弃用）
 
         doc = fitz.open(str(path))
         try:

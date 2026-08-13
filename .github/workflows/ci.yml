@@ -35,7 +35,7 @@ jobs:
       - name: Unit test suites
         run: |
           for t in test_agent test_critic test_reliability test_retry \
-                   test_compress test_write_tools test_memory test_bugfixes; do
+                   test_compress test_write_tools test_memory test_bugfixes test_ingest_m2; do
             echo "== $t =="
             python tests/unit/$t.py || exit 1
           done
