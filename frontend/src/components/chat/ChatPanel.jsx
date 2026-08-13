@@ -164,6 +164,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [sid, setSid] = useState(sessionId);
   const bottomRef = useRef(null);
   const sidRef = useRef(sessionId); // 已接受会话 id（区分"会话创建"与"用户切换"）
+  const abortRef = useRef(null);    // 在途流请求的取消控制器（防串消息）
 
   // 切换会话时清空当前对话（M1 简化：历史从会话加载在 M2 完善）
   useEffect(() => {
