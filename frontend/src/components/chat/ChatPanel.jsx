@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import { chatStream } from "../../api/chat.js";
 import { getSession, summarizeSession } from "../../api/sessions.js";
 
-function fmtSize(n) {
+export function fmtSize(n) {
   if (n > 1e9) return (n / 1e9).toFixed(1) + " GB";
   if (n > 1e6) return (n / 1e6).toFixed(1) + " MB";
   if (n > 1e3) return (n / 1e3).toFixed(1) + " KB";
@@ -12,13 +12,13 @@ function fmtSize(n) {
 }
 
 /** 上下文进度条：已用/总窗口（256K） */
-function fmtTokens(n) {
+export function fmtTokens(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return n + "";
 }
 
-function ContextBar({ usage }) {
+export function ContextBar({ usage }) {
   const { used = 0, total = 262144, percent = 0 } = usage;
   const pct = Math.min(100, percent);
   const color = pct > 80 ? "var(--danger)" : pct > 50 ? "#d97706" : "var(--accent2)";
@@ -45,7 +45,7 @@ const TOOL_ICONS = {
 };
 const STEP_STATUS = { running: ["🔄", "执行中"], done: ["✅", "完成"], error: ["❌", "失败"] };
 
-function ToolStep({ step }) {
+export function ToolStep({ step }) {
   const [open, setOpen] = useState(false);
   const [statusIcon, statusText] = STEP_STATUS[step.status] || ["•", ""];
   const icon = TOOL_ICONS[step.tool] || "🔧";
@@ -86,7 +86,7 @@ function ToolStep({ step }) {
 }
 
 /** 任务计划卡片：逐步状态可视化 */
-function PlanCard({ plan }) {
+export function PlanCard({ plan }) {
   const icons = { pending: "⏳", in_progress: "🔄", done: "✅", skipped: "⏭️", failed: "❌" };
   const doneCount = plan.filter((s) => s.status === "done").length;
   return (
