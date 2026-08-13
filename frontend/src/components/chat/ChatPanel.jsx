@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { chatStream } from "../../api/chat.js";
 import { getSession, summarizeSession } from "../../api/sessions.js";
 
@@ -199,7 +201,11 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
           return (
             <div key={i} className={`msg-row ${m.role}`}>
               <div className={`bubble ${isThinking ? "typing" : ""}`}>
-                {isThinking ? "Agent 思考中…" : m.content}
+                {isThinking ? "Agent 思考中…" : m.role === "assistant" ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                ) : (
+                  m.content
+                )}
               </div>
             </div>
           );

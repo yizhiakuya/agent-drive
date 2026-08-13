@@ -95,6 +95,24 @@ class AgentLoop:
             self.usage["completion_tokens"] += estimate_tokens(stream_text)
         self.usage["total_tokens"] = self.usage["prompt_tokens"] + self.usage["completion_tokens"]
 
+    # ---------- 自动标题 ----------
+    async def _generate_title(self, sid: str) -> str | None:
+        """用 LLM 为会话生成简短标题（首次问答后调用一次）。"""
+        msgs = self.sessions.messages(sid)[:4]
+        transcript = "\n".join(
+            f"{'用户' if m['role'] == 'user' else 'Agent'}: {str(m.get('content', ''))[:80]}"
+            for m in msgs
+        )
+        result = await self.llm.chat([{
+            "role": "user",
+            "content": "给以下对话起一个简短标题（不超过 10 个字，不要标点符号，直接输出标题本身）：\n" + transcript,
+        }])
+        title = (result.content or "").strip()
+        title = title.strip('。！!？?""“”\' ')[:20]
+        if title:
+            self.sessions.update_summary(sid, summary=None, title=title)
+        return title or None
+
     # ---------- 消息组装 ----------
     def _build_messages(self, user_message: str, history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         system_prompt = build_system_prompt(self.memory, self.tools, {}, self.sessions, self.skills)
@@ -192,6 +210,12 @@ class AgentLoop:
                     meta = self.sessions.get(sid)
                     needs_summary = (meta.get("message_count", 0) >= self.summarize_threshold
                                      and not meta.get("summary"))
+                    # 自动标题：会话首次问答后生成（尽力而为，失败不影响主流程）
+                    if meta and meta.get("title") == "新会话" and meta.get("message_count", 0) >= 2:
+                        try:
+                            await self._generate_title(sid)
+                        except Exception:
+                            pass
                 else:
                     needs_summary = False
                 yield ("done", {
