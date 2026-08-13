@@ -195,8 +195,21 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     try {
       const r = await getSession(sidToLoad);
       const msgs = (r.messages || [])
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ type: m.role, content: m.content || "" }));
+        .filter((m) => ["user", "assistant", "tool_call"].includes(m.role))
+        .map((m) => {
+          if (m.role === "tool_call") {
+            const failed = m.parsed && m.parsed.ok === false;
+            return {
+              type: "tool_step",
+              status: failed ? "error" : "done",
+              tool: m.tool,
+              arguments: m.arguments || {},
+              output: m.output || "",
+              parsed: m.parsed,
+            };
+          }
+          return { type: m.role, content: m.content || "" };
+        });
       setMessages(msgs.length ? msgs : []);
       setTrace([]);
       setPlan([]);

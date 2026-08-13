@@ -183,6 +183,24 @@ class AgentLoop:
             {"role": "user", "content": user_message},
         ]
 
+    # ---------- 工具轨迹持久化 ----------
+    def _persist_tool_trace(self, sid: str | None, tool_trace: list[dict[str, Any]]) -> None:
+        """把已执行的工具记录写入会话消息流（历史恢复用）"""
+        if self.sessions is None or not sid:
+            return
+        for t in tool_trace:
+            try:
+                self.sessions.append(sid, {
+                    "role": "tool_call",
+                    "tool": t.get("tool"),
+                    "arguments": t.get("arguments", {}),
+                    "output": t.get("output", "")[:2000],
+                    "parsed": t.get("parsed"),
+                    "ts": time.time(),
+                })
+            except Exception:
+                pass
+
     # ---------- 工具执行（审计 + 执行 + 重试 + 截断 + 结构化） ----------
     async def _execute_tool(self, name: str, arguments: dict[str, Any], step: int) -> tuple[str, dict[str, Any]]:
         self.audit(f"[tool:{name}] {json.dumps(arguments, ensure_ascii=False)}")
@@ -344,6 +362,19 @@ class AgentLoop:
                     self._add_usage(None, full_reply)
                     yield ("text", full_reply)
                 if self.sessions is not None and sid:
+                    # 工具调用记录持久化（历史恢复时重建内联步骤节点）
+                    for t in tool_trace:
+                        try:
+                            self.sessions.append(sid, {
+                                "role": "tool_call",
+                                "tool": t.get("tool"),
+                                "arguments": t.get("arguments", {}),
+                                "output": t.get("output", "")[:2000],
+                                "parsed": t.get("parsed"),
+                                "ts": time.time(),
+                            })
+                        except Exception:
+                            pass
                     self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
                     # 会话恢复状态：工具轨迹（防重放复用）+ 已消费 nonce
                     try:
@@ -406,6 +437,7 @@ class AgentLoop:
                                 break
                         if not approved:
                             # 验证失败（伪造/过期/未提供）→ 原 pending 原样返回，不重签
+                            self._persist_tool_trace(sid, tool_trace)
                             self.audit(f"[pending-confirm-reject:{tc.name}] 确认验证失败")
                             yield ("done", {
                                 "steps": step + 1,
@@ -425,6 +457,7 @@ class AgentLoop:
                     else:
                         # 新 red 请求：签发 pending 并持久化
                         pending = issue_confirmation(tc.name, tc.arguments)
+                        self._persist_tool_trace(sid, tool_trace)
                         self.audit(f"[pending-confirm:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
                         if self.sessions is not None and sid:
                             self.sessions.update_meta(sid, pending_confirmation=pending)
