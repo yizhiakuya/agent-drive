@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from ..core.retry import is_retryable_error
 from ..llm.base import LLMProvider, ToolSpec
-from .confirm import needs_confirmation
+from .confirm import issue_confirmation, verify_confirmation
 from .context import (
     build_history,
     compress_history,
@@ -274,9 +274,57 @@ class AgentLoop:
                 self.sessions.update_meta(sid, rolling_summary=new_summary)
             eff_history = compressed
 
-        messages = self._build_messages(user_message, eff_history, tool_groups)
-        self._last_messages = messages
+        # 会话级确认状态（修复 A2：pending 持久化 + 防重放）
+        stored_pending = None
+        consumed_nonces: set[str] = set()
+        prev_trace: list[dict[str, Any]] = []
+        if self.sessions is not None and sid:
+            meta = self.sessions.get(sid) or {}
+            stored_pending = meta.get("pending_confirmation")
+            consumed_nonces = set(meta.get("consumed_nonces", []))
+            prev_trace = meta.get("last_trace", [])
+
         tool_trace: list[dict[str, Any]] = []
+
+        # ---- 确认恢复：签名验证通过 → 确定性重放 pending 工具（不依赖 LLM 重新推导） ----
+        confirmed_replayed = False
+        if stored_pending is not None and confirmed:
+            approved = False
+            for c in confirmed:
+                ok, err = verify_confirmation(stored_pending, c, consumed_nonces)
+                if ok:
+                    approved = True
+                    consumed_nonces.add(stored_pending.get("nonce", ""))
+                    break
+            if approved:
+                ptool, pargs = stored_pending.get("tool"), stored_pending.get("arguments", {})
+                self.audit(f"[confirmed-exec:{ptool}] {json.dumps(pargs, ensure_ascii=False)}")
+                output, entry = await self._execute_tool(ptool, pargs, 1)
+                tool_trace.append(entry)
+                yield ("tool_trace", entry)
+                messages = self._build_messages(user_message, eff_history, tool_groups)
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "pending_confirmed", "name": ptool, "arguments": pargs}],
+                })
+                messages.append({"role": "tool", "tool_call_id": "pending_confirmed", "content": output})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"用户已确认执行 {ptool} 操作，执行结果如上。"
+                        "请直接向用户汇报执行结果（操作已生效，不要重复执行或验证）。"
+                    ),
+                })
+                self._last_messages = messages
+                if self.sessions is not None and sid:
+                    self.sessions.update_meta(sid, pending_confirmation=None)
+                confirmed_replayed = True
+                # 跳过 LLM 重新规划，直接进入循环（LLM 会基于执行结果回复）
+
+        if not confirmed_replayed:
+            messages = self._build_messages(user_message, eff_history, tool_groups)
+        self._last_messages = messages
 
         for step in range(self.max_steps):
             result = await self.llm.chat(messages, tools=self.tools.specs(tool_groups))
@@ -296,6 +344,11 @@ class AgentLoop:
                     yield ("text", full_reply)
                 if self.sessions is not None and sid:
                     self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
+                    # 会话恢复状态：工具轨迹（防重放复用）+ 已消费 nonce
+                    try:
+                        self.sessions.update_meta(sid, last_trace=tool_trace, consumed_nonces=sorted(consumed_nonces))
+                    except Exception:
+                        pass
                     # 每日笔记（工作层）：一行活动记录，供日后检索与巩固
                     try:
                         self.memory.daily_note(
@@ -338,27 +391,74 @@ class AgentLoop:
             for tc in result.tool_calls:
                 tool = self.tools.get(tc.name)
 
-                # ---- 安全护栏：red 级操作必须确认 ----
-                if needs_confirmation(tool, tc, confirmed):
-                    pending = {
+                # ---- 安全护栏：red 级操作必须签名确认（防伪造/防重放） ----
+                # 任何 red 级调用都必须过签名验证，不做列表匹配短路
+                if tool is not None and tool.level == "red":
+                    approved = False
+                    if stored_pending is not None and stored_pending.get("tool") == tc.name:
+                        # 已有待确认操作：只接受签名验证通过，失败不覆盖原 pending
+                        for c in confirmed:
+                            ok, err = verify_confirmation(stored_pending, c, consumed_nonces)
+                            if ok:
+                                approved = True
+                                consumed_nonces.add(stored_pending.get("nonce", ""))
+                                break
+                        if not approved:
+                            # 验证失败（伪造/过期/未提供）→ 原 pending 原样返回，不重签
+                            self.audit(f"[pending-confirm-reject:{tc.name}] 确认验证失败")
+                            yield ("done", {
+                                "steps": step + 1,
+                                "latency_ms": int((time.time() - started) * 1000),
+                                "pending_confirmation": stored_pending,
+                                "session_id": sid,
+                                "tool_trace": tool_trace,
+                                "plan": self.plan_state.get("steps", []),
+                                "usage": self.usage,
+                                "context_usage": self._context_usage(),
+                            })
+                            return
+                        # 已确认：清除持久化的 pending，继续执行
+                        if self.sessions is not None and sid:
+                            self.sessions.update_meta(sid, pending_confirmation=None)
+                        stored_pending = None
+                    else:
+                        # 新 red 请求：签发 pending 并持久化
+                        pending = issue_confirmation(tc.name, tc.arguments)
+                        self.audit(f"[pending-confirm:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
+                        if self.sessions is not None and sid:
+                            self.sessions.update_meta(sid, pending_confirmation=pending)
+                        yield ("done", {
+                            "steps": step + 1,
+                            "latency_ms": int((time.time() - started) * 1000),
+                            "pending_confirmation": pending,
+                            "session_id": sid,
+                            "tool_trace": tool_trace,
+                            "plan": self.plan_state.get("steps", []),
+                            "usage": self.usage,
+                            "context_usage": self._context_usage(),
+                        })
+                        return
+
+                # 防重放：确认后的整轮重放会再次"调用"已执行过的工具 →
+                # 复用上次执行结果（避免 append/remember 等 yellow 工具双写）
+                prev = None
+                if tool is not None and tool.level != "red":
+                    for t in prev_trace:
+                        if t.get("tool") == tc.name and t.get("arguments") == tc.arguments:
+                            prev = t
+                            break
+                if prev is not None and prev.get("output"):
+                    output = prev["output"]
+                    entry = {
+                        "step": step + 1,
                         "tool": tc.name,
                         "arguments": tc.arguments,
-                        "message": f"Agent 请求执行高风险操作：{tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})",
+                        "output": prev["output"][:500],
+                        "parsed": prev.get("parsed"),
+                        "replayed": True,
                     }
-                    self.audit(f"[pending-confirm:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
-                    yield ("done", {
-                        "steps": step + 1,
-                        "latency_ms": int((time.time() - started) * 1000),
-                        "pending_confirmation": pending,
-                        "session_id": sid,
-                        "tool_trace": tool_trace,
-                        "plan": self.plan_state.get("steps", []),
-                        "usage": self.usage,
-                        "context_usage": self._context_usage(),
-                    })
-                    return
-
-                output, entry = await self._execute_tool(tc.name, tc.arguments, step + 1)
+                else:
+                    output, entry = await self._execute_tool(tc.name, tc.arguments, step + 1)
                 tool_trace.append(entry)
                 yield ("tool_trace", entry)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": output})
@@ -367,6 +467,12 @@ class AgentLoop:
                     messages = compress_tool_roundtrips(messages, keep_roundtrips=4)
                 self._last_messages = messages
 
+        # 步数耗尽：先发说明文本再 done（修复 R3：不再静默失败）
+        truncate_msg = (
+            f"\n\n⚠️ 已达到本轮最大执行步数（{self.max_steps} 步），任务可能未完成。"
+            "你可以回复「继续」让我接着做，或把任务拆小后再试。"
+        )
+        yield ("text", truncate_msg)
         yield ("done", {
             "steps": self.max_steps,
             "latency_ms": int((time.time() - started) * 1000),

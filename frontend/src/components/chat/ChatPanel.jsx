@@ -118,6 +118,12 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     // 会话创建完成后 sessionId 会更新为当前会话 id（sidRef 已同步）→ 跳过，不清空
     // 用户点击会话列表切换 → 加载该会话历史消息；新建会话（null）→ 清空
     if (sessionId !== sidRef.current) {
+      // 切换会话：中止在途流，防止旧回复串进新会话
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+      setBusy(false);
       sidRef.current = sessionId;
       setSid(sessionId);
       setPending(null);
@@ -127,6 +133,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
         setMessages([]);
         setTrace([]);
         setPlan([]);
+        setContextUsage(null);
       }
     }
   }, [sessionId]);
@@ -159,6 +166,10 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     setTrace([]);
     setPlan([]);
     setContextUsage(null);
+    // 在途流控制器（切换会话时 abort）
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const sendSid = sid; // 快照：校验回复是否属于当前会话
 
     // 占位：流式文本写入这条 assistant 消息
     let replyRef = "";
@@ -166,6 +177,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
 
     try {
       const r = await chatStream(msg, history, sid, confirmations, (event, data) => {
+        // 已切换会话/被中止：丢弃迟到事件（防串消息）
         if (event === "text") {
           replyRef += data;
           setMessages((m) => {
@@ -179,7 +191,11 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
             setPlan(data.parsed.plan);
           }
         }
-      });
+      }, controller.signal);
+      if (sendSid !== sidRef.current) {
+        // 本会话已切换，丢弃结果
+        return;
+      }
       if (r?.plan?.length) setPlan(r.plan);
       if (r?.context_usage) setContextUsage(r.context_usage);
       if (r?.session_id) {
@@ -187,12 +203,17 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
         setSid(r.session_id);
         onSessionCreated?.(r.session_id);
       }
+      // 步数耗尽警告（truncated）
+      if (r?.truncated) {
+        setMessages((m) => [...m, { role: "system", content: "⚠️ 任务达到最大步数，可能未完成，回复「继续」可接着做" }]);
+      }
       if (r?.pending_confirmation) setPending(r.pending_confirmation);
       if (r?.needs_summary && r?.session_id) {
         summarizeSession(r.session_id).catch(() => {});
       }
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     } catch (e) {
+      if (e.name === "AbortError") return; // 主动中止：静默
       setMessages((m) => {
         const copy = [...m];
         copy[copy.length - 1] = { role: "assistant", content: `⚠️ 出错了：${e.message}` };
@@ -205,7 +226,14 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
 
   function confirmYes() {
     if (!pending) return;
-    const confirmed = [{ tool: pending.tool, arguments: pending.arguments }];
+    // 提交服务端签发的完整确认对象（nonce+signature，防伪造）
+    const confirmed = [{
+      tool: pending.tool,
+      arguments: pending.arguments,
+      nonce: pending.nonce,
+      ts: pending.ts,
+      signature: pending.signature,
+    }];
     setMessages((m) => [...m, { role: "user", content: `✅ 我确认执行：${pending.tool}` }]);
     setPending(null);
     send(`请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`, confirmed);

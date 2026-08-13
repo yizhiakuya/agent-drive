@@ -154,15 +154,22 @@ class MemoryStore:
                         prefs[key] = text
                     else:
                         prefs[section] = text
-        # JSON 迁移值优先，USER.md 只补充缺失项
-        for key, val in prefs.items():
-            self._data["preferences"].setdefault(key, val)
-        if rules and not self._data["rules"]:
+        # 文件为权威：用户手改 USER.md 的内容直接生效
+        self._data["preferences"].update(prefs)
+        if rules:
             self._data["rules"] = rules
 
     def _write_user_md(self) -> None:
-        """把 preferences/rules 写回 USER.md（指令式格式，带日期）"""
+        """把 preferences/rules 写回 USER.md。
+
+        修复（memory-review #2）：保留用户手写的未知 section（合并而非重建），
+        避免 set() 静默销毁用户编辑的内容。
+        """
         today = date.today().isoformat()
+        # 先解析当前磁盘上的 USER.md，保留未知 section（用户手写）
+        existing = self._user_sections()
+        known = {"语言", "整理偏好", "命名规则", "规则"}
+
         lines = [
             "# 用户模型",
             "",
@@ -180,11 +187,23 @@ class MemoryStore:
             lines.append(f"- {self._data['preferences']['naming_rule']} ({today})")
         lines += ["", "## 规则"]
         lines += [f"- {r}" for r in self._data.get("rules", [])] or ["- (暂无)"]
+
+        # 保留用户手写的未知 section
+        for section, entries in existing.items():
+            if section in known:
+                continue
+            lines += ["", f"## {section}"]
+            for text, d in entries:
+                suffix = f" ({d})" if d else ""
+                lines.append(f"- {text}{suffix}")
+
         lines.append("")
         self.user_md.write_text("\n".join(lines))
 
     # ---------- 兼容旧 API ----------
     def set(self, key: str, value: str) -> None:
+        # 写前刷新磁盘状态：用户运行期手改 USER.md 不被陈旧数据覆盖
+        self._load_user_md()
         self._data["preferences"][key] = value
         self._write_user_md()
 
@@ -225,10 +244,17 @@ class MemoryStore:
         return self.agent_md.read_text()[:max_chars]
 
     def memory_text(self, max_chars: int = 3000) -> str:
-        """读取 MEMORY.md 全文（截断）"""
+        """读取 MEMORY.md（修复：从尾部截断，保留最新记忆条目）。
+
+        新记忆用 remember() 追加在文件尾部，从头部截断会丢掉最新条目。
+        头部引导语较短，从尾部取可同时保留标题与最近内容。
+        """
         if not self.memory_md.exists():
             return ""
-        return self.memory_md.read_text()[:max_chars]
+        text = self.memory_md.read_text()
+        if len(text) <= max_chars:
+            return text
+        return "...（更早的记忆已省略）...\n" + text[-max_chars:]
 
     def search_memory(self, query: str, limit: int = 10) -> list[dict]:
         """全文搜索 MEMORY.md + memory/*.md 每日笔记"""

@@ -12,11 +12,12 @@ export const chat = (message, history, sessionId, confirmations = []) => api("/c
  *   event = "text" | "tool_trace" | "done" | "error"
  * 返回 Promise<donePayload>
  */
-export async function chatStream(message, history, sessionId, confirmations = [], onEvent) {
+export async function chatStream(message, history, sessionId, confirmations = [], onEvent, signal) {
   const res = await fetch("/api/v1/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, history, session_id: sessionId, confirmations }),
+    signal,
   });
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 

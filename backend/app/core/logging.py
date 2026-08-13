@@ -44,10 +44,29 @@ class AuditLogger:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
+    SENSITIVE_KEYS = ("api_key", "password", "token", "authorization", "secret", "key")
+
+    @classmethod
+    def redact(cls, text: str) -> str:
+        """脱敏：把 api_key/password/token 等字段值替换为 ***"""
+        import re
+        # 处理 JSON 风格 "key": "value" 和 key=value 两种形式
+        for key in cls.SENSITIVE_KEYS:
+            pattern = re.compile(
+                r'("?' + key + r'"?' + r'\s*[:=]\s*"?)([^",\s}]+)("?)',
+                re.IGNORECASE,
+            )
+            text = pattern.sub(r"\1***\3", text)
+        return text
+
     def record(self, event: str, result: Any = None) -> None:
         with open(self.path, "a") as f:
             f.write(json.dumps(
-                {"ts": time.time(), "event": event, "result": str(result) if result else None},
+                {
+                    "ts": time.time(),
+                    "event": self.redact(event),
+                    "result": self.redact(str(result)) if result else None,
+                },
                 ensure_ascii=False,
             ) + "\n")
 

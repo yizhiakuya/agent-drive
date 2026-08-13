@@ -140,12 +140,21 @@ async def main():
     assert storage4.exists("机密.txt"), "未确认前文件必须还在"
     print(f"  未确认的 delete_file → 返回 pending_confirmation，文件保留 ✅")
 
-    # 4b: 确认后执行
-    r2 = await AgentLoop(prov_red, reg4, memory4).run(
-        "删除机密文件 机密.txt", confirmations=[{"tool": "delete_file", "arguments": {"path": "机密.txt"}}]
+    # 4b: 签名确认后执行（新确认协议：pending + nonce + 签名）
+    from app.agent.memory.sessions import SessionStore
+    import tempfile as _tf
+    _sessions = SessionStore(Path(_tf.mkdtemp()) / "sessions")
+    r_first = await AgentLoop(prov_red, reg4, memory4, sessions=_sessions).run(
+        "删除机密文件 机密.txt"
     )
-    assert not storage4.exists("机密.txt"), "确认后文件应被删除"
-    print(f"  携带确认后 → 文件已删除 ✅")
+    _pending = r_first.get("pending_confirmation")
+    assert _pending, "应签发 pending"
+    _confirm = [{k: _pending[k] for k in ("tool", "arguments", "nonce", "ts", "signature")}]
+    r2 = await AgentLoop(prov_red, reg4, memory4, sessions=_sessions).run(
+        "确认", confirmations=_confirm, session_id=r_first.get("session_id")
+    )
+    assert not storage4.exists("机密.txt"), "签名确认后文件应被删除"
+    print(f"  签名确认后 → 文件已删除 ✅")
 
     # 4c: 路径穿越
     r3 = await reg4.execute("read_file", {"path": "../../../etc/passwd"})

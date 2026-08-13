@@ -72,7 +72,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
             },
         ),
         set_llm_provider,
-        level="yellow",
+        level="red",
         group="system",
     )
 
@@ -100,6 +100,11 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
 
     # ---------- 偏好管理 ----------
     async def set_preference(key: str, value: str) -> dict[str, Any]:
+        # 注入防护：拒绝指令式文本 + 长度上限
+        if any(m in value for m in ("忽略", "无视", "ignore", "绕过")):
+            return {"ok": False, "error": "偏好内容含指令式文本，已拒绝（注入防护）"}
+        if len(value) > 200:
+            return {"ok": False, "error": "偏好值过长（上限 200 字符）"}
         memory.set(key, value)
         return {"saved": True, "preferences": memory.all()}
 
@@ -129,6 +134,13 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
 
     # ---------- 规则管理（自动化） ----------
     async def add_rule(rule: str) -> dict[str, Any]:
+        # 注入防护：拒绝指令式文本 + 数量/长度上限
+        if any(m in rule for m in ("忽略", "无视", "ignore", "绕过")):
+            return {"ok": False, "error": "规则内容含指令式文本，已拒绝（注入防护）"}
+        if len(rule) > 300:
+            return {"ok": False, "error": "规则过长（上限 300 字符）"}
+        if len(memory.list_rules()) >= 20:
+            return {"ok": False, "error": "规则数量已达上限（20 条），请先删除旧规则"}
         memory.add_rule(rule)
         return {"saved": True, "rules": memory.list_rules()}
 

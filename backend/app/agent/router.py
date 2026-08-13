@@ -31,18 +31,29 @@ GROUPS_ALL = None  # 全量
 
 
 def classify(message: str) -> tuple[str, list[str] | None]:
-    """返回 (mode, tool_groups)。mode: chat|task；groups: None=全量工具。"""
+    """返回 (mode, tool_groups)。mode: chat|task；groups: None=全量工具。
+
+    修复 R1：问候词只在"纯问候"时触发——带任务关键词的句子绝不降级为 chat。
+    原则：chat 误判 = 能力归零（后果严重）；task 误判只是多花 token（无害）。
+    """
     text = message.strip()
     low = text.lower()
-    for g in CHAT_GREETINGS:
-        if low.startswith(g):
-            return "chat", None
-    if any(k in low for k in FILE_KEYWORDS):
-        return "task", GROUPS_FILES
-    if any(k in low for k in SYSTEM_KEYWORDS):
-        return "task", GROUPS_SYSTEM
-    if any(v in low for v in TASK_VERBS):
+    has_task = (
+        any(k in low for k in FILE_KEYWORDS)
+        or any(k in low for k in SYSTEM_KEYWORDS)
+        or any(v in low for v in TASK_VERBS)
+    )
+    if has_task:
+        # 任务优先：即使以问候开头也走任务路径（"你好，帮我整理文件"）
+        if any(k in low for k in FILE_KEYWORDS):
+            return "task", GROUPS_FILES
+        if any(k in low for k in SYSTEM_KEYWORDS):
+            return "task", GROUPS_SYSTEM
         return "task", GROUPS_ALL
+    # 纯问候才走 chat（无任务关键词）
+    for g in CHAT_GREETINGS:
+        if low.startswith(g) or g in low:
+            return "chat", None
     if len(text) < 10:
         return "chat", None
     return "task", GROUPS_ALL

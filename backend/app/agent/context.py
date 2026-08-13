@@ -53,12 +53,20 @@ def build_history(
     history: list[dict[str, Any]] | None,
     context_budget: int,
 ) -> list[dict[str, Any]]:
-    """按 token 预算从最新历史反向截断。"""
+    """按 token 预算从最新历史反向截断。
+
+    修复 R5（memory-review #3）：放行带"[早期对话摘要]"标记的 system 消息，
+    滚动压缩的 LLM 摘要不再被静默丢弃。
+    """
     selected: list[dict[str, Any]] = []
     budget = context_budget
     for h in reversed(history or []):
-        if h.get("role") in ("user", "assistant") and h.get("content"):
-            cost = estimate_tokens(str(h.get("content", "")))
+        content = str(h.get("content", ""))
+        is_summary_system = (
+            h.get("role") == "system" and content.startswith("[早期对话摘要]")
+        )
+        if (h.get("role") in ("user", "assistant") and content) or is_summary_system:
+            cost = estimate_tokens(content)
             if budget - cost < 0 and selected:
                 break
             budget -= cost
@@ -113,27 +121,40 @@ def compress_tool_roundtrips(
     messages: list[dict[str, Any]],
     keep_roundtrips: int = 4,
 ) -> list[dict[str, Any]]:
-    """轮内压缩：工具往返过多时，把早期工具结果合并为一行摘要。
+    """轮内压缩：工具往返过多时，把早期往返合并为一行摘要。
 
-    每轮往返 = assistant(tool_calls) + N 条 tool 消息。
-    保留最近 keep_roundtrips 轮完整结果，更早的压缩成一条提示。
+    修复 R2：
+    - 压缩单元 = 完整 roundtrip（assistant(tool_calls) + 其全部 tool 结果），
+      切点只落在 assistant 消息边界，绝不产生孤儿 tool 消息。
+    - 摘要放在压缩区最前面，且不插在对话中间破坏协议结构
+      （摘要内容合并进"保留区第一条消息"，不新增中间 system）。
     """
-    # 找出所有 tool 相关消息的位置
-    tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if len(tool_idx) <= keep_roundtrips * 2:
+    # 找出所有 assistant(tool_calls) 消息的下标（每个往返的起点）
+    roundtrip_starts = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    if len(roundtrip_starts) <= keep_roundtrips:
         return messages
 
-    cut = tool_idx[-keep_roundtrips * 2]  # 保留最近 N 轮（每轮按 2 条估算）
+    # 保留最近 keep_roundtrips 个完整往返（从它们的起点切）
+    cut = roundtrip_starts[-keep_roundtrips]
     old_part, keep_part = messages[:cut], messages[cut:]
 
-    # 早期部分压缩成摘要行
+    # 压缩摘要：工具名 + 参数 + 结果提示
     brief = []
     for m in old_part:
-        if m.get("role") == "tool":
-            name_hint = str(m.get("content", ""))[:60].replace("\n", " ")
-            brief.append(name_hint)
-        elif m.get("role") == "assistant" and m.get("tool_calls"):
-            names = [tc.get("name") for tc in m.get("tool_calls", [])]
-            brief.append(f"调用工具: {', '.join(names)}")
-    summary = "[早期工具执行已压缩] " + " | ".join(brief[-10:])
-    return [{"role": "system", "content": summary[:800]}] + keep_part
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m.get("tool_calls", []):
+                brief.append(f"{tc.get('name')}({str(tc.get('arguments', {}))[:40]})")
+        elif m.get("role") == "tool":
+            out = str(m.get("content", ""))[:50].replace("\n", " ")
+            brief.append(f"→ {out}")
+    summary = "[早期工具执行已压缩] " + " | ".join(brief[-10:])[:800]
+
+    # 摘要并入保留区开头：作为 user 消息前缀（不破坏角色结构）
+    keep_part[0] = {
+        **keep_part[0],
+        "content": f"{summary}\n\n{keep_part[0].get('content', '')}",
+    }
+    return keep_part
