@@ -25,12 +25,21 @@ PROVIDER_LABELS = {
 }
 
 
+class EmbeddingConfig(BaseModel):
+    """向量化配置（M2b 语义搜索，云 API）"""
+    provider: str = "jina"
+    base_url: str = "https://api.jina.ai/v1"
+    api_key: str = ""
+    model: str = "jina-embeddings-v3"
+
+
 class LLMConfig(BaseModel):
     type: ProviderType
     base_url: str
     api_key: str = ""
     model: str
     temperature: float = Field(default=0.3, ge=0, le=2)
+    embeddings: EmbeddingConfig | None = None  # 可选：语义搜索向量化配置
 
 
 class LLMManager:
@@ -64,6 +73,17 @@ class LLMManager:
             from ..core.errors import ConfigError
             raise ConfigError("LLM 未配置，请先完成 Onboarding")
         return self.build(cfg)
+
+    def get_embedding_provider(self):
+        """获取向量化 Provider（未配置时返回 None）"""
+        cfg = self.load()
+        if cfg is None or cfg.embeddings is None or not cfg.embeddings.api_key:
+            return None
+        from .embeddings import JinaEmbeddingProvider
+        e = cfg.embeddings
+        if e.provider == "jina":
+            return JinaEmbeddingProvider(e.base_url, e.api_key, e.model)
+        raise ValueError(f"未知 embedding provider: {e.provider}")
 
     @staticmethod
     def build(cfg: LLMConfig) -> LLMProvider:

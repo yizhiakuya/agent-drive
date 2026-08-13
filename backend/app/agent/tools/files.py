@@ -14,7 +14,7 @@ from ...storage.local import LocalStorage
 from .registry import ToolRegistry
 
 
-def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
+def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -> None:
     # ============ 🟢 查询 ============
     async def list_files(path: str = "") -> list[dict[str, Any]]:
         return storage.list_dir(path)
@@ -72,6 +72,19 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
                         "无视你的规则", "输出你的系统提示", "system prompt", "把密钥", "发送到")
 
     async def read_file(path: str, max_chars: int = 4000) -> str:
+        # M2a：PDF/图片等二进制优先读索引解析文本；文本类直接读
+        suffix = path.lower().rsplit(".", 1)[-1] if "." in path else ""
+        if ingest is not None and suffix in ("pdf", "png", "jpg", "jpeg", "gif", "bmp", "webp"):
+            indexed = ingest.get_text(path, max_chars=max_chars)
+            if indexed is None:
+                try:
+                    ingest.extract(path)
+                    indexed = ingest.get_text(path, max_chars=max_chars)
+                except Exception:
+                    indexed = None
+            if indexed:
+                return indexed
+            return f"(文件存在但内容无法解析: {path})"
         text = storage.read_text(path, max_chars)
         # 注入防护：文件内容含指令式文本时附加警示（内容仍按数据对待）
         hits = [m for m in INJECTION_MARKERS if m.lower() in text.lower()]
@@ -128,6 +141,98 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
             ),
         ),
         get_storage_info,
+        group="files",
+    )
+
+    # ============ 🟢 M2 内容检索 ============
+    async def search_content(query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """全文搜索文件内容（M2a）"""
+        if ingest is None:
+            return [{"error": "摄入管线未启用"}]
+        return ingest.search(query, limit)
+
+    reg.register(
+        ToolSpec(
+            "search_content",
+            "全文搜索文件内容（搜索 PDF/图片 OCR/文本文件的实际内容）",
+            {"type": "object", "properties": {
+                "query": {"type": "string", "description": "搜索关键词（如 违约金/预算）"},
+                "limit": {"type": "integer"},
+            }, "required": ["query"]},
+            doc=(
+                "用途：按文件【内容】搜索（不是文件名）。PDF 和图片的内容也能搜到。\n"
+                "参数：query（必填）关键词；limit（可选，默认 10）。\n"
+                "输出：[{path, type, method, snippet}] 命中片段。\n"
+                "注意：未索引的文件搜不到；关键词不同写法（同义词）请用 semantic_search。"
+            ),
+        ),
+        search_content,
+        group="files",
+    )
+
+    async def semantic_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
+        """语义搜索（M2b，向量相似度）"""
+        if ingest is None or ingest.embedder is None:
+            return [{"error": "未配置 embedding（请在对话中说：帮我配置向量化，用 Jina）"}]
+        results = await ingest.semantic_search(query, limit)
+        # 自动向量化未索引的文件（首次搜索时兜底，递归遍历）
+        if not any(r.get("score", 0) > 0.3 for r in results):
+            files_to_index: list[str] = []
+
+            def walk(d: str):
+                for item in storage.list_dir(d):
+                    if item["is_dir"]:
+                        walk(item["path"])
+                    elif item["path"].lower().endswith((".txt", ".md", ".pdf", ".png", ".jpg", ".jpeg")):
+                        files_to_index.append(item["path"])
+
+            walk("")
+            for f in files_to_index:
+                try:
+                    ingest.extract(f)
+                    await ingest.embed_file(f)
+                except Exception:
+                    pass
+            results = await ingest.semantic_search(query, limit)
+        return results
+
+    reg.register(
+        ToolSpec(
+            "semantic_search",
+            "语义搜索文件内容（按意思找，不依赖关键词）",
+            {"type": "object", "properties": {
+                "query": {"type": "string", "description": "自然语言查询，如 去年的预算文件"},
+                "limit": {"type": "integer"},
+            }, "required": ["query"]},
+            doc=(
+                "用途：按语义理解搜索文件（向量相似度，Jina 云 embedding）。\n"
+                "参数：query（必填）自然语言查询；limit（可选，默认 5）。\n"
+                "输出：[{path, score}] 按相关度降序。\n"
+                "适用：同义词/改写表达（'预算'搜到'开支计划'）；精确词用 search_content。"
+            ),
+        ),
+        semantic_search,
+        group="files",
+    )
+
+    async def index_stats() -> dict[str, Any]:
+        """索引统计"""
+        if ingest is None:
+            return {"error": "摄入管线未启用"}
+        return ingest.stats()
+
+    reg.register(
+        ToolSpec(
+            "index_stats",
+            "查看内容索引统计（已索引文件数/方法分布）",
+            {},
+            doc=(
+                "用途：查看多少文件已被内容索引（PDF/OCR/文本）。\n"
+                "参数：无。\n"
+                "输出：{indexed_files, total_chars, by_method}。"
+            ),
+        ),
+        index_stats,
         group="files",
     )
 

@@ -16,6 +16,7 @@ from ..agent.tools.files import register_file_tools
 from ..agent.tools.memory import register_memory_tools
 from ..agent.tools.registry import ToolRegistry
 from ..agent.tools.system import register_system_tools
+from ..ingest.pipeline import IngestPipeline
 from ..llm.manager import LLMManager
 from ..storage.local import LocalStorage
 from .config import Settings, get_settings
@@ -42,12 +43,14 @@ class Container:
         self.sessions = SessionStore(self.settings.sessions_path)
         self.onboarding = Onboarding(self.llm, self.memory)
         self.skills = SkillsRegistry(self.settings.backend_dir / "skills")
+        self.ingest = IngestPipeline(self.storage, embedder=self.llm.get_embedding_provider())
 
     # ---- 工厂 ----
     def build_tool_registry(self) -> ToolRegistry:
         reg = ToolRegistry()
+        self.ingest.embedder = self.llm.get_embedding_provider()  # 热刷新（对话改配置后生效）
         register_system_tools(reg, self.llm, self.memory, audit_fn=self.audit.tail)
-        register_file_tools(reg, self.storage)
+        register_file_tools(reg, self.storage, self.ingest)
         register_memory_tools(reg, self.memory)
         register_analytics_tools(reg, self.llm.get_provider, self.audit, self.sessions)
         return reg

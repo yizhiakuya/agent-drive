@@ -29,6 +29,8 @@ class LocalStorage:
             raise NotADirectoryError(rel_path)
         items = []
         for p in sorted(d.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
+            if p.name == ".index":
+                continue  # 隐藏索引目录
             rel = p.relative_to(self.root).as_posix()
             items.append({
                 "name": p.name,

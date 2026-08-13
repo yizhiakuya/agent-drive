@@ -24,7 +24,13 @@ async def upload(container=Depends(get_container), file: UploadFile = File(...),
     data = await file.read()
     rel = f"{path.strip('/')}/{file.filename}".lstrip("/") if path else file.filename
     info = st.save_bytes(rel, data)
-    return {"uploaded": info}
+    # M2a：上传即解析（尽力而为，失败不影响上传）
+    indexed = None
+    try:
+        indexed = container.ingest.extract(rel)
+    except Exception:
+        pass
+    return {"uploaded": info, "indexed": indexed}
 
 
 @router.get("/download")
