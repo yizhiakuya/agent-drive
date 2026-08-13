@@ -151,7 +151,8 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     const msg = message ?? input.trim();
     if (!msg || busy) return;
     if (!message) setInput("");
-    const history = messages.filter((m) => m.role !== "system" && m.role !== "tool");
+    // 只传窗口内历史（最近 30 条），后端按 token 预算再截断
+    const history = messages.filter((m) => m.role !== "system" && m.role !== "tool").slice(-30);
     setMessages((m) => [...m, { role: "user", content: msg }]);
     setBusy(true);
     setPending(null);

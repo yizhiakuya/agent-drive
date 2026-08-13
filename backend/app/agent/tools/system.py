@@ -39,6 +39,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
             ),
         ),
         get_system_status,
+        group="system",
     )
 
     # ---------- 配置 LLM（Agent 自管理核心） ----------
@@ -72,6 +73,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         ),
         set_llm_provider,
         level="yellow",
+        group="system",
     )
 
     # ---------- 测试 LLM 连接 ----------
@@ -93,6 +95,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
             ),
         ),
         test_llm_connection,
+        group="system",
     )
 
     # ---------- 偏好管理 ----------
@@ -121,6 +124,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         ),
         set_preference,
         level="yellow",
+        group="system",
     )
 
     # ---------- 规则管理（自动化） ----------
@@ -146,6 +150,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         ),
         add_rule,
         level="yellow",
+        group="system",
     )
 
     async def remove_rule(index: int) -> dict[str, Any]:
@@ -165,6 +170,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         ),
         remove_rule,
         level="yellow",
+        group="system",
     )
 
     # ---------- 审计 ----------
@@ -185,4 +191,5 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
             ),
         ),
         view_audit_log,
+        group="system",
     )

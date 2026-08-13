@@ -18,7 +18,14 @@ from typing import Any, Callable
 from ..core.retry import is_retryable_error
 from ..llm.base import LLMProvider, ToolSpec
 from .confirm import needs_confirmation
-from .context import build_history, estimate_tokens, try_parse_json
+from .context import (
+    build_history,
+    compress_history,
+    compress_tool_roundtrips,
+    count_messages_tokens,
+    estimate_tokens,
+    try_parse_json,
+)
 from .tools.plan import register_plan_tools
 from .memory.preferences import MemoryStore
 from .memory.sessions import SessionStore
@@ -42,6 +49,9 @@ class AgentLoop:
         max_tool_output: int = 2000,
         summarize_threshold: int = 12,
         context_window: int = 262144,
+        compress_threshold: float = 0.6,
+        compress_keep_recent: int = 8,
+        roundtrip_compress_threshold: float = 0.9,
     ):
         self.llm = llm
         self.tools = tools
@@ -54,6 +64,9 @@ class AgentLoop:
         self.max_tool_output = max_tool_output
         self.summarize_threshold = summarize_threshold
         self.context_window = context_window
+        self.compress_threshold = compress_threshold
+        self.compress_keep_recent = compress_keep_recent
+        self.roundtrip_compress_threshold = roundtrip_compress_threshold
         self.plan_state: dict[str, Any] = {"steps": []}
         self.usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
         register_plan_tools(self.tools, self.plan_state)
@@ -84,6 +97,7 @@ class AgentLoop:
                 ),
             ),
             read_skill,
+            group="skills",
         )
 
     # ---------- 上下文用量 ----------
@@ -130,8 +144,13 @@ class AgentLoop:
         return title or None
 
     # ---------- 消息组装 ----------
-    def _build_messages(self, user_message: str, history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-        system_prompt = build_system_prompt(self.memory, self.tools, {}, self.sessions, self.skills)
+    def _build_messages(
+        self,
+        user_message: str,
+        history: list[dict[str, Any]] | None,
+        tool_groups: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        system_prompt = build_system_prompt(self.memory, self.tools, {}, self.sessions, self.skills, tool_groups)
         return [
             {"role": "system", "content": system_prompt},
             *build_history(history, self.context_budget),
@@ -168,8 +187,9 @@ class AgentLoop:
         confirmed = confirmations or []
         started = time.time()
 
-        # ---- 意图路由：闲聊轻量路径 ----
-        if classify(user_message) == "chat" and not confirmed:
+        # ---- 意图路由：闲聊轻量路径 + 工具组检索 ----
+        mode, tool_groups = classify(user_message)
+        if mode == "chat" and not confirmed:
             chat_messages = [
                 {"role": "system", "content": build_chat_prompt(self.memory)},
                 *build_history(history, 2000),  # 闲聊只需少量历史
@@ -207,12 +227,27 @@ class AgentLoop:
                 sid = meta["id"]
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
 
-        messages = self._build_messages(user_message, history)
+        # ---- 自动压缩：历史超阈值 → LLM 摘要早期消息（滚动摘要） ----
+        eff_history = history or []
+        hist_tokens = count_messages_tokens([h for h in eff_history if h.get("role") in ("user", "assistant")])
+        if hist_tokens > self.context_budget * self.compress_threshold:
+            rolling = None
+            if self.sessions is not None and sid:
+                meta = self.sessions.get(sid)
+                rolling = meta.get("rolling_summary") if meta else None
+            compressed, new_summary = await compress_history(
+                self.llm, eff_history, self.compress_keep_recent, rolling
+            )
+            if new_summary and self.sessions is not None and sid:
+                self.sessions.update_meta(sid, rolling_summary=new_summary)
+            eff_history = compressed
+
+        messages = self._build_messages(user_message, eff_history, tool_groups)
         self._last_messages = messages
         tool_trace: list[dict[str, Any]] = []
 
         for step in range(self.max_steps):
-            result = await self.llm.chat(messages, tools=self.tools.specs())
+            result = await self.llm.chat(messages, tools=self.tools.specs(tool_groups))
             self._add_usage(result.usage)
 
             if not result.tool_calls:
@@ -288,6 +323,9 @@ class AgentLoop:
                 tool_trace.append(entry)
                 yield ("tool_trace", entry)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": output})
+                # 轮内压缩：工具往返膨胀 → 合并早期工具结果
+                if count_messages_tokens(messages) > self.context_budget * self.roundtrip_compress_threshold:
+                    messages = compress_tool_roundtrips(messages, keep_roundtrips=4)
                 self._last_messages = messages
 
         yield ("done", {

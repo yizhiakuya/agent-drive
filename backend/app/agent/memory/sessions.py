@@ -90,6 +90,15 @@ class SessionStore:
         meta["updated_at"] = time.time()
         (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
 
+    def update_meta(self, sid: str, **fields: Any) -> None:
+        """更新会话元数据任意字段（如滚动摘要 rolling_summary）。"""
+        meta = self.get(sid)
+        if not meta:
+            return
+        meta.update(fields)
+        meta["updated_at"] = time.time()
+        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+
     # ---------- 跨会话记忆 ----------
     def recent_summaries(self, limit: int = 5) -> str:
         """最近 N 个会话的摘要（注入系统提示，实现跨会话记忆）"""

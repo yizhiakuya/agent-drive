@@ -32,6 +32,7 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
             ),
         ),
         list_files,
+        group="files",
     )
 
     async def search_files(query: str, path: str = "") -> list[dict[str, Any]]:
@@ -64,6 +65,7 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
             ),
         ),
         search_files,
+        group="files",
     )
 
     async def read_file(path: str, max_chars: int = 4000) -> str:
@@ -85,6 +87,7 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
             ),
         ),
         read_file,
+        group="files",
     )
 
     # ============ 🟡 低风险写 ============
@@ -114,6 +117,7 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         create_folder,
         level="yellow",
         validator=_validate_created,
+        group="files",
     )
 
     async def rename_file(src: str, dst: str) -> dict[str, Any]:
@@ -147,6 +151,7 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         rename_file,
         level="yellow",
         validator=_validate_renamed,
+        group="files",
     )
 
     async def move_file(src: str, dst_dir: str) -> dict[str, Any]:
@@ -180,6 +185,7 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         move_file,
         level="yellow",
         validator=_validate_moved,
+        group="files",
     )
 
     async def delete_file(path: str) -> dict[str, Any]:
@@ -207,4 +213,5 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         delete_file,
         level="red",
         validator=_validate_deleted,
+        group="files",
     )

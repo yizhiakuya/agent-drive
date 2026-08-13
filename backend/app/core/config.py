@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     max_steps: int = 10
     context_window: int = 262144  # 模型上下文窗口（256K，前端进度条总量）
     context_budget: int = 24000
+    compress_threshold: float = 0.6  # 历史 token 超预算此比例时自动压缩
+    compress_keep_recent: int = 8  # 压缩时保留最近消息条数
+    roundtrip_compress_threshold: float = 0.9  # 轮内工具往返超预算此比例时压缩
     max_tool_output: int = 2000
     summarize_threshold: int = 12
 

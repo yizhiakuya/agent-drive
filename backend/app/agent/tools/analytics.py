@@ -98,4 +98,5 @@ def register_analytics_tools(reg: ToolRegistry, llm_provider: Callable[[], LLMPr
             ),
         ),
         analyze_failures,
+        group="analytics",
     )

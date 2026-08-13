@@ -41,6 +41,7 @@ def register_plan_tools(reg: ToolRegistry, plan_state: dict[str, Any]) -> None:
         ),
         set_plan,
         level="green",
+        group="plan",
     )
 
     async def update_plan(index: int, status: str) -> dict[str, Any]:
@@ -75,4 +76,5 @@ def register_plan_tools(reg: ToolRegistry, plan_state: dict[str, Any]) -> None:
         ),
         update_plan,
         level="green",
+        group="plan",
     )

@@ -20,15 +20,16 @@ def build_system_prompt(
     status: dict[str, Any],
     sessions: SessionStore | None = None,
     skills: SkillsRegistry | None = None,
+    tool_groups: list[str] | None = None,
 ) -> str:
-    """组装完整任务路径系统提示。"""
+    """组装完整任务路径系统提示（tool_groups=None 时注入全部工具手册）"""
     today = datetime.date.today().isoformat()
     prefs = memory.all()
     rules = memory.list_rules()
     pref_lines = "\n".join(f"- {k}: {v}" for k, v in prefs.items()) or "(无)"
     rule_lines = "\n".join(f"- {r}" for r in rules) or "(无)"
     llm_info = json.dumps(status.get("llm") or "未配置", ensure_ascii=False)
-    tool_manual = tools.manual()
+    tool_manual = tools.manual(tool_groups)
     past = sessions.recent_summaries() if sessions else "(无历史会话)"
     skill_index = skills.index() if skills else "(暂无技能)"
 

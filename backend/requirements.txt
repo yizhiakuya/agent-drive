@@ -5,3 +5,4 @@ openai>=1.50
 anthropic>=0.40
 pydantic>=2.8
 pydantic-settings>=2.3
+tiktoken>=0.7

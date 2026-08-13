@@ -64,6 +64,9 @@ class Container:
             max_tool_output=self.settings.max_tool_output,
             summarize_threshold=self.settings.summarize_threshold,
             context_window=self.settings.context_window,
+            compress_threshold=self.settings.compress_threshold,
+            compress_keep_recent=self.settings.compress_keep_recent,
+            roundtrip_compress_threshold=self.settings.roundtrip_compress_threshold,
         )
 
     def close(self) -> None:

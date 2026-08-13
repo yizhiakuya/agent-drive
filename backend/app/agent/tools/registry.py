@@ -20,11 +20,12 @@ from ...llm.base import ToolSpec
 
 class Tool:
     def __init__(self, spec: ToolSpec, fn: Callable[..., Awaitable[Any]], level: str = "green",
-                 validator: Callable[[dict, Any], str | None] | None = None):
+                 validator: Callable[[dict, Any], str | None] | None = None, group: str = "general"):
         self.spec = spec
         self.fn = fn
         self.level = level  # green / yellow / red
         self.validator = validator  # Critic: (arguments, result) -> None 或错误信息
+        self.group = group  # 工具分组（files/system/analytics/plan/skills）
 
     def manual(self) -> str:
         """生成工具手册条目（系统提示用，按 API 文档标准）"""
@@ -37,18 +38,22 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
 
     def register(self, spec: ToolSpec, fn: Callable[..., Awaitable[Any]], level: str = "green",
-                 validator: Callable[[dict, Any], str | None] | None = None) -> None:
-        self._tools[spec.name] = Tool(spec, fn, level, validator)
+                 validator: Callable[[dict, Any], str | None] | None = None, group: str = "general") -> None:
+        self._tools[spec.name] = Tool(spec, fn, level, validator, group)
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
-    def specs(self) -> list[ToolSpec]:
-        return [t.spec for t in self._tools.values()]
+    def specs(self, groups: list[str] | None = None) -> list[ToolSpec]:
+        """工具子集（工具检索：groups=None 返回全部）"""
+        if groups is None:
+            return [t.spec for t in self._tools.values()]
+        return [t.spec for t in self._tools.values() if t.group in groups]
 
-    def manual(self) -> str:
-        """完整工具手册（写入系统提示，实现'系统提示=API文档'）"""
-        return "\n".join(t.manual() for t in self._tools.values())
+    def manual(self, groups: list[str] | None = None) -> str:
+        """工具手册（支持按组过滤）"""
+        tools = list(self._tools.values()) if groups is None else [t for t in self._tools.values() if t.group in groups]
+        return "\n".join(t.manual() for t in tools)
 
     def list(self) -> list[dict[str, Any]]:
         return [
