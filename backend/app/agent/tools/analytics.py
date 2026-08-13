@@ -41,9 +41,11 @@ def _categorize(error_text: str) -> str:
 def register_analytics_tools(reg: ToolRegistry, llm_provider: Callable[[], LLMProvider], audit_log_path, sessions=None) -> None:
     async def analyze_failures(recent: int = 50) -> dict[str, Any]:
         """读取最近审计日志 + 会话错误，用 LLM 诊断根因。"""
-        # 1. 收集失败事件
+        # 1. 收集失败事件（audit 可能是 AuditLogger 对象或 Path，duck-typing）
         failures = []
-        if audit_log_path and audit_log_path.exists():
+        if audit_log_path is not None and hasattr(audit_log_path, "failures"):
+            failures = audit_log_path.failures(recent)
+        elif audit_log_path is not None and hasattr(audit_log_path, "exists") and audit_log_path.exists():
             for line in audit_log_path.read_text().splitlines()[-recent:]:
                 try:
                     ev = json.loads(line)

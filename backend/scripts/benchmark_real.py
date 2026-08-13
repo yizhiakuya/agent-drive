@@ -68,7 +68,7 @@ async def main():
 
     root = Path(tempfile.mkdtemp())
     storage, reg, memory, sessions = make_env(root)
-    llm_mgr = LLMManager(Path(__file__).parent / "system" / "agent-config.json")
+    llm_mgr = LLMManager(Path(__file__).resolve().parent.parent / "system" / "agent-config.json")
     if not llm_mgr.is_configured():
         print("❌ LLM 未配置，请先完成 Onboarding")
         sys.exit(1)

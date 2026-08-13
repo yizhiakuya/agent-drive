@@ -1,8 +1,2 @@
-# 运行时依赖（开发依赖见 pyproject.toml [project.optional-dependencies]）
-fastapi>=0.115
-uvicorn[standard]>=0.30
-openai>=1.50
-anthropic>=0.40
-pydantic>=2.8
-pydantic-settings>=2.3
-tiktoken>=0.7
+# 依赖以 pyproject.toml 为准（单一真相源）
+# 安装: pip install -e ".[dev]"   (开发) 或 pip install -e . (运行时)

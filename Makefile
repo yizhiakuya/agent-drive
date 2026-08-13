@@ -22,13 +22,14 @@ dev-frontend:
 	cd frontend && npm run dev -- --host 0.0.0.0
 
 test:
-	cd backend && python3 -m pytest tests/ -v
-	cd backend && python3 tests/unit/test_agent.py
-	cd backend && python3 tests/unit/test_critic.py
-	cd backend && python3 tests/unit/test_reliability.py
+	cd backend && python3 -m pytest tests/integration -q
+	@for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do \
+		echo "== $$t =="; \
+		(cd backend && python3 tests/unit/$$t.py) || exit 1; \
+	done
 
 bench:
-	cd backend && python3 tests/integration/test_benchmark_real.py --repeat 3
+	cd backend && python3 scripts/benchmark_real.py --repeat 3
 
 build:
 	cd frontend && npm run build

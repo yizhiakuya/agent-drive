@@ -16,3 +16,4 @@ backend/.env
 # 工具
 *.log
 .DS_Store
+backend/scripts/system/
