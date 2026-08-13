@@ -30,6 +30,8 @@ def build_system_prompt(
     rule_lines = "\n".join(f"- {r}" for r in rules) or "(无)"
     llm_info = json.dumps(status.get("llm") or "未配置", ensure_ascii=False)
     tool_manual = tools.manual(tool_groups)
+    # 长期记忆策划层（MEMORY.md，超 2000 字符截断）
+    long_memory = memory.memory_text(max_chars=2000) or "(空)"
     past = sessions.recent_summaries() if sessions else "(无历史会话)"
     skill_index = skills.index() if skills else "(暂无技能)"
 
@@ -45,6 +47,9 @@ def build_system_prompt(
 ## 技能包（能力索引）
 以下是你可以使用的技能。当用户请求匹配"触发词"时，先用 read_skill 工具加载该技能的完整指令再执行：
 {skill_index}
+
+## 长期记忆（MEMORY.md 策划层）
+{long_memory}
 
 ## 当前状态
 - 今天日期: {today}（理解"今天/明天/明年"等相对时间请以此为准）
@@ -65,7 +70,8 @@ def build_system_prompt(
 6. **优雅失败**：工具返回 {{ok:false, error}} 时，先读懂错误，能修则重试，不能修就明确告诉用户。
 7. **规划**：预计 3 步以上的复杂任务，开工前先调用 set_plan 列计划；每完成一步用 update_plan 标记 done。
 8. **内容创作**：你是能写作的管家。用户要写笔记/报告/周报/清单时，用 write_file 直接创建文件保存到网盘；持续更新用 append_file。用户没指定路径时，按偏好（organize_style）选合理路径。
-9. **简洁**：回答用用户偏好的语言（preferences.language 默认中文），直接有用，不啰嗦。
+9. **记忆维护**：用户表达持久事实/决策/约定（论文主题、项目决策、重要日期）时，主动调用 remember 记录到长期记忆；回答涉及往事时，先 memory_search 检索再回答，不要凭印象编造。
+10. **简洁**：回答用用户偏好的语言（preferences.language 默认中文），直接有用，不啰嗦。
 """
 
 

@@ -125,6 +125,32 @@ class AgentLoop:
             "percent": round(used / self.context_window * 100, 1) if self.context_window else 0,
         }
 
+    # ---------- Dreaming 巩固 ----------
+    async def _dream(self) -> None:
+        """把昨天的工作层笔记蒸馏进 MEMORY.md（每天最多一次）。"""
+        from datetime import date, timedelta
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if self.memory.last_dream() >= yesterday:
+            return  # 今天已巩固过
+        notes = self.memory.yesterday_notes()
+        if len(notes) < 3:
+            return  # 笔记太少不值得巩固
+        transcript = "\n".join(notes[-30:])
+        result = await self.llm.chat([{
+            "role": "user",
+            "content": (
+                "以下是昨天的会话活动笔记。请提炼值得长期记住的持久事实/决策"
+                "（用户背景、偏好、项目进展、重要约定），每条一行，不超过 5 条。"
+                "没有值得记的内容输出'无'。\n\n" + transcript
+            ),
+        }])
+        for line in (result.content or "").splitlines():
+            line = line.strip().lstrip("-• ").strip()
+            if line and line != "无" and len(line) > 3:
+                self.memory.remember(f"{line}（巩固自{yesterday}）")
+        # 标记已巩固
+        self.memory.mark_dreamed(yesterday)
+
     # ---------- 自动标题 ----------
     async def _generate_title(self, sid: str) -> str | None:
         """用 LLM 为会话生成简短标题（首次问答后调用一次）。"""
@@ -227,6 +253,12 @@ class AgentLoop:
                 sid = meta["id"]
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
 
+        # ---- Dreaming 巩固：每日首次对话时，把昨天的笔记蒸馏进 MEMORY.md ----
+        try:
+            await self._dream()
+        except Exception:
+            pass
+
         # ---- 自动压缩：历史超阈值 → LLM 摘要早期消息（滚动摘要） ----
         eff_history = history or []
         hist_tokens = count_messages_tokens([h for h in eff_history if h.get("role") in ("user", "assistant")])
@@ -264,6 +296,13 @@ class AgentLoop:
                     yield ("text", full_reply)
                 if self.sessions is not None and sid:
                     self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
+                    # 每日笔记（工作层）：一行活动记录，供日后检索与巩固
+                    try:
+                        self.memory.daily_note(
+                            f"[{time.strftime('%H:%M')}] 用户: {user_message[:60]} → {full_reply[:60]}"
+                        )
+                    except Exception:
+                        pass
                     meta = self.sessions.get(sid)
                     needs_summary = (meta.get("message_count", 0) >= self.summarize_threshold
                                      and not meta.get("summary"))

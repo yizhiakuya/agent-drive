@@ -15,6 +15,7 @@ from ..agent.onboarding import Onboarding
 from ..agent.skills import SkillsRegistry
 from ..agent.tools.analytics import register_analytics_tools
 from ..agent.tools.files import register_file_tools
+from ..agent.tools.memory import register_memory_tools
 from ..agent.tools.registry import ToolRegistry
 from ..agent.tools.system import register_system_tools
 from ..llm.manager import LLMManager
@@ -46,6 +47,7 @@ class Container:
         reg = ToolRegistry()
         register_system_tools(reg, self.llm, self.memory, audit_fn=self.audit.tail)
         register_file_tools(reg, self.storage)
+        register_memory_tools(reg, self.memory)
         register_analytics_tools(reg, self.llm.get_provider, self.audit, self.sessions)
         return reg
 
