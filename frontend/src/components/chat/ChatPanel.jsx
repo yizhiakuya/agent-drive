@@ -11,6 +11,28 @@ function fmtSize(n) {
   return n + " B";
 }
 
+/** 上下文进度条：已用/总窗口（256K） */
+function fmtTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return n + "";
+}
+
+function ContextBar({ usage }) {
+  const { used = 0, total = 262144, percent = 0 } = usage;
+  const pct = Math.min(100, percent);
+  const color = pct > 80 ? "var(--danger)" : pct > 50 ? "#d97706" : "var(--accent2)";
+  return (
+    <div className="context-bar" title={`上下文占用: 已用 ${fmtTokens(used)} / ${fmtTokens(total)}`}>
+      <span className="context-label">上下文</span>
+      <div className="context-track">
+        <div className="context-fill" style={{ width: `${pct}%`, background: color }} />
+      </div>
+      <span className="context-text">{fmtTokens(used)} / {fmtTokens(total)}</span>
+    </div>
+  );
+}
+
 /** 任务计划卡片：逐步状态可视化 */
 function PlanCard({ plan }) {
   const icons = { pending: "⏳", in_progress: "🔄", done: "✅", skipped: "⏭️", failed: "❌" };
@@ -86,7 +108,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [trace, setTrace] = useState([]);
   const [pending, setPending] = useState(null);
   const [plan, setPlan] = useState([]);
-  const [usage, setUsage] = useState(null);
+  const [contextUsage, setContextUsage] = useState(null);
   const [sid, setSid] = useState(sessionId);
   const bottomRef = useRef(null);
   const sidRef = useRef(sessionId); // 已接受会话 id（区分"会话创建"与"用户切换"）
@@ -118,8 +140,8 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       setMessages(msgs.length ? msgs : []);
       setTrace([]);
       setPlan([]);
-      setUsage(null);
-      setUsage(null);
+      setContextUsage(null);
+      setContextUsage(null);
     } catch (e) {
       setMessages([]);
     }
@@ -135,7 +157,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     setPending(null);
     setTrace([]);
     setPlan([]);
-    setUsage(null);
+    setContextUsage(null);
 
     // 占位：流式文本写入这条 assistant 消息
     let replyRef = "";
@@ -158,7 +180,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
         }
       });
       if (r?.plan?.length) setPlan(r.plan);
-      if (r?.usage) setUsage(r.usage);
+      if (r?.context_usage) setContextUsage(r.context_usage);
       if (r?.session_id) {
         sidRef.current = r.session_id; // 关键：先标记本会话 id，防止 effect 误清空
         setSid(r.session_id);
@@ -229,12 +251,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
 
       {plan.length > 0 && <PlanCard plan={plan} />}
 
-      {usage && (
-        <div className="usage-bar">
-          本轮消耗：<b>{usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)}</b> tokens
-          （输入 {usage.prompt_tokens ?? 0} / 输出 {usage.completion_tokens ?? 0}）
-        </div>
-      )}
+      {contextUsage && <ContextBar usage={contextUsage} />}
 
       {trace.length > 0 && (
         <div className="trace">

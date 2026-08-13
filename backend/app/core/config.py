@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # Agent
     max_steps: int = 10
+    context_window: int = 262144  # 模型上下文窗口（256K，前端进度条总量）
     context_budget: int = 24000
     max_tool_output: int = 2000
     summarize_threshold: int = 12

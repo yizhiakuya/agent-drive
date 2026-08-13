@@ -113,8 +113,12 @@ body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "M
 .plan-step.in_progress .plan-text { color: var(--accent2); }
 .plan-icon { width: 18px; text-align: center; }
 
-/* 用量统计 */
-.usage-bar { font-size: 11px; color: var(--muted); padding: 4px 0 8px; text-align: center; }
+/* 上下文进度条 */
+.context-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); font-size: 11px; color: var(--muted); }
+.context-label { flex-shrink: 0; }
+.context-track { flex: 1; height: 6px; background: var(--card); border-radius: 999px; overflow: hidden; }
+.context-fill { height: 100%; border-radius: 999px; transition: width 0.4s ease, background 0.4s ease; }
+.context-text { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 
 /* Markdown 渲染样式（assistant 气泡内） */

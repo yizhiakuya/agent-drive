@@ -18,7 +18,7 @@ from typing import Any, Callable
 from ..core.retry import is_retryable_error
 from ..llm.base import LLMProvider, ToolSpec
 from .confirm import needs_confirmation
-from .context import build_history, try_parse_json
+from .context import build_history, estimate_tokens, try_parse_json
 from .tools.plan import register_plan_tools
 from .memory.preferences import MemoryStore
 from .memory.sessions import SessionStore
@@ -41,6 +41,7 @@ class AgentLoop:
         context_budget: int = 24000,
         max_tool_output: int = 2000,
         summarize_threshold: int = 12,
+        context_window: int = 262144,
     ):
         self.llm = llm
         self.tools = tools
@@ -52,6 +53,7 @@ class AgentLoop:
         self.context_budget = context_budget
         self.max_tool_output = max_tool_output
         self.summarize_threshold = summarize_threshold
+        self.context_window = context_window
         self.plan_state: dict[str, Any] = {"steps": []}
         self.usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
         register_plan_tools(self.tools, self.plan_state)
@@ -84,16 +86,30 @@ class AgentLoop:
             read_skill,
         )
 
-    # ---------- 用量统计 ----------
+    # ---------- 上下文用量 ----------
     def _add_usage(self, usage: dict[str, Any] | None, stream_text: str | None = None) -> None:
         """累计 token 用量（chat 用 usage，流式用文本估算）"""
         if usage:
             self.usage["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
             self.usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
         if stream_text:
-            from .context import estimate_tokens
             self.usage["completion_tokens"] += estimate_tokens(stream_text)
         self.usage["total_tokens"] = self.usage["prompt_tokens"] + self.usage["completion_tokens"]
+
+    def _context_usage(self, messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """当前上下文占用（发给 LLM 的 messages 总量），供前端进度条显示。"""
+        if messages is None:
+            messages = self._last_messages
+        used = sum(estimate_tokens(str(m.get("content", ""))) for m in messages)
+        # 加上 tool_calls 参数估算
+        for m in messages:
+            for tc in m.get("tool_calls", []):
+                used += estimate_tokens(str(tc.get("arguments", "")))
+        return {
+            "used": used,
+            "total": self.context_window,
+            "percent": round(used / self.context_window * 100, 1) if self.context_window else 0,
+        }
 
     # ---------- 自动标题 ----------
     async def _generate_title(self, sid: str) -> str | None:
@@ -175,6 +191,11 @@ class AgentLoop:
                 "tool_trace": [],
                 "plan": [],
                 "usage": self.usage,
+                "context_usage": {
+                    "used": sum(estimate_tokens(str(m.get("content", ""))) for m in chat_messages),
+                    "total": self.context_window,
+                    "percent": round(sum(estimate_tokens(str(m.get("content", ""))) for m in chat_messages) / self.context_window * 100, 1) if self.context_window else 0,
+                },
             })
             return
 
@@ -187,6 +208,7 @@ class AgentLoop:
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
 
         messages = self._build_messages(user_message, history)
+        self._last_messages = messages
         tool_trace: list[dict[str, Any]] = []
 
         for step in range(self.max_steps):
@@ -227,6 +249,7 @@ class AgentLoop:
                     "tool_trace": tool_trace,
                     "plan": self.plan_state.get("steps", []),
                     "usage": self.usage,
+                    "context_usage": self._context_usage(),
                 })
                 return
 
@@ -257,6 +280,7 @@ class AgentLoop:
                         "tool_trace": tool_trace,
                         "plan": self.plan_state.get("steps", []),
                         "usage": self.usage,
+                        "context_usage": self._context_usage(),
                     })
                     return
 
@@ -264,6 +288,7 @@ class AgentLoop:
                 tool_trace.append(entry)
                 yield ("tool_trace", entry)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": output})
+                self._last_messages = messages
 
         yield ("done", {
             "steps": self.max_steps,
@@ -273,6 +298,7 @@ class AgentLoop:
             "tool_trace": tool_trace,
             "plan": self.plan_state.get("steps", []),
             "usage": self.usage,
+            "context_usage": self._context_usage(),
         })
 
     # ---------- 非流式 API ----------
@@ -306,6 +332,7 @@ class AgentLoop:
             "routed": done.get("routed"),
             "plan": done.get("plan", []),
             "usage": done.get("usage", self.usage),
+            "context_usage": done.get("context_usage", {}),
         }
 
     # ---------- 流式 API ----------

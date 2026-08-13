@@ -63,6 +63,7 @@ class Container:
             context_budget=self.settings.context_budget,
             max_tool_output=self.settings.max_tool_output,
             summarize_threshold=self.settings.summarize_threshold,
+            context_window=self.settings.context_window,
         )
 
     def close(self) -> None:
