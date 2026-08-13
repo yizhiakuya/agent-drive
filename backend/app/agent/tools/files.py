@@ -144,6 +144,47 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -
         group="files",
     )
 
+    async def read_document(path: str, offset: int = 0, limit: int = 6000) -> str:
+        """长文档分段读取（M2c：大文件/PDF 翻页阅读）"""
+        if ingest is None:
+            return "(摄入管线未启用)"
+        text = ingest.get_text(path, max_chars=1_000_000)
+        if text is None:
+            try:
+                ingest.extract(path)
+                text = ingest.get_text(path, max_chars=1_000_000)
+            except Exception:
+                return f"(文件无法解析: {path})"
+        if text is None:
+            return f"(文件无内容: {path})"
+        total = len(text)
+        chunk = text[offset:offset + limit]
+        header = f"【{path}】共 {total} 字，本段 [{offset}~{offset + len(chunk)}]:\n"
+        if offset + len(chunk) < total:
+            header += f"(还有 {total - offset - len(chunk)} 字未读，继续读用 offset={offset + len(chunk)})\n"
+        return header + chunk
+
+    reg.register(
+        ToolSpec(
+            "read_document",
+            "长文档分段阅读（大文件/PDF 翻页）",
+            {"type": "object", "properties": {
+                "path": {"type": "string", "description": "文件路径"},
+                "offset": {"type": "integer", "description": "起始字符位置，默认 0"},
+                "limit": {"type": "integer", "description": "本段字符数，默认 6000"},
+            }, "required": ["path"]},
+            doc=(
+                "用途：读取长文档（PDF/大文本）指定段落。read_file 上限 4000 字，\n"
+                "超过用本工具分段读：第一次 offset=0，续读把 offset 设为上次提示的下一个位置。\n"
+                "参数：path（必填）；offset（可选，默认 0）；limit（可选，默认 6000）。\n"
+                "输出：文件头部说明 + 本段全文。\n"
+                "提示：问答文档内容时，先读开头和结尾，再按需读中间。"
+            ),
+        ),
+        read_document,
+        group="files",
+    )
+
     # ============ 🟢 M2 内容检索 ============
     async def search_content(query: str, limit: int = 10) -> list[dict[str, Any]]:
         """全文搜索文件内容（M2a）"""

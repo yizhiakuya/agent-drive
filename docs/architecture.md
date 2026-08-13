@@ -40,7 +40,7 @@
 | `agent/` | Agent 决策循环、工具、记忆 | HTTP、存储细节 |
 | `llm/` | LLM 协议适配 | 业务逻辑 |
 | `storage/` | 文件持久化（接口+实现） | 决策逻辑 |
-| `ingest/` | 摄入管线（M2） | — |
+| `ingest/` | 摄入管线（M2 已落地：文本/PDF/OCR 提取 + 全文/语义搜索） | ✅ |
 
 ## 三、关键设计决策
 
@@ -123,7 +123,7 @@ backend/
 │   │   └── providers/  openai_compat.py  responses.py  anthropic.py
 │   ├── storage/
 │   │   ├── base.py  local.py  s3.py
-│   └── ingest/             # M2 占位
+│   └── ingest/             # M2: pipeline.py（提取+索引+向量）
 │       └── pipeline.py
 ├── tests/
 │   ├── conftest.py          # 共享 fixtures
@@ -146,7 +146,7 @@ frontend/
 
 | 扩展 | 接入点 |
 |------|--------|
-| 语义搜索 | ingest/pipeline + storage/index (pgvector) |
+| 语义搜索 | ✅ ingest/pipeline + llm/embeddings（Jina 云，jina-embeddings-v3）+ .index 向量 sidecar（规模化后迁 pgvector） |
 | 流式输出 | llm/base 增加 stream 协议 + WS 通道 |
 | 定时任务 | services/scheduler + core/queue |
 | 认证 | api/deps + core/auth |
