@@ -1,0 +1,73 @@
+"""日志系统：三流分离。
+
+- app_logger: 应用日志（结构化 JSON in prod，可读 in dev）
+- audit: 审计日志（追加到 system/audit.log，Agent 操作追踪）
+- session: 会话记录（由 SessionStore 管理）
+"""
+from __future__ import annotations
+
+import json
+import logging
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+
+def setup_logging(app_env: str = "dev") -> logging.Logger:
+    logger = logging.getLogger("agent_drive")
+    if logger.handlers:
+        return logger
+    level = logging.DEBUG if app_env == "dev" else logging.INFO
+    logger.setLevel(level)
+    handler = logging.StreamHandler(sys.stdout)
+    if app_env == "prod":
+        class JsonFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                return json.dumps({
+                    "ts": time.time(),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "msg": record.getMessage(),
+                }, ensure_ascii=False)
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s"))
+    logger.addHandler(handler)
+    return logger
+
+
+class AuditLogger:
+    """审计日志：追加 JSONL，只记录 Agent 操作事件。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def record(self, event: str, result: Any = None) -> None:
+        with open(self.path, "a") as f:
+            f.write(json.dumps(
+                {"ts": time.time(), "event": event, "result": str(result) if result else None},
+                ensure_ascii=False,
+            ) + "\n")
+
+    def tail(self, limit: int = 20) -> str:
+        if not self.path.exists():
+            return "(无审计记录)"
+        lines = self.path.read_text().splitlines()[-limit:]
+        return "\n".join(lines)
+
+    def failures(self, recent: int = 50) -> list[dict[str, Any]]:
+        """提取最近失败事件（供错误分析工具使用）"""
+        failures = []
+        if not self.path.exists():
+            return failures
+        for line in self.path.read_text().splitlines()[-recent:]:
+            try:
+                ev = json.loads(line)
+                text = json.dumps(ev, ensure_ascii=False)
+                if any(k in text for k in ("error", "pending-confirm", "fail")):
+                    failures.append(ev)
+            except Exception:
+                continue
+        return failures
