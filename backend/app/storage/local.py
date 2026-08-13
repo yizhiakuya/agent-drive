@@ -66,9 +66,11 @@ class LocalStorage:
     def rename(self, src: str, dst: str) -> None:
         self.resolve(src).rename(self.resolve(dst))
 
-    def move(self, src: str, dst_dir: str) -> None:
+    def move(self, src: str, dst_dir: str, overwrite: bool = False) -> None:
         p = self.resolve(src)
         target = self.resolve(dst_dir) / p.name
+        if target.exists() and not overwrite:
+            raise FileExistsError(f"目标已存在: {target.relative_to(self.root).as_posix()}（需 overwrite=true）")
         shutil.move(str(p), str(target))
 
     def delete(self, rel_path: str) -> None:
@@ -109,10 +111,12 @@ class LocalStorage:
             "action": "追加" if existed else "新建",
         }
 
-    def copy(self, src: str, dst: str) -> dict[str, Any]:
+    def copy(self, src: str, dst: str, overwrite: bool = False) -> dict[str, Any]:
         """复制文件或目录到新位置。"""
         s_p = self.resolve(src)
         d_p = self.resolve(dst)
+        if d_p.exists() and not overwrite:
+            raise FileExistsError(f"目标已存在: {dst}（需 overwrite=true）")
         if not s_p.exists():
             raise FileNotFoundError(src)
         if s_p.is_dir():

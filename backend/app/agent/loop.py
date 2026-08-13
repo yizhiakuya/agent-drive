@@ -228,43 +228,61 @@ class AgentLoop:
         confirmations: list[dict[str, Any]] | None,
         session_id: str | None,
     ):
-        """统一执行核心。yields: ("text", chunk) | ("tool_trace", entry) | ("done", meta)"""
-        confirmed = confirmations or []
-        started = time.time()
+        """统一执行核心（编排壳）。yields: ("text", c) | ("tool_start", e) | ("tool_trace", e) | ("done", m)
 
-        # ---- 意图路由：闲聊轻量路径 + 工具组检索 ----
+        职责：意图路由 → 分发到闲聊/任务路径。具体逻辑在 _chat_path/_task_path。
+        """
+        confirmed = confirmations or []
         mode, tool_groups = classify(user_message)
         if mode == "chat" and not confirmed:
-            chat_messages = [
-                {"role": "system", "content": build_chat_prompt(self.memory)},
-                *build_history(history, 2000),  # 闲聊只需少量历史
-                {"role": "user", "content": user_message},
-            ]
-            try:
-                async for chunk in self.llm.stream_chat(chat_messages):
-                    self._add_usage(None, chunk)
-                    yield ("text", chunk)
-            except (NotImplementedError, TypeError):
-                result = await self.llm.chat(chat_messages)
-                self._add_usage(result.usage)
-                yield ("text", result.content or "")
-            yield ("done", {
-                "steps": 1,
-                "latency_ms": int((time.time() - started) * 1000),
-                "session_id": session_id,
-                "routed": "chat",
-                "tool_trace": [],
-                "plan": [],
-                "usage": self.usage,
-                "context_usage": {
-                    "used": sum(estimate_tokens(str(m.get("content", ""))) for m in chat_messages),
-                    "total": self.context_window,
-                    "percent": round(sum(estimate_tokens(str(m.get("content", ""))) for m in chat_messages) / self.context_window * 100, 1) if self.context_window else 0,
-                },
-            })
+            async for ev in self._chat_path(user_message, history, session_id):
+                yield ev
             return
+        async for ev in self._task_path(user_message, history, confirmed, session_id, tool_groups):
+            yield ev
 
-        # ---- 任务路径：完整 Agentic Loop ----
+    # ---------- 闲聊轻量路径 ----------
+    async def _chat_path(self, user_message: str, history, session_id: str | None):
+        """闲聊：精简提示 + 无工具 + 少量历史。"""
+        started = time.time()
+        chat_messages = [
+            {"role": "system", "content": build_chat_prompt(self.memory)},
+            *build_history(history, 2000),
+            {"role": "user", "content": user_message},
+        ]
+        try:
+            async for chunk in self.llm.stream_chat(chat_messages):
+                self._add_usage(None, chunk)
+                yield ("text", chunk)
+        except (NotImplementedError, TypeError):
+            result = await self.llm.chat(chat_messages)
+            self._add_usage(result.usage)
+            yield ("text", result.content or "")
+        yield ("done", {
+            "steps": 1,
+            "latency_ms": int((time.time() - started) * 1000),
+            "session_id": session_id,
+            "routed": "chat",
+            "tool_trace": [],
+            "plan": [],
+            "usage": self.usage,
+            "context_usage": self._chat_context_usage(chat_messages),
+        })
+
+    def _chat_context_usage(self, chat_messages: list[dict[str, Any]]) -> dict[str, Any]:
+        used = sum(estimate_tokens(str(m.get("content", ""))) for m in chat_messages)
+        return {
+            "used": used,
+            "total": self.context_window,
+            "percent": round(used / self.context_window * 100, 1) if self.context_window else 0,
+        }
+
+    # ---------- 任务路径 ----------
+    async def _task_path(self, user_message: str, history, confirmed, session_id: str | None, tool_groups):
+        """任务：会话初始化 + dreaming + 压缩 + 确认重放 + 进入工具循环。"""
+        started = time.time()
+
+        # 会话初始化
         sid = session_id
         if self.sessions is not None:
             if sid is None or self.sessions.get(sid) is None:
@@ -272,145 +290,116 @@ class AgentLoop:
                 sid = meta["id"]
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
 
-        # ---- Dreaming 巩固：每日首次对话时，把昨天的笔记蒸馏进 MEMORY.md ----
+        # Dreaming 巩固（尽力而为）
         try:
             await self._dream()
         except Exception:
             pass
 
-        # ---- 自动压缩：历史超阈值 → LLM 摘要早期消息（滚动摘要） ----
-        eff_history = history or []
-        hist_tokens = count_messages_tokens([h for h in eff_history if h.get("role") in ("user", "assistant")])
-        if hist_tokens > self.context_budget * self.compress_threshold:
-            rolling = None
-            if self.sessions is not None and sid:
-                meta = self.sessions.get(sid)
-                rolling = meta.get("rolling_summary") if meta else None
-            compressed, new_summary = await compress_history(
-                self.llm, eff_history, self.compress_keep_recent, rolling
-            )
-            if new_summary and self.sessions is not None and sid:
-                self.sessions.update_meta(sid, rolling_summary=new_summary)
-            eff_history = compressed
+        # 自动压缩（滚动摘要）
+        eff_history = await self._maybe_compress(history, sid)
 
-        # 会话级确认状态（修复 A2：pending 持久化 + 防重放）
-        stored_pending = None
-        consumed_nonces: set[str] = set()
-        prev_trace: list[dict[str, Any]] = []
-        if self.sessions is not None and sid:
-            meta = self.sessions.get(sid) or {}
-            stored_pending = meta.get("pending_confirmation")
-            consumed_nonces = set(meta.get("consumed_nonces", []))
-            prev_trace = meta.get("last_trace", [])
+        # 会话确认状态（防伪造/防重放）
+        stored_pending, consumed_nonces, prev_trace = self._load_confirm_state(sid)
 
         tool_trace: list[dict[str, Any]] = []
 
-        # ---- 确认恢复：签名验证通过 → 确定性重放 pending 工具（不依赖 LLM 重新推导） ----
-        confirmed_replayed = False
-        if stored_pending is not None and confirmed:
-            approved = False
-            for c in confirmed:
-                ok, _err = verify_confirmation(stored_pending, c, consumed_nonces)
-                if ok:
-                    approved = True
-                    consumed_nonces.add(stored_pending.get("nonce", ""))
-                    break
-            if approved:
-                ptool, pargs = stored_pending.get("tool"), stored_pending.get("arguments", {})
-                self.audit(f"[confirmed-exec:{ptool}] {json.dumps(pargs, ensure_ascii=False)}")
-                yield ("tool_start", {"step": 1, "tool": ptool, "arguments": pargs})
-                output, entry = await self._execute_tool(ptool, pargs, 1)
-                tool_trace.append(entry)
-                yield ("tool_trace", entry)
-                messages = self._build_messages(user_message, eff_history, tool_groups)
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{"id": "pending_confirmed", "name": ptool, "arguments": pargs}],
-                })
-                messages.append({"role": "tool", "tool_call_id": "pending_confirmed", "content": output})
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"用户已确认执行 {ptool} 操作，执行结果如上。"
-                        "请直接向用户汇报执行结果（操作已生效，不要重复执行或验证）。"
-                    ),
-                })
-                self._last_messages = messages
-                if self.sessions is not None and sid:
-                    self.sessions.update_meta(sid, pending_confirmation=None)
-                confirmed_replayed = True
-                # 跳过 LLM 重新规划，直接进入循环（LLM 会基于执行结果回复）
+        # 确认恢复：签名验证 → 确定性重放（不依赖 LLM 重新推导）
+        messages, replay_events = await self._replay_confirmation(
+            user_message, eff_history, tool_groups, stored_pending, confirmed, consumed_nonces, sid, tool_trace
+        )
+        for ev in replay_events:
+            yield ev
 
-        if not confirmed_replayed:
-            messages = self._build_messages(user_message, eff_history, tool_groups)
+        async for ev in self._task_loop(
+            messages, sid, confirmed, started, tool_trace,
+            stored_pending, consumed_nonces, prev_trace, user_message, tool_groups,
+        ):
+            yield ev
+
+    async def _maybe_compress(self, history, sid: str | None):
+        """历史超阈值 → LLM 摘要早期消息（滚动摘要）。"""
+        eff_history = history or []
+        hist_tokens = count_messages_tokens([h for h in eff_history if h.get("role") in ("user", "assistant")])
+        if hist_tokens <= self.context_budget * self.compress_threshold:
+            return eff_history
+        rolling = None
+        if self.sessions is not None and sid:
+            meta = self.sessions.get(sid)
+            rolling = meta.get("rolling_summary") if meta else None
+        compressed, new_summary = await compress_history(self.llm, eff_history, self.compress_keep_recent, rolling)
+        if new_summary and self.sessions is not None and sid:
+            self.sessions.update_meta(sid, rolling_summary=new_summary)
+        return compressed
+
+    def _load_confirm_state(self, sid: str | None):
+        """读会话级确认状态（pending/已消费 nonce/上次轨迹）。"""
+        if self.sessions is None or not sid:
+            return None, set(), []
+        meta = self.sessions.get(sid) or {}
+        return (
+            meta.get("pending_confirmation"),
+            set(meta.get("consumed_nonces", [])),
+            meta.get("last_trace", []),
+        )
+
+    async def _replay_confirmation(self, user_message, eff_history, tool_groups, stored_pending, confirmed, consumed_nonces, sid, tool_trace):
+        """确认恢复：合法签名 → 确定性重放 pending 工具。
+
+        返回 (messages, events)：events 是重放产生的 tool_start/tool_trace 事件（由调用方转发）。
+        """
+        events: list[tuple[str, dict[str, Any]]] = []
+        messages = self._build_messages(user_message, eff_history, tool_groups)
+        if stored_pending is None or not confirmed:
+            self._last_messages = messages
+            return messages, events
+        approved = False
+        for c in confirmed:
+            ok, _err = verify_confirmation(stored_pending, c, consumed_nonces)
+            if ok:
+                approved = True
+                consumed_nonces.add(stored_pending.get("nonce", ""))
+                break
+        if not approved:
+            self._last_messages = messages
+            return messages, events
+        ptool = stored_pending.get("tool")
+        pargs = stored_pending.get("arguments", {})
+        self.audit(f"[confirmed-exec:{ptool}] {json.dumps(pargs, ensure_ascii=False)}")
+        events.append(("tool_start", {"step": 1, "tool": ptool, "arguments": pargs}))
+        output, entry = await self._execute_tool(ptool, pargs, 1)
+        tool_trace.append(entry)
+        events.append(("tool_trace", entry))
+        messages = self._build_messages(user_message, eff_history, tool_groups)
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "pending_confirmed", "name": ptool, "arguments": pargs}],
+        })
+        messages.append({"role": "tool", "tool_call_id": "pending_confirmed", "content": output})
+        messages.append({
+            "role": "user",
+            "content": (
+                f"用户已确认执行 {ptool} 操作，执行结果如上。"
+                "请直接向用户汇报执行结果（操作已生效，不要重复执行或验证）。"
+            ),
+        })
         self._last_messages = messages
+        if self.sessions is not None and sid:
+            self.sessions.update_meta(sid, pending_confirmation=None)
+        return messages, events
 
+    # ---------- 工具循环 ----------
+    async def _task_loop(self, messages, sid, confirmed, started, tool_trace,
+                         stored_pending, consumed_nonces, prev_trace, user_message, tool_groups):
+        """工具循环：LLM 决策 → 工具执行 → 观察，直到最终回复或步数耗尽。"""
         for step in range(self.max_steps):
             result = await self.llm.chat(messages, tools=self.tools.specs(tool_groups))
             self._add_usage(result.usage)
 
             if not result.tool_calls:
-                # ---- 流式输出最终回复 ----
-                full_reply = ""
-                try:
-                    async for chunk in self.llm.stream_chat(messages):
-                        self._add_usage(None, chunk)
-                        full_reply += chunk
-                        yield ("text", chunk)
-                except (NotImplementedError, TypeError):
-                    full_reply = result.content or ""
-                    self._add_usage(None, full_reply)
-                    yield ("text", full_reply)
-                if self.sessions is not None and sid:
-                    # 工具调用记录持久化（历史恢复时重建内联步骤节点）
-                    for t in tool_trace:
-                        try:
-                            self.sessions.append(sid, {
-                                "role": "tool_call",
-                                "tool": t.get("tool"),
-                                "arguments": t.get("arguments", {}),
-                                "output": t.get("output", "")[:2000],
-                                "parsed": t.get("parsed"),
-                                "ts": time.time(),
-                            })
-                        except Exception:
-                            pass
-                    self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
-                    # 会话恢复状态：工具轨迹（防重放复用）+ 已消费 nonce
-                    try:
-                        self.sessions.update_meta(sid, last_trace=tool_trace, consumed_nonces=sorted(consumed_nonces))
-                    except Exception:
-                        pass
-                    # 每日笔记（工作层）：一行活动记录，供日后检索与巩固
-                    try:
-                        self.memory.daily_note(
-                            f"[{time.strftime('%H:%M')}] 用户: {user_message[:60]} → {full_reply[:60]}"
-                        )
-                    except Exception:
-                        pass
-                    meta = self.sessions.get(sid)
-                    needs_summary = (meta.get("message_count", 0) >= self.summarize_threshold
-                                     and not meta.get("summary"))
-                    # 自动标题：会话首次问答后生成（尽力而为，失败不影响主流程）
-                    if meta and meta.get("title") == "新会话" and meta.get("message_count", 0) >= 2:
-                        try:
-                            await self._generate_title(sid)
-                        except Exception:
-                            pass
-                else:
-                    needs_summary = False
-                yield ("done", {
-                    "steps": step + 1,
-                    "latency_ms": int((time.time() - started) * 1000),
-                    "session_id": sid,
-                    "needs_summary": needs_summary,
-                    "routed": "task",
-                    "tool_trace": tool_trace,
-                    "plan": self.plan_state.get("steps", []),
-                    "usage": self.usage,
-                    "context_usage": self._context_usage(),
-                })
+                async for ev in self._final_reply(messages, result, sid, started, tool_trace, consumed_nonces, user_message, step):
+                    yield ev
                 return
 
             messages.append({
@@ -424,91 +413,22 @@ class AgentLoop:
             for tc in result.tool_calls:
                 tool = self.tools.get(tc.name)
 
-                # ---- 安全护栏：red 级操作必须签名确认（防伪造/防重放） ----
-                # 任何 red 级调用都必须过签名验证，不做列表匹配短路
-                if tool is not None and tool.level == "red":
-                    approved = False
-                    if stored_pending is not None and stored_pending.get("tool") == tc.name:
-                        # 已有待确认操作：只接受签名验证通过，失败不覆盖原 pending
-                        for c in confirmed:
-                            ok, _err = verify_confirmation(stored_pending, c, consumed_nonces)
-                            if ok:
-                                approved = True
-                                consumed_nonces.add(stored_pending.get("nonce", ""))
-                                break
-                        if not approved:
-                            # 验证失败（伪造/过期/未提供）→ 原 pending 原样返回，不重签
-                            self._persist_tool_trace(sid, tool_trace)
-                            self.audit(f"[pending-confirm-reject:{tc.name}] 确认验证失败")
-                            yield ("done", {
-                                "steps": step + 1,
-                                "latency_ms": int((time.time() - started) * 1000),
-                                "pending_confirmation": stored_pending,
-                                "session_id": sid,
-                                "tool_trace": tool_trace,
-                                "plan": self.plan_state.get("steps", []),
-                                "usage": self.usage,
-                                "context_usage": self._context_usage(),
-                            })
-                            return
-                        # 已确认：清除持久化的 pending，继续执行
-                        if self.sessions is not None and sid:
-                            self.sessions.update_meta(sid, pending_confirmation=None)
-                        stored_pending = None
-                    else:
-                        # 新 red 请求：签发 pending 并持久化
-                        pending = issue_confirmation(tc.name, tc.arguments)
-                        self._persist_tool_trace(sid, tool_trace)
-                        self.audit(f"[pending-confirm:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
-                        if self.sessions is not None and sid:
-                            self.sessions.update_meta(sid, pending_confirmation=pending)
-                        yield ("done", {
-                            "steps": step + 1,
-                            "latency_ms": int((time.time() - started) * 1000),
-                            "pending_confirmation": pending,
-                            "session_id": sid,
-                            "tool_trace": tool_trace,
-                            "plan": self.plan_state.get("steps", []),
-                            "usage": self.usage,
-                            "context_usage": self._context_usage(),
-                        })
-                        return
+                # red 级：签名确认（失败/签发 pending 时返回 done 负载）
+                red_done = await self._check_red_tool(tc, tool, stored_pending, confirmed, consumed_nonces, sid, step, started, tool_trace)
+                if red_done is not None:
+                    yield ("done", red_done)
+                    return
 
-                # 工具执行前发 tool_start（前端内联步骤：执行中状态）
-                yield ("tool_start", {
-                    "step": step + 1,
-                    "tool": tc.name,
-                    "arguments": tc.arguments,
-                })
-                # 防重放：确认后的整轮重放会再次"调用"已执行过的工具 →
-                # 复用上次执行结果（避免 append/remember 等 yellow 工具双写）
-                prev = None
-                if tool is not None and tool.level != "red":
-                    for t in prev_trace:
-                        if t.get("tool") == tc.name and t.get("arguments") == tc.arguments:
-                            prev = t
-                            break
-                if prev is not None and prev.get("output"):
-                    output = prev["output"]
-                    entry = {
-                        "step": step + 1,
-                        "tool": tc.name,
-                        "arguments": tc.arguments,
-                        "output": prev["output"][:500],
-                        "parsed": prev.get("parsed"),
-                        "replayed": True,
-                    }
-                else:
-                    output, entry = await self._execute_tool(tc.name, tc.arguments, step + 1)
+                yield ("tool_start", {"step": step + 1, "tool": tc.name, "arguments": tc.arguments})
+                output, entry = await self._execute_or_replay_tool(tc, tool, prev_trace, step)
                 tool_trace.append(entry)
                 yield ("tool_trace", entry)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": output})
-                # 轮内压缩：工具往返膨胀 → 合并早期工具结果
                 if count_messages_tokens(messages) > self.context_budget * self.roundtrip_compress_threshold:
                     messages = compress_tool_roundtrips(messages, keep_roundtrips=4)
                 self._last_messages = messages
 
-        # 步数耗尽：先发说明文本再 done（修复 R3：不再静默失败）
+        # 步数耗尽：说明文本 + done
         truncate_msg = (
             f"\n\n⚠️ 已达到本轮最大执行步数（{self.max_steps} 步），任务可能未完成。"
             "你可以回复「继续」让我接着做，或把任务拆小后再试。"
@@ -519,6 +439,112 @@ class AgentLoop:
             "latency_ms": int((time.time() - started) * 1000),
             "truncated": True,
             "session_id": sid,
+            "tool_trace": tool_trace,
+            "plan": self.plan_state.get("steps", []),
+            "usage": self.usage,
+            "context_usage": self._context_usage(),
+        })
+
+    async def _check_red_tool(self, tc, tool, stored_pending, confirmed, consumed_nonces, sid, step, started, tool_trace):
+        """red 级工具确认检查。返回 None=放行执行；返回 done 负载=需要暂停。"""
+        if tool is None or tool.level != "red":
+            return None
+        done_base = {
+            "steps": step + 1,
+            "latency_ms": int((time.time() - started) * 1000),
+            "session_id": sid,
+            "tool_trace": tool_trace,
+            "plan": self.plan_state.get("steps", []),
+            "usage": self.usage,
+            "context_usage": self._context_usage(),
+        }
+        if stored_pending is not None and stored_pending.get("tool") == tc.name:
+            approved = False
+            for c in confirmed:
+                ok, _err = verify_confirmation(stored_pending, c, consumed_nonces)
+                if ok:
+                    approved = True
+                    consumed_nonces.add(stored_pending.get("nonce", ""))
+                    break
+            if not approved:
+                # 验证失败（伪造/过期/未提供）→ 原 pending 原样返回
+                self._persist_tool_trace(sid, tool_trace)
+                self.audit(f"[pending-confirm-reject:{tc.name}] 确认验证失败")
+                return {**done_base, "pending_confirmation": stored_pending}
+            # 已确认：清除 pending，继续执行
+            if self.sessions is not None and sid:
+                self.sessions.update_meta(sid, pending_confirmation=None)
+            return None
+        # 新 red 请求：签发 pending
+        pending = issue_confirmation(tc.name, tc.arguments)
+        self._persist_tool_trace(sid, tool_trace)
+        self.audit(f"[pending-confirm:{tc.name}] {json.dumps(tc.arguments, ensure_ascii=False)}")
+        if self.sessions is not None and sid:
+            self.sessions.update_meta(sid, pending_confirmation=pending)
+        return {**done_base, "pending_confirmation": pending}
+
+    async def _execute_or_replay_tool(self, tc, tool, prev_trace, step):
+        """执行工具；确认后重放场景复用上次结果（防 yellow 双写）。"""
+        prev = None
+        if tool is not None and tool.level != "red":
+            for t in prev_trace:
+                if t.get("tool") == tc.name and t.get("arguments") == tc.arguments:
+                    prev = t
+                    break
+        if prev is not None and prev.get("output"):
+            return prev["output"], {
+                "step": step + 1,
+                "tool": tc.name,
+                "arguments": tc.arguments,
+                "output": prev["output"][:500],
+                "parsed": prev.get("parsed"),
+                "replayed": True,
+            }
+        return await self._execute_tool(tc.name, tc.arguments, step + 1)
+
+    # ---------- 最终回复 ----------
+    async def _final_reply(self, messages, result, sid, started, tool_trace, consumed_nonces, user_message, step):
+        """流式最终回复 + 持久化（工具轨迹/会话/笔记/标题）+ done。"""
+        full_reply = ""
+        try:
+            async for chunk in self.llm.stream_chat(messages):
+                self._add_usage(None, chunk)
+                full_reply += chunk
+                yield ("text", chunk)
+        except (NotImplementedError, TypeError):
+            full_reply = result.content or ""
+            self._add_usage(None, full_reply)
+            yield ("text", full_reply)
+
+        needs_summary = False
+        if self.sessions is not None and sid:
+            self._persist_tool_trace(sid, tool_trace)
+            self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
+            try:
+                self.sessions.update_meta(sid, last_trace=tool_trace, consumed_nonces=sorted(consumed_nonces))
+            except Exception:
+                pass
+            try:
+                self.memory.daily_note(
+                    f"[{time.strftime('%H:%M')}] 用户: {user_message[:60]} → {full_reply[:60]}"
+                )
+            except Exception:
+                pass
+            meta = self.sessions.get(sid)
+            needs_summary = (meta.get("message_count", 0) >= self.summarize_threshold
+                             and not meta.get("summary")) if meta else False
+            if meta and meta.get("title") == "新会话" and meta.get("message_count", 0) >= 2:
+                try:
+                    await self._generate_title(sid)
+                except Exception:
+                    pass
+
+        yield ("done", {
+            "steps": step + 1,
+            "latency_ms": int((time.time() - started) * 1000),
+            "session_id": sid,
+            "needs_summary": needs_summary,
+            "routed": "task",
             "tool_trace": tool_trace,
             "plan": self.plan_state.get("steps", []),
             "usage": self.usage,

@@ -40,9 +40,23 @@ def setup_logging(app_env: str = "dev") -> logging.Logger:
 class AuditLogger:
     """审计日志：追加 JSONL，只记录 Agent 操作事件。"""
 
+    MAX_BYTES = 1_000_000  # 1MB 轮转上限
+
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _rotate(self) -> None:
+        """超上限时轮转：audit.log → audit.log.1"""
+        if not self.path.exists() or self.path.stat().st_size < self.MAX_BYTES:
+            return
+        backup = self.path.with_suffix(".log.1")
+        try:
+            if backup.exists():
+                backup.unlink()
+            self.path.rename(backup)
+        except OSError:
+            pass
 
     SENSITIVE_KEYS = ("api_key", "password", "token", "authorization", "secret", "key")
 
@@ -60,6 +74,7 @@ class AuditLogger:
         return text
 
     def record(self, event: str, result: Any = None) -> None:
+        self._rotate()
         with open(self.path, "a") as f:
             f.write(json.dumps(
                 {

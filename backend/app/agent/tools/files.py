@@ -204,8 +204,8 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         group="files",
     )
 
-    async def copy_file(src: str, dst: str) -> dict[str, Any]:
-        return storage.copy(src, dst)
+    async def copy_file(src: str, dst: str, overwrite: bool = False) -> dict[str, Any]:
+        return storage.copy(src, dst, overwrite=overwrite)
 
     reg.register(
         ToolSpec(
@@ -214,12 +214,13 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
             {"type": "object", "properties": {
                 "src": {"type": "string", "description": "源路径"},
                 "dst": {"type": "string", "description": "目标路径"},
+                "overwrite": {"type": "boolean", "description": "目标已存在时是否覆盖，默认 false"},
             }, "required": ["src", "dst"]},
             doc=(
                 "用途：复制文件或文件夹（备份、模板复用）。\n"
-                "参数：src（必填）源路径；dst（必填）目标路径。\n"
+                "参数：src（必填）源路径；dst（必填）目标路径；overwrite（可选，默认 false，目标存在时报错）。\n"
                 "输出：{src, dst, is_dir}。\n"
-                "错误：源不存在返回 {ok:false, error}。"
+                "错误：源不存在或目标已存在返回 {ok:false, error}。"
             ),
         ),
         copy_file,
@@ -291,8 +292,8 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         group="files",
     )
 
-    async def move_file(src: str, dst_dir: str) -> dict[str, Any]:
-        storage.move(src, dst_dir)
+    async def move_file(src: str, dst_dir: str, overwrite: bool = False) -> dict[str, Any]:
+        storage.move(src, dst_dir, overwrite=overwrite)
         return {"moved": f"{src} → {dst_dir}/"}
 
     def _validate_moved(args: dict, result: Any) -> str | None:
@@ -311,12 +312,13 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
             {"type": "object", "properties": {
                 "src": {"type": "string", "description": "文件相对路径"},
                 "dst_dir": {"type": "string", "description": "目标目录相对路径"},
+                "overwrite": {"type": "boolean", "description": "目标已存在时是否覆盖，默认 false"},
             }, "required": ["src", "dst_dir"]},
             doc=(
                 "用途：把文件移动到另一个目录（保持文件名）。\n"
-                "参数：src（必填）；dst_dir（必填）目标目录。\n"
+                "参数：src（必填）；dst_dir（必填）目标目录；overwrite（可选，默认 false，同名文件存在时报错）。\n"
                 "输出：{moved: 'src → dst/'}。\n"
-                "错误：源不存在或目标目录不存在返回 {ok:false, error}。"
+                "错误：源不存在/目标目录不存在/同名文件已存在返回 {ok:false, error}。"
             ),
         ),
         move_file,
