@@ -37,7 +37,10 @@ class Container:
         # ---- 领域服务 ----
         self.llm = LLMManager(self.settings.system_path / "agent-config.json")
         self.storage = LocalStorage(self.settings.data_path)
-        self.memory = MemoryStore(self.settings.system_path / "memory.json")
+        # Agent 工作空间：网盘内的 Agent/ 目录（记忆/角色/笔记都在文件空间，用户可见可编辑）
+        agent_ws = self.storage.resolve("Agent")
+        agent_ws.mkdir(parents=True, exist_ok=True)
+        self.memory = MemoryStore(agent_ws, migrate_from=self.settings.system_path)
         self.sessions = SessionStore(self.settings.sessions_path)
         self.onboarding = Onboarding(self.llm, self.memory)
         self.skills = SkillsRegistry(self.settings.backend_dir / "skills")

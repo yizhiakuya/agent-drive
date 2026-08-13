@@ -15,28 +15,83 @@ from pathlib import Path
 
 
 class MemoryStore:
-    def __init__(self, path: Path | str):
-        """path: 原 memory.json 路径（兼容），同目录放 USER.md/MEMORY.md/memory/"""
-        self.path = Path(path)
-        self.dir = self.path.parent
+    def __init__(self, path: Path | str, *, migrate_from: Path | str | None = None):
+        """path: 工作空间目录（网盘内 Agent/ 目录）。
+
+        记忆文件直接存在于网盘文件空间（用户可见可编辑）：
+          Agent/USER.md     用户模型（角色/偏好/规则）
+          Agent/MEMORY.md   长期记忆（持久事实/决策）
+          Agent/notes/      每日笔记（工作层）
+        migrate_from: 旧记忆目录（system/），初始化时自动迁移。
+        """
+        self.dir = Path(path)
         self.user_md = self.dir / "USER.md"
         self.memory_md = self.dir / "MEMORY.md"
-        self.notes_dir = self.dir / "memory"
+        self.agent_md = self.dir / "AGENT.md"
+        self.notes_dir = self.dir / "notes"
         self.dream_marker = self.dir / ".last_dream"
         self._data = {"preferences": {}, "rules": []}
 
-        # 旧 JSON 迁移
-        if self.path.exists():
-            try:
-                self._data.update(json.loads(self.path.read_text()))
-            except Exception:
-                pass
-        had_json = self.path.exists()
+        # 旧位置迁移（system/ → Agent/）
+        if migrate_from is not None:
+            self._migrate_from(Path(migrate_from))
         self._load_user_md()
         self._ensure_files()
+
+    def _migrate_from(self, old_dir: Path) -> None:
+        """把旧记忆（system/ 下的 memory.json/USER.md/MEMORY.md/notes）迁移进工作空间。"""
+        had_json = False
+        old_json = old_dir / "memory.json"
+        if old_json.exists():
+            try:
+                self._data.update(json.loads(old_json.read_text()))
+                had_json = True
+            except Exception:
+                pass
+        self.dir.mkdir(parents=True, exist_ok=True)
+        # 旧 md 文件：目标不存在→复制；目标还是模板→替换；目标已有内容→合并
+        for name in ("USER.md", "MEMORY.md", "AGENT.md"):
+            old_f = old_dir / name
+            if not old_f.exists():
+                continue
+            old_text = old_f.read_text()
+            target = self.dir / name
+            if target.exists():
+                cur = target.read_text()
+                if len(cur.strip()) > 120:  # 目标已有实质内容 → 合并
+                    target.write_text(cur + "\n\n<!-- 迁移自旧记忆 -->\n" + old_text)
+                else:  # 目标还是初始模板 → 替换
+                    target.write_text(old_text)
+            else:
+                target.write_text(old_text)
+        # 兼容旧笔记目录名（v2 用 "memory"，v3 起用 "notes"）
+        for old_notes in (old_dir / "notes", old_dir / "memory"):
+            if not old_notes.is_dir():
+                continue
+            for f in old_notes.glob("*.md"):
+                target = self.notes_dir / f.name
+                if not target.exists():
+                    try:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(f.read_text())
+                    except OSError:
+                        pass
+            if old_notes.name == "memory":
+                try:
+                    import shutil
+                    shutil.rmtree(old_notes)
+                except OSError:
+                    pass
+        # JSON 是权威数据 → 重写 USER.md
         if had_json:
-            # 旧 JSON 是权威数据 → 迁移后重写 USER.md
             self._write_user_md()
+        # 迁移后清理旧文件
+        for f in (old_json, old_dir / "USER.md", old_dir / "MEMORY.md"):
+            try:
+                if f.exists():
+                    f.unlink()
+            except OSError:
+                pass
 
     # ---------- 文件初始化与迁移 ----------
     def _ensure_files(self) -> None:
@@ -46,12 +101,16 @@ class MemoryStore:
             self._write_user_md()
         if not self.memory_md.exists():
             self.memory_md.write_text("# 长期记忆\n\n(Agent 用 remember 工具记录持久事实与决策)\n")
-        # 旧 JSON 已迁移则清理
-        if self.path.exists() and self.user_md.exists():
-            try:
-                self.path.unlink()
-            except OSError:
-                pass
+        if not self.agent_md.exists():
+            self.agent_md.write_text(
+                "# Agent 角色定义\n\n"
+                "你是「Agent Drive」的主 Agent（File Concierge）—— 一个以 AI 为中心的私人网盘的管家。\n\n"
+                "## 职责\n"
+                "- 管理用户的所有文件：理解、组织、关联、创建\n"
+                "- 管理自己的配置与记忆\n"
+                "- 用用户偏好的语言沟通\n\n"
+                "> 用户可以编辑本文件自定义 Agent 的角色与职责。\n"
+            )
 
     # ---------- USER.md 读写 ----------
     def _user_sections(self) -> dict[str, list[tuple[str, str]]]:
@@ -158,6 +217,12 @@ class MemoryStore:
         with open(self.memory_md, "a") as f:
             f.write(entry)
         return {"saved": True, "memory": self.memory_md.name, "entry": content.strip()}
+
+    def agent_role(self, max_chars: int = 1500) -> str:
+        """Agent 角色定义（AGENT.md，用户可编辑自定义人设）"""
+        if not self.agent_md.exists():
+            return ""
+        return self.agent_md.read_text()[:max_chars]
 
     def memory_text(self, max_chars: int = 3000) -> str:
         """读取 MEMORY.md 全文（截断）"""

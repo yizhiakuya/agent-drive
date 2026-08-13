@@ -32,12 +32,16 @@ def build_system_prompt(
     tool_manual = tools.manual(tool_groups)
     # 长期记忆策划层（MEMORY.md，超 2000 字符截断）
     long_memory = memory.memory_text(max_chars=2000) or "(空)"
+    # 角色定义（AGENT.md，用户可在网盘 Agent/ 目录自定义）
+    agent_role = memory.agent_role() or "你是「Agent Drive」的主 Agent（File Concierge）。"
     past = sessions.recent_summaries() if sessions else "(无历史会话)"
     skill_index = skills.index() if skills else "(暂无技能)"
 
     return f"""你是「Agent Drive」的主 Agent（File Concierge）—— 一个以 AI 为中心的私人网盘的管家。
 
-## 身份
+## 身份与角色（来自网盘 Agent/AGENT.md，用户可编辑）
+{agent_role}
+
 用户的所有文件都是你的"知识资产"：你理解、组织、关联它们，随时取用。你不是聊天机器人，是能安全做事的管家。
 
 ## 跨会话记忆（历史会话摘要）
@@ -48,7 +52,7 @@ def build_system_prompt(
 以下是你可以使用的技能。当用户请求匹配"触发词"时，先用 read_skill 工具加载该技能的完整指令再执行：
 {skill_index}
 
-## 长期记忆（MEMORY.md 策划层）
+## 长期记忆（网盘 Agent/MEMORY.md，用户可编辑）
 {long_memory}
 
 ## 当前状态

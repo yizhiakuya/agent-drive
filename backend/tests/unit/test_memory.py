@@ -10,22 +10,34 @@ from app.agent.memory.preferences import MemoryStore
 
 def main():
     tmp = Path(tempfile.mkdtemp())
-    store = MemoryStore(tmp / "memory.json")
+    ws = tmp / "Agent"
+    ws.mkdir(parents=True)
+    store = MemoryStore(ws)
 
     print("=" * 55)
-    print("测试 1: 旧 JSON 迁移 → USER.md/MEMORY.md")
-    # 造旧数据
+    print("测试 1: 工作空间初始化 → USER.md/MEMORY.md/AGENT.md/notes")
+    store2 = MemoryStore(ws)
+    assert store2.user_md.exists() and store2.memory_md.exists()
+    assert store2.agent_md.exists() and store2.notes_dir.exists()
+    print("  ✅ 工作空间初始化完成（4 个文件/目录）")
+
+    print()
+    print("=" * 55)
+    print("测试 1b: 旧目录迁移 → 工作空间")
+    old_dir = tmp / "system"
+    old_dir.mkdir()
     import json
-    (tmp / "memory.json").write_text(json.dumps({
+    (old_dir / "memory.json").write_text(json.dumps({
         "preferences": {"language": "zh", "organize_style": "按项目分类"},
         "rules": ["下载的文件自动归档"],
     }, ensure_ascii=False))
-    store2 = MemoryStore(tmp / "memory.json")
-    assert store2.user_md.exists() and store2.memory_md.exists()
-    assert store2.get("language") == "zh"
-    assert "按项目分类" in store2.user_md.read_text()
-    assert not (tmp / "memory.json").exists(), "旧 JSON 应已清理"
-    print("  ✅ 迁移成功: USER.md 含偏好, 旧 JSON 已删除")
+    (old_dir / "MEMORY.md").write_text("# 长期记忆\n\n## 2026-08-01\n- 旧记忆条目\n")
+    store3 = MemoryStore(ws, migrate_from=old_dir)
+    assert store3.get("language") == "zh"
+    assert "旧记忆条目" in store3.memory_md.read_text()
+    assert not (old_dir / "memory.json").exists(), "旧 JSON 应已清理"
+    assert not (old_dir / "MEMORY.md").exists(), "旧 MEMORY.md 应已清理"
+    print("  ✅ 迁移成功: 偏好+旧记忆进工作空间, 旧文件已清理")
 
     print()
     print("=" * 55)
