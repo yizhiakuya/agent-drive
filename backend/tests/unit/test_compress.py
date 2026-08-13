@@ -102,8 +102,8 @@ async def main():
     print("=" * 55)
     print("测试 6: 工具检索（意图 → 工具组）")
     cases = [
-        ("帮我找一下预算文件", "task", ["files", "plan", "skills"]),
-        ("把 LLM 换成 DeepSeek", "task", ["system", "analytics", "plan"]),
+        ("帮我找一下预算文件", "task", ["files", "plan", "skills", "memory"]),
+        ("把 LLM 换成 DeepSeek", "task", ["system", "analytics", "plan", "memory"]),
         ("你好", "chat", None),
         ("分析一下这个数据", "task", None),  # 无法确定 → 全量
     ]
