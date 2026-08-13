@@ -19,6 +19,7 @@ from ..core.retry import is_retryable_error
 from ..llm.base import LLMProvider, ToolSpec
 from .confirm import needs_confirmation
 from .context import build_history, try_parse_json
+from .tools.plan import register_plan_tools
 from .memory.preferences import MemoryStore
 from .memory.sessions import SessionStore
 from .prompt import build_chat_prompt, build_system_prompt
@@ -51,6 +52,9 @@ class AgentLoop:
         self.context_budget = context_budget
         self.max_tool_output = max_tool_output
         self.summarize_threshold = summarize_threshold
+        self.plan_state: dict[str, Any] = {"steps": []}
+        self.usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+        register_plan_tools(self.tools, self.plan_state)
         if skills is not None:
             self._register_skill_tool()
 
@@ -79,6 +83,17 @@ class AgentLoop:
             ),
             read_skill,
         )
+
+    # ---------- 用量统计 ----------
+    def _add_usage(self, usage: dict[str, Any] | None, stream_text: str | None = None) -> None:
+        """累计 token 用量（chat 用 usage，流式用文本估算）"""
+        if usage:
+            self.usage["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+            self.usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+        if stream_text:
+            from .context import estimate_tokens
+            self.usage["completion_tokens"] += estimate_tokens(stream_text)
+        self.usage["total_tokens"] = self.usage["prompt_tokens"] + self.usage["completion_tokens"]
 
     # ---------- 消息组装 ----------
     def _build_messages(self, user_message: str, history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -128,9 +143,11 @@ class AgentLoop:
             ]
             try:
                 async for chunk in self.llm.stream_chat(chat_messages):
+                    self._add_usage(None, chunk)
                     yield ("text", chunk)
             except (NotImplementedError, TypeError):
                 result = await self.llm.chat(chat_messages)
+                self._add_usage(result.usage)
                 yield ("text", result.content or "")
             yield ("done", {
                 "steps": 1,
@@ -138,6 +155,8 @@ class AgentLoop:
                 "session_id": session_id,
                 "routed": "chat",
                 "tool_trace": [],
+                "plan": [],
+                "usage": self.usage,
             })
             return
 
@@ -154,16 +173,19 @@ class AgentLoop:
 
         for step in range(self.max_steps):
             result = await self.llm.chat(messages, tools=self.tools.specs())
+            self._add_usage(result.usage)
 
             if not result.tool_calls:
                 # ---- 流式输出最终回复 ----
                 full_reply = ""
                 try:
                     async for chunk in self.llm.stream_chat(messages):
+                        self._add_usage(None, chunk)
                         full_reply += chunk
                         yield ("text", chunk)
                 except (NotImplementedError, TypeError):
                     full_reply = result.content or ""
+                    self._add_usage(None, full_reply)
                     yield ("text", full_reply)
                 if self.sessions is not None and sid:
                     self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
@@ -179,6 +201,8 @@ class AgentLoop:
                     "needs_summary": needs_summary,
                     "routed": "task",
                     "tool_trace": tool_trace,
+                    "plan": self.plan_state.get("steps", []),
+                    "usage": self.usage,
                 })
                 return
 
@@ -207,6 +231,8 @@ class AgentLoop:
                         "pending_confirmation": pending,
                         "session_id": sid,
                         "tool_trace": tool_trace,
+                        "plan": self.plan_state.get("steps", []),
+                        "usage": self.usage,
                     })
                     return
 
@@ -221,6 +247,8 @@ class AgentLoop:
             "truncated": True,
             "session_id": sid,
             "tool_trace": tool_trace,
+            "plan": self.plan_state.get("steps", []),
+            "usage": self.usage,
         })
 
     # ---------- 非流式 API ----------
@@ -252,6 +280,8 @@ class AgentLoop:
             "needs_summary": done.get("needs_summary", False),
             "truncated": done.get("truncated", False),
             "routed": done.get("routed"),
+            "plan": done.get("plan", []),
+            "usage": done.get("usage", self.usage),
         }
 
     # ---------- 流式 API ----------

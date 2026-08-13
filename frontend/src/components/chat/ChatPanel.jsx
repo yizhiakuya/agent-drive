@@ -1,12 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { chatStream } from "../../api/chat.js";
-import { summarizeSession } from "../../api/sessions.js";
+import { getSession, summarizeSession } from "../../api/sessions.js";
 
 function fmtSize(n) {
   if (n > 1e9) return (n / 1e9).toFixed(1) + " GB";
   if (n > 1e6) return (n / 1e6).toFixed(1) + " MB";
   if (n > 1e3) return (n / 1e3).toFixed(1) + " KB";
   return n + " B";
+}
+
+/** 任务计划卡片：逐步状态可视化 */
+function PlanCard({ plan }) {
+  const icons = { pending: "⏳", in_progress: "🔄", done: "✅", skipped: "⏭️", failed: "❌" };
+  const doneCount = plan.filter((s) => s.status === "done").length;
+  return (
+    <div className="plan-card">
+      <div className="plan-title">📋 执行计划（{doneCount}/{plan.length}）</div>
+      {plan.map((s, i) => (
+        <div key={i} className={`plan-step ${s.status}`}>
+          <span className="plan-icon">{icons[s.status] || "⏳"}</span>
+          <span className="plan-text">{s.text}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** 工具调用卡片：按工具类型结构化渲染 */
@@ -66,6 +83,8 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [busy, setBusy] = useState(false);
   const [trace, setTrace] = useState([]);
   const [pending, setPending] = useState(null);
+  const [plan, setPlan] = useState([]);
+  const [usage, setUsage] = useState(null);
   const [sid, setSid] = useState(sessionId);
   const bottomRef = useRef(null);
   const sidRef = useRef(sessionId); // 已接受会话 id（区分"会话创建"与"用户切换"）
@@ -73,15 +92,36 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   // 切换会话时清空当前对话（M1 简化：历史从会话加载在 M2 完善）
   useEffect(() => {
     // 会话创建完成后 sessionId 会更新为当前会话 id（sidRef 已同步）→ 跳过，不清空
-    // 用户点击会话列表切换 / 新建会话 → sessionId 变化 ≠ sidRef → 清空开始新会话
+    // 用户点击会话列表切换 → 加载该会话历史消息；新建会话（null）→ 清空
     if (sessionId !== sidRef.current) {
       sidRef.current = sessionId;
       setSid(sessionId);
-      setMessages([]);
-      setTrace([]);
       setPending(null);
+      if (sessionId) {
+        loadSession(sessionId);
+      } else {
+        setMessages([]);
+        setTrace([]);
+        setPlan([]);
+      }
     }
   }, [sessionId]);
+
+  async function loadSession(sidToLoad) {
+    try {
+      const r = await getSession(sidToLoad);
+      const msgs = (r.messages || [])
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content || "" }));
+      setMessages(msgs.length ? msgs : []);
+      setTrace([]);
+      setPlan([]);
+      setUsage(null);
+      setUsage(null);
+    } catch (e) {
+      setMessages([]);
+    }
+  }
 
   async function send(message, confirmations = []) {
     const msg = message ?? input.trim();
@@ -92,6 +132,8 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
     setBusy(true);
     setPending(null);
     setTrace([]);
+    setPlan([]);
+    setUsage(null);
 
     // 占位：流式文本写入这条 assistant 消息
     let replyRef = "";
@@ -108,8 +150,13 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
           });
         } else if (event === "tool_trace") {
           setTrace((t) => [...t, data]);
+          if ((data.tool === "set_plan" || data.tool === "update_plan") && data.parsed?.plan) {
+            setPlan(data.parsed.plan);
+          }
         }
       });
+      if (r?.plan?.length) setPlan(r.plan);
+      if (r?.usage) setUsage(r.usage);
       if (r?.session_id) {
         sidRef.current = r.session_id; // 关键：先标记本会话 id，防止 effect 误清空
         setSid(r.session_id);
@@ -173,6 +220,15 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
         )}
         <div ref={bottomRef} />
       </div>
+
+      {plan.length > 0 && <PlanCard plan={plan} />}
+
+      {usage && (
+        <div className="usage-bar">
+          本轮消耗：<b>{usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)}</b> tokens
+          （输入 {usage.prompt_tokens ?? 0} / 输出 {usage.completion_tokens ?? 0}）
+        </div>
+      )}
 
       {trace.length > 0 && (
         <div className="trace">

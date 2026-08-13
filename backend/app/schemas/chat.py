@@ -25,3 +25,5 @@ class ChatResponse(BaseModel):
     session_id: str | None = None
     needs_summary: bool = False
     routed: str | None = None  # chat(轻量) | task(完整loop)
+    plan: list[dict[str, Any]] = []  # 任务执行计划（Planner）
+    usage: dict[str, Any] = {}  # 本轮 token 用量统计

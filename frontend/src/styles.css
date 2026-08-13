@@ -103,3 +103,15 @@ body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "M
 .trace-error { color: var(--danger); font-size: 12px; }
 .trace-raw { font-size: 11px; color: var(--muted); word-break: break-all; display: block; max-height: 120px; overflow-y: auto; }
 .trace-args { font-size: 11px; color: var(--muted); }
+
+/* 计划卡片 */
+.plan-card { border: 1px solid var(--accent); background: #1d2035; border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; max-width: 75%; }
+.plan-title { font-weight: 700; margin-bottom: 8px; }
+.plan-step { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+.plan-step.done .plan-text { color: #4ade80; }
+.plan-step.failed .plan-text { color: var(--danger); }
+.plan-step.in_progress .plan-text { color: var(--accent2); }
+.plan-icon { width: 18px; text-align: center; }
+
+/* 用量统计 */
+.usage-bar { font-size: 11px; color: var(--muted); padding: 4px 0 8px; text-align: center; }
