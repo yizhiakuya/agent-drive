@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
@@ -292,7 +293,11 @@ class AgentLoop:
 
         # Dreaming 巩固（尽力而为）
         try:
-            await self._dream()
+            # 超时保护：dreaming 最多 15s（失败/超时不阻塞首包）
+            try:
+                await asyncio.wait_for(self._dream(), timeout=15.0)
+            except (asyncio.TimeoutError, Exception):
+                pass  # dreaming 失败不影响任务
         except Exception:
             pass
 
