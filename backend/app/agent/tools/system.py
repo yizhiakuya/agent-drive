@@ -8,7 +8,7 @@ from ...llm.manager import PROVIDER_LABELS, LLMConfig, LLMManager, ProviderType
 from .registry import ToolRegistry
 
 
-def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path=None, audit_fn=None) -> None:
+def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path=None, audit_fn=None, scheduler=None) -> None:
     # ---------- 查看系统状态 ----------
     async def get_system_status() -> dict[str, Any]:
         cfg = llm.load()
@@ -206,3 +206,49 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         view_audit_log,
         group="system",
     )
+
+    # ============ M3 规则自动执行 ============
+    async def run_automation_now() -> dict[str, Any]:
+        """立即执行一轮规则自动执行（默认每天 03:30 自动跑）"""
+        if scheduler is None:
+            return {"ok": False, "error": "自动化调度器未启用"}
+        return await scheduler.run_once()
+
+    reg.register(
+        ToolSpec(
+            "run_automation_now",
+            "立即执行一轮自动化规则",
+            {},
+            doc=(
+                "用途：手动触发规则自动执行（平时每天 03:30 自动运行）。\n"
+                "参数：无。\n"
+                "输出：{ok, rules, steps, elapsed_ms} 或 {skipped}。\n"
+                "注意：自动执行只做整理类动作（移动/重命名/复制/建文件夹/写文件），"
+                "严禁删除，执行报告写入 notes/自动化报告-*.md。"
+            ),
+        ),
+        run_automation_now,
+        group="system",
+    )
+
+    async def automation_status() -> dict[str, Any]:
+        """查看最近一次自动执行结果"""
+        if scheduler is None:
+            return {"enabled": False}
+        return {"enabled": True, "last_run": scheduler.last_run}
+
+    reg.register(
+        ToolSpec(
+            "automation_status",
+            "查看规则自动执行状态",
+            {},
+            doc=(
+                "用途：查看自动执行的最近结果（enabled/最后执行时间/步数）。\n"
+                "参数：无。\n"
+                "输出：{enabled, last_run}。"
+            ),
+        ),
+        automation_status,
+        group="system",
+    )
+

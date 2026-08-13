@@ -44,12 +44,14 @@ class Container:
         self.onboarding = Onboarding(self.llm, self.memory)
         self.skills = SkillsRegistry(self.settings.backend_dir / "skills")
         self.ingest = IngestPipeline(self.storage, embedder=self.llm.get_embedding_provider())
+        from ..agent.scheduler import AutomationScheduler
+        self.scheduler = AutomationScheduler(self)
 
     # ---- 工厂 ----
     def build_tool_registry(self) -> ToolRegistry:
         reg = ToolRegistry()
         self.ingest.embedder = self.llm.get_embedding_provider()  # 热刷新（对话改配置后生效）
-        register_system_tools(reg, self.llm, self.memory, audit_fn=self.audit.tail)
+        register_system_tools(reg, self.llm, self.memory, audit_fn=self.audit.tail, scheduler=self.scheduler)
         register_file_tools(reg, self.storage, self.ingest)
         register_memory_tools(reg, self.memory)
         register_analytics_tools(reg, self.llm.get_provider, self.audit, self.sessions)

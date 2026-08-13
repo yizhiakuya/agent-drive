@@ -228,13 +228,15 @@ class AgentLoop:
         history: list[dict[str, Any]] | None,
         confirmations: list[dict[str, Any]] | None,
         session_id: str | None,
+        tool_groups: tuple[str, ...] | None = None,
     ):
         """统一执行核心（编排壳）。yields: ("text", c) | ("tool_start", e) | ("tool_trace", e) | ("done", m)
 
         职责：意图路由 → 分发到闲聊/任务路径。具体逻辑在 _chat_path/_task_path。
+        tool_groups: 外部指定工具组（自动化执行受限组）；None 时走 router 分类。
         """
         confirmed = confirmations or []
-        mode, tool_groups = classify(user_message)
+        mode, tool_groups = classify(user_message) if tool_groups is None else ("task", tool_groups)
         if mode == "chat" and not confirmed:
             async for ev in self._chat_path(user_message, history, session_id):
                 yield ev
@@ -563,12 +565,13 @@ class AgentLoop:
         history: list[dict[str, Any]] | None = None,
         confirmations: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
+        tool_groups: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
-        """聚合事件为单次响应。"""
+        """聚合事件为单次响应。tool_groups 为外部指定工具组（自动化用）。"""
         reply_parts: list[str] = []
         trace: list[dict[str, Any]] = []
         done: dict[str, Any] = {}
-        async for event, payload in self._execute(user_message, history, confirmations, session_id):
+        async for event, payload in self._execute(user_message, history, confirmations, session_id, tool_groups):
             if event == "text":
                 reply_parts.append(payload)
             elif event == "tool_trace":
@@ -597,9 +600,10 @@ class AgentLoop:
         history: list[dict[str, Any]] | None = None,
         confirmations: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
+        tool_groups: tuple[str, ...] | None = None,
     ):
-        """透传事件（SSE 用）。"""
-        async for event, payload in self._execute(user_message, history, confirmations, session_id):
+        """透传事件（SSE 用）。tool_groups 为外部指定工具组（自动化用）。"""
+        async for event, payload in self._execute(user_message, history, confirmations, session_id, tool_groups):
             yield event, payload
 
     # ---------- 会话摘要 ----------

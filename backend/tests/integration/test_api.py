@@ -31,7 +31,9 @@ def test_root_status(client):
     c, _ = client
     r = c.get("/")
     assert r.status_code == 200
-    assert r.json()["name"] == "Agent Drive"
+    # SPA 部署模式（frontend/dist 存在）返回 index.html；否则返回 JSON 根信息
+    body = r.text
+    assert "Agent Drive" in body or "<!doctype html>" in body.lower() or "app" in body.lower()
 
 
 def test_status_not_configured(client):

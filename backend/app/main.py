@@ -5,20 +5,34 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from .api.v1.router import api_v1
 from .core.container import Container
 from .core.errors import AppError
+
+# 前端构建产物（单服务部署：backend 同时托管 SPA）
+_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
 def create_app(container: Container | None = None) -> FastAPI:
     """应用工厂：测试可注入替身 Container。"""
     container = container or Container()
 
+    @asynccontextmanager
+    async def lifespan(app_: FastAPI):
+        # M3: 规则自动执行调度器（每天 03:30）
+        container.scheduler.start()
+        yield
+        container.scheduler.stop()
+
     app = FastAPI(title="Agent Drive", version="0.1.0",
-                  description="以 AI 为中心的私人网盘")
+                  description="以 AI 为中心的私人网盘", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=container.settings.cors_origins,
@@ -33,14 +47,29 @@ def create_app(container: Container | None = None) -> FastAPI:
     # 版本化路由
     app.include_router(api_v1)
 
-    @app.get("/")
-    async def root():
-        return {
-            "name": "Agent Drive",
-            "status": "configured" if container.llm.is_configured() else "needs_setup",
-            "api": "/api/v1",
-            "docs": "/docs",
-        }
+    # 单服务部署：frontend/dist 存在时托管 SPA（nginx 部署时 404 直接落 JSON 根信息）
+    if _DIST.exists():
+
+        @app.get("/")
+        async def spa_root():
+            return FileResponse(_DIST / "index.html")
+
+        @app.get("/{full_path:path}")
+        async def spa_fallback(full_path: str):
+            f = _DIST / full_path
+            if f.is_file():
+                return FileResponse(f)
+            return FileResponse(_DIST / "index.html")  # SPA 路由回退
+    else:
+
+        @app.get("/")
+        async def root():
+            return {
+                "name": "Agent Drive",
+                "status": "configured" if container.llm.is_configured() else "needs_setup",
+                "api": "/api/v1",
+                "docs": "/docs",
+            }
 
     @app.exception_handler(AppError)
     async def app_error_handler(request, exc: AppError):

@@ -214,6 +214,9 @@ class MemoryStore:
     def all(self) -> dict[str, str]:
         return dict(self._data["preferences"])
 
+    def rules(self) -> list[str]:
+        return list(self._data["rules"])
+
     def add_rule(self, rule: str) -> None:
         self._data["rules"].append(rule)
         self._write_user_md()
