@@ -55,3 +55,69 @@ async def mkdir(container=Depends(get_container), path: str = ""):
         return {"created": path}
     except Exception as e:
         raise HTTPException(400, str(e))
+
+
+# ---- 业务页面补充：预览 + 信息 ----
+
+TEXT_PREVIEW_SUFFIXES = (".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml",
+                         ".yml", ".toml", ".csv", ".html", ".css", ".xml", ".log", ".sh", ".ini", ".conf")
+IMAGE_PREVIEW_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+PDF_SUFFIX = ".pdf"
+
+
+@router.get("/raw")
+async def raw(container=Depends(get_container), path: str = ""):
+    """预览：返回文件原始内容（前端按类型渲染 text/img/iframe）"""
+    st = container.storage
+    try:
+        p_ = st.resolve(path)
+        if not p_.is_file():
+            raise HTTPException(404, "文件不存在")
+        suffix = p_.suffix.lower()
+        media_type = {
+            ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+        }.get(suffix, "application/octet-stream")
+        return FileResponse(p_, media_type=media_type)
+    except PermissionError:
+        raise HTTPException(403, "路径越界")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/info")
+async def info(container=Depends(get_container), path: str = ""):
+    """文件信息 + 内容预览片段（PDF/图片自动走索引解析文本）"""
+    st = container.storage
+    try:
+        p_ = st.resolve(path)
+        if not p_.is_file():
+            raise HTTPException(404, "文件不存在")
+        suffix = p_.suffix.lower()
+        stat = p_.stat()
+        indexed_meta = None
+        snippet = None
+        if suffix in TEXT_PREVIEW_SUFFIXES or suffix == "":
+            snippet = st.read_text(path, max_chars=4000)
+        elif suffix in IMAGE_PREVIEW_SUFFIXES or suffix == PDF_SUFFIX:
+            indexed_meta = container.ingest.get_meta(path)
+            snippet = container.ingest.get_text(path, max_chars=4000)
+        return {
+            "path": path,
+            "name": p_.name,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "preview_kind": "image" if suffix in IMAGE_PREVIEW_SUFFIXES
+                           else "pdf" if suffix == PDF_SUFFIX
+                           else "text" if suffix in TEXT_PREVIEW_SUFFIXES or suffix == "" else "binary",
+            "snippet": snippet,
+            "indexed": indexed_meta,
+        }
+    except PermissionError:
+        raise HTTPException(403, "路径越界")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
