@@ -68,14 +68,18 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   const [pending, setPending] = useState(null);
   const [sid, setSid] = useState(sessionId);
   const bottomRef = useRef(null);
+  const sidRef = useRef(sessionId); // 已接受会话 id（区分"会话创建"与"用户切换"）
 
   // 切换会话时清空当前对话（M1 简化：历史从会话加载在 M2 完善）
   useEffect(() => {
-    setSid(sessionId);
-    if (sessionId) {
-      // 加载会话消息（简单版：仅清空重来）
+    // 会话创建完成后 sessionId 会更新为当前会话 id（sidRef 已同步）→ 跳过，不清空
+    // 用户点击会话列表切换 / 新建会话 → sessionId 变化 ≠ sidRef → 清空开始新会话
+    if (sessionId !== sidRef.current) {
+      sidRef.current = sessionId;
+      setSid(sessionId);
       setMessages([]);
       setTrace([]);
+      setPending(null);
     }
   }, [sessionId]);
 
@@ -107,6 +111,7 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
         }
       });
       if (r?.session_id) {
+        sidRef.current = r.session_id; // 关键：先标记本会话 id，防止 effect 误清空
         setSid(r.session_id);
         onSessionCreated?.(r.session_id);
       }
