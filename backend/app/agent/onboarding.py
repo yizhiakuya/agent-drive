@@ -31,7 +31,10 @@ class Onboarding:
 
     async def configure(self, type: str, base_url: str, api_key: str, model: str) -> dict:
         """首次配置：测试连接 → 保存 → 设默认偏好"""
-        cfg = LLMConfig(type=type, base_url=base_url, api_key=api_key, model=model)
+        from typing import cast
+
+        from ..llm.manager import ProviderType
+        cfg = LLMConfig(type=cast(ProviderType, type), base_url=base_url, api_key=api_key, model=model)
         diag = await self.llm.test(cfg)
         if not diag.get("ok"):
             return {"ok": False, "test": diag, "message": "连接测试失败"}

@@ -1,11 +1,10 @@
 """系统工具集：Agent 管理自己的配置、规则、偏好（Agent 自管理核心）。"""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from ...llm.base import ToolSpec
-from ...llm.manager import LLMConfig, LLMManager, PROVIDER_LABELS, ProviderType
+from ...llm.manager import PROVIDER_LABELS, LLMConfig, LLMManager, ProviderType
 from .registry import ToolRegistry
 
 
@@ -81,6 +80,8 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         if not llm.is_configured():
             return {"ok": False, "message": "尚未配置 LLM"}
         cfg = llm.load()
+        if cfg is None:
+            return {"ok": False, "message": "尚未配置 LLM"}
         return await llm.test(cfg)
 
     reg.register(

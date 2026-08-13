@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..core.retry import is_retryable_error
 from ..llm.base import LLMProvider, ToolSpec
@@ -26,12 +27,12 @@ from .context import (
     estimate_tokens,
     try_parse_json,
 )
-from .tools.plan import register_plan_tools
 from .memory.preferences import MemoryStore
 from .memory.sessions import SessionStore
 from .prompt import build_chat_prompt, build_system_prompt
 from .router import classify
 from .skills import SkillsRegistry
+from .tools.plan import register_plan_tools
 from .tools.registry import ToolRegistry
 
 
@@ -309,7 +310,7 @@ class AgentLoop:
         if stored_pending is not None and confirmed:
             approved = False
             for c in confirmed:
-                ok, err = verify_confirmation(stored_pending, c, consumed_nonces)
+                ok, _err = verify_confirmation(stored_pending, c, consumed_nonces)
                 if ok:
                     approved = True
                     consumed_nonces.add(stored_pending.get("nonce", ""))
@@ -430,7 +431,7 @@ class AgentLoop:
                     if stored_pending is not None and stored_pending.get("tool") == tc.name:
                         # 已有待确认操作：只接受签名验证通过，失败不覆盖原 pending
                         for c in confirmed:
-                            ok, err = verify_confirmation(stored_pending, c, consumed_nonces)
+                            ok, _err = verify_confirmation(stored_pending, c, consumed_nonces)
                             if ok:
                                 approved = True
                                 consumed_nonces.add(stored_pending.get("nonce", ""))
@@ -578,7 +579,7 @@ class AgentLoop:
         meta = self.sessions.get(session_id)
         if meta is None:
             return {"ok": False, "error": "会话不存在"}
-        msgs = self.sessions.messages(session_id)
+        msgs = self.sessions.messages(session_id) if self.sessions is not None else []
         transcript = "\n".join(
             f"{'用户' if m['role'] == 'user' else 'Agent'}: {str(m.get('content', ''))[:300]}"
             for m in msgs[-30:]

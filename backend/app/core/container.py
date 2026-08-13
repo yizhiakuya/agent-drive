@@ -6,8 +6,6 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from ..agent.loop import AgentLoop
 from ..agent.memory.preferences import MemoryStore
 from ..agent.memory.sessions import SessionStore
@@ -76,4 +74,4 @@ class Container:
 
     def close(self) -> None:
         """清理资源（M2 接入 db/queue 时使用）"""
-        pass
+        return

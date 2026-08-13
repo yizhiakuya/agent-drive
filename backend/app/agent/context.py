@@ -12,8 +12,9 @@ from typing import Any
 
 try:
     import tiktoken
+    from tiktoken import Encoding
 
-    _ENC = tiktoken.get_encoding("cl100k_base")
+    _ENC: Encoding | None = tiktoken.get_encoding("cl100k_base")
     _HAS_TIKTOKEN = True
 except Exception:
     _ENC = None

@@ -1,6 +1,7 @@
 """LLM Provider 统一抽象：屏蔽三种协议差异，输出统一内部格式。"""
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -49,7 +50,7 @@ class LLMProvider(Protocol):
         self,
         messages: list[dict[str, Any]],
         tools: list[ToolSpec] | None = None,
-    ) -> "AsyncIterator[str]":
+    ) -> AsyncIterator[str]:
         """流式生成（异步迭代文本块）。默认退化为非流式。"""
         raise NotImplementedError
 

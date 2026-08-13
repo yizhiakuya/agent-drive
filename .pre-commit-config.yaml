@@ -1,0 +1,19 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff lint
+        entry: ruff check backend/app/
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: unit-tests
+        name: unit test suites
+        entry: bash -c 'cd backend && for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python tests/unit/$t.py || exit 1; done'
+        language: system
+        pass_filenames: false
+      - id: secret-scan
+        name: secret scan (sk-/jina_/api_key)
+        entry: bash -c 'git diff --cached | grep -iE "sk-[a-z0-9]{20}|jina_[a-z0-9]{20}|api_key.*[:=].*[a-z0-9]{20}" && echo "❌ 疑似密钥!" && exit 1 || exit 0'
+        language: system
+        pass_filenames: false

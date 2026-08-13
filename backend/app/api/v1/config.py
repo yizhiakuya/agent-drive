@@ -1,7 +1,7 @@
 """v1 配置路由（Onboarding 用）"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from ...llm.manager import LLMConfig
 from ...schemas.config import LLMConfigIn

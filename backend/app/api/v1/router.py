@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from . import chat, config, files, sessions
 from ..deps import get_container
+from . import chat, config, files, sessions
 
 api_v1 = APIRouter(prefix="/api/v1")
 api_v1.include_router(chat.router)

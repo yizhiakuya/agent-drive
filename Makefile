@@ -31,6 +31,10 @@ test:
 bench:
 	cd backend && python3 scripts/benchmark_real.py --repeat 3
 
+lint:
+	cd backend && ruff check app/
+	cd backend && mypy app/ --ignore-missing-imports || true
+
 build:
 	cd frontend && npm run build
 

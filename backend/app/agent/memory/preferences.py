@@ -12,6 +12,7 @@ import json
 import re
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 
 class MemoryStore:
@@ -30,7 +31,7 @@ class MemoryStore:
         self.agent_md = self.dir / "AGENT.md"
         self.notes_dir = self.dir / "notes"
         self.dream_marker = self.dir / ".last_dream"
-        self._data = {"preferences": {}, "rules": []}
+        self._data: dict[str, Any] = {"preferences": {}, "rules": []}
 
         # 旧位置迁移（system/ → Agent/）
         if migrate_from is not None:

@@ -11,8 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .providers.anthropic import AnthropicProvider
 from .base import LLMProvider
+from .providers.anthropic import AnthropicProvider
 from .providers.openai_compat import OpenAICompatProvider
 from .providers.responses import OpenAIResponsesProvider
 

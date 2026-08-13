@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ...core.errors import AppError, ConfigError
+from ...core.errors import ConfigError
 from ...schemas.chat import ChatRequest, ChatResponse
 from ..deps import get_container
 

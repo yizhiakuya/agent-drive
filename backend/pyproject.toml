@@ -24,3 +24,19 @@ addopts = "-q"
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+[tool.ruff.lint]
+ignore = [
+    "BLE001",  # blind except: 有意设计（优雅失败原则: dreaming/标题/摘要不阻塞主流程）
+    "B008",    # FastAPI Depends() 函数调用是框架惯例
+    "S110",    # try/except/pass: 尽力而为的辅助路径
+    "DTZ011",  # date.today(): 本地私人应用无需时区
+    "B005",    # strip 多字符集是有意用法（清理标题标点）
+    "S112",    # 数据容错循环: 解析坏日志行/坏meta文件时跳过继续
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = false

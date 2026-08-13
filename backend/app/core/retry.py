@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 # 瞬态错误特征（可重试）：超时/限流/网络/服务不可用
 RETRYABLE_PATTERNS = (
@@ -51,7 +51,7 @@ async def with_retry(
 
     退避序列: base_delay * 2^attempt（上限 max_delay）+ 可选抖动。
     """
-    last_exc: Exception | None = None
+    last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):
         try:
             return await fn()
