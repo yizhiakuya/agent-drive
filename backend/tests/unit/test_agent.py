@@ -41,6 +41,12 @@ class FakeProvider:
             tool_calls=[],
         )
 
+    async def stream_chat(self, messages, tools=None):
+        """模拟流式：复用 chat 的脚本行为"""
+        result = await self.chat(messages, tools)
+        if result.content:
+            yield result.content
+
     async def test_connection(self):
         return {"ok": True, "model": "fake"}
 

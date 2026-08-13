@@ -58,6 +58,10 @@ class Container:
             audit=lambda msg: self.audit.record(msg),
             sessions=self.sessions,
             skills=self.skills,
+            max_steps=self.settings.max_steps,
+            context_budget=self.settings.context_budget,
+            max_tool_output=self.settings.max_tool_output,
+            summarize_threshold=self.settings.summarize_threshold,
         )
 
     def close(self) -> None:

@@ -109,10 +109,15 @@ backend/
 │   │   └── deps.py          # 依赖获取
 │   ├── schemas/             # Pydantic 模型
 │   │   ├── chat.py  config.py  files.py  sessions.py
-│   ├── agent/               # 领域：Agent
-│   │   ├── loop.py  prompt.py
+│   ├── agent/               # 领域：Agent（单一职责拆分）
+│   │   ├── loop.py           #   编排引擎（_execute 统一生成器）
+│   │   ├── prompt.py         #   提示词工程
+│   │   ├── context.py        #   上下文管理（token 预算截断）
+│   │   ├── confirm.py        #   高风险操作确认判定
+│   │   ├── router.py         #   意图路由（闲聊/任务）
+│   │   ├── skills.py         #   技能包注册表
 │   │   ├── tools/  registry.py  files.py  system.py  analytics.py
-│   │   └── memory/  base.py  preferences.py  sessions.py
+│   │   └── memory/  preferences.py  sessions.py
 │   ├── llm/
 │   │   ├── base.py  manager.py  types.py
 │   │   └── providers/  openai_compat.py  responses.py  anthropic.py
