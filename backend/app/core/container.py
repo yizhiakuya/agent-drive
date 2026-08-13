@@ -51,6 +51,7 @@ class Container:
 
     def build_agent(self) -> AgentLoop:
         """每次对话构造一个新 Agent（历史由会话持久化）"""
+        self.skills.reload()  # 技能热加载：新增 SKILL.md 无需重启
         provider = self.llm.get_provider()  # 未配置时抛 ConfigError
         reg = self.build_tool_registry()
         return AgentLoop(
