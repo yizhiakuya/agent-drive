@@ -81,6 +81,51 @@ class LocalStorage:
     def exists(self, rel_path: str) -> bool:
         return self.resolve(rel_path).exists()
 
+    # ---------- 写操作（AI 中心：Agent 能创建内容） ----------
+    def write_text(self, rel_path: str, content: str) -> dict[str, Any]:
+        """创建或覆盖文本文件。"""
+        p = self.resolve(rel_path)
+        existed = p.exists()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return {
+            "path": p.relative_to(self.root).as_posix(),
+            "size": len(content.encode("utf-8")),
+            "existed": existed,
+            "action": "覆盖" if existed else "新建",
+        }
+
+    def append_text(self, rel_path: str, content: str) -> dict[str, Any]:
+        """追加内容到文本文件（不存在则创建）。"""
+        p = self.resolve(rel_path)
+        existed = p.exists()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(content)
+        return {
+            "path": p.relative_to(self.root).as_posix(),
+            "size": p.stat().st_size,
+            "existed": existed,
+            "action": "追加" if existed else "新建",
+        }
+
+    def copy(self, src: str, dst: str) -> dict[str, Any]:
+        """复制文件或目录到新位置。"""
+        s_p = self.resolve(src)
+        d_p = self.resolve(dst)
+        if not s_p.exists():
+            raise FileNotFoundError(src)
+        if s_p.is_dir():
+            shutil.copytree(s_p, d_p)
+        else:
+            d_p.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(s_p, d_p)
+        return {
+            "src": src,
+            "dst": d_p.relative_to(self.root).as_posix(),
+            "is_dir": s_p.is_dir(),
+        }
+
     def stat(self, rel_path: str) -> dict[str, Any]:
         p = self.resolve(rel_path)
         st = p.stat()

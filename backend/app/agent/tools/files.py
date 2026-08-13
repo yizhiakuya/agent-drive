@@ -90,6 +90,130 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage) -> None:
         group="files",
     )
 
+    async def get_storage_info() -> dict[str, Any]:
+        """磁盘用量 + 文件统计"""
+        items = storage.list_dir("")
+        files = sum(1 for i in items if not i["is_dir"])
+        dirs = sum(1 for i in items if i["is_dir"])
+        total_size = sum(i["size"] for i in items if not i["is_dir"])
+        return {
+            "disk": storage.disk_usage(),
+            "root_files": files,
+            "root_dirs": dirs,
+            "root_total_size": total_size,
+        }
+
+    reg.register(
+        ToolSpec(
+            "get_storage_info",
+            "查看网盘存储概览（磁盘用量/文件数/目录数）",
+            {},
+            doc=(
+                "用途：查看存储容量和文件统计。\n"
+                "参数：无。\n"
+                "输出：{disk: {total, used, free}, root_files, root_dirs, root_total_size}。"
+            ),
+        ),
+        get_storage_info,
+        group="files",
+    )
+
+    # ============ 🟡 写操作（AI 中心：Agent 能创建内容） ============
+    async def write_file(path: str, content: str) -> dict[str, Any]:
+        return storage.write_text(path, content)
+
+    def _validate_written(args: dict, result: Any) -> str | None:
+        # Critic：写入后读回验证内容一致
+        p = args.get("path", "")
+        content = args.get("content", "")
+        try:
+            read_back = storage.read_text(p, max_chars=len(content) + 100)
+            if content[:100] not in read_back:
+                return "写入后读回校验不一致"
+        except Exception:
+            return f"写入后无法读回: {p}"
+        return None
+
+    reg.register(
+        ToolSpec(
+            "write_file",
+            "创建新文件或覆盖已有文件（写入文本内容）",
+            {"type": "object", "properties": {
+                "path": {"type": "string", "description": "文件相对路径，如 笔记/会议纪要.md"},
+                "content": {"type": "string", "description": "要写入的完整内容"},
+            }, "required": ["path", "content"]},
+            doc=(
+                "用途：创建新文件或覆盖已有文件。这是 Agent 生成内容的入口：\n"
+                "写笔记、保存周报、生成报告、创建配置文件等。\n"
+                "参数：path（必填）文件路径；content（必填）完整文本内容。\n"
+                "输出：{path, size, existed, action}，action=新建/覆盖。\n"
+                "注意：目标已存在时会覆盖，动手前一句话说明。"
+            ),
+        ),
+        write_file,
+        level="yellow",
+        validator=_validate_written,
+        group="files",
+    )
+
+    async def append_file(path: str, content: str) -> dict[str, Any]:
+        return storage.append_text(path, content)
+
+    def _validate_appended(args: dict, result: Any) -> str | None:
+        p = args.get("path", "")
+        content = args.get("content", "")
+        try:
+            read_back = storage.read_text(p, max_chars=20000)
+            if content[:50] not in read_back:
+                return "追加后读回校验不一致"
+        except Exception:
+            return f"追加后无法读回: {p}"
+        return None
+
+    reg.register(
+        ToolSpec(
+            "append_file",
+            "向文件追加内容（不存在则创建）",
+            {"type": "object", "properties": {
+                "path": {"type": "string", "description": "文件相对路径"},
+                "content": {"type": "string", "description": "要追加的内容"},
+            }, "required": ["path", "content"]},
+            doc=(
+                "用途：向已有文件追加内容（日志、待办、持续更新的笔记）。\n"
+                "参数：path（必填）；content（必填）。\n"
+                "输出：{path, size, existed, action}。\n"
+                "注意：适合增量场景；整篇重写请用 write_file。"
+            ),
+        ),
+        append_file,
+        level="yellow",
+        validator=_validate_appended,
+        group="files",
+    )
+
+    async def copy_file(src: str, dst: str) -> dict[str, Any]:
+        return storage.copy(src, dst)
+
+    reg.register(
+        ToolSpec(
+            "copy_file",
+            "复制文件或文件夹到新位置",
+            {"type": "object", "properties": {
+                "src": {"type": "string", "description": "源路径"},
+                "dst": {"type": "string", "description": "目标路径"},
+            }, "required": ["src", "dst"]},
+            doc=(
+                "用途：复制文件或文件夹（备份、模板复用）。\n"
+                "参数：src（必填）源路径；dst（必填）目标路径。\n"
+                "输出：{src, dst, is_dir}。\n"
+                "错误：源不存在返回 {ok:false, error}。"
+            ),
+        ),
+        copy_file,
+        level="yellow",
+        group="files",
+    )
+
     # ============ 🟡 低风险写 ============
     async def create_folder(path: str) -> dict[str, Any]:
         storage.mkdir(path)
