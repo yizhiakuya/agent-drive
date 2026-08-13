@@ -13,7 +13,6 @@ export default function SessionList({ sessions, currentId, onSelect, onCreated, 
   }
 
   async function del(sid) {
-    if (!confirm("删除该会话？")) return;
     await deleteSession(sid);
     if (currentId === sid) onSelect(null);
     onChanged();
