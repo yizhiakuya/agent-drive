@@ -24,3 +24,4 @@ coverage/
 htmlcov/
 backend/.coverage
 frontend/coverage/
+*.egg-info/
