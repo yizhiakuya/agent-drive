@@ -1,5 +1,8 @@
 FROM node:22-alpine AS build
 WORKDIR /app
+ARG http_proxy
+ARG https_proxy
+ENV http_proxy=$http_proxy https_proxy=$https_proxy
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .

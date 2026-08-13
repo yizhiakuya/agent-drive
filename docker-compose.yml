@@ -9,29 +9,43 @@ services:
       POSTGRES_DB: agentdrive
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # M3 语义索引启用时再开端口映射（宿主 5432 已占用）
+    # ports:
+    #   - "5432:5432"
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # M3 启用时再开端口映射
+    # ports:
+    #   - "6379:6379"
 
   backend:
-    build: ./backend
-    depends_on: [db, redis]
+    build:
+      context: ./backend
+      network: host
+      args:
+        http_proxy: ${HTTP_PROXY:-http://127.0.0.1:7890}
+        https_proxy: ${HTTPS_PROXY:-http://127.0.0.1:7890}
+    # M2 阶段为文件存储（data/ + system/ 卷），db/redis 供 M3 语义索引启用
+    # depends_on: [db, redis]
     environment:
       DATABASE_URL: postgresql+asyncpg://agent:agent@db:5432/agentdrive
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./backend/data:/app/data
       - ./backend/system:/app/system
-    ports:
-      - "8000:8000"
+    network_mode: host  # 共享宿主网络：容器内 LLM/embedding 调用直连外网
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      network: host
+      args:
+        http_proxy: ${HTTP_PROXY:-http://127.0.0.1:7890}
+        https_proxy: ${HTTPS_PROXY:-http://127.0.0.1:7890}
     depends_on: [backend]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # nginx 经此反代到 host 网络的 backend
     ports:
       - "5173:80"
 
