@@ -57,17 +57,20 @@ class LocalStorage:
         if not d.is_dir():
             raise NotADirectoryError(rel_path)
         items = []
-        for p in sorted(d.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
-            if p.name in (".index", ".trash"):
-                continue  # 隐藏索引/回收站目录
-            rel = p.relative_to(self.root).as_posix()
-            items.append({
-                "name": p.name,
-                "path": rel,
-                "is_dir": p.is_dir(),
-                "size": p.stat().st_size if p.is_file() else 0,
-                "mtime": p.stat().st_mtime,
-            })
+        with os.scandir(d) as it:
+            for e in sorted(it, key=lambda x: (x.is_file(), x.name.lower())):
+                if e.name in (".index", ".trash"):
+                    continue  # 隐藏索引/回收站目录
+                is_file = e.is_file()
+                st = e.stat()  # DirEntry 已缓存 stat，无需二次系统调用
+                rel = Path(e.path).relative_to(self.root).as_posix()
+                items.append({
+                    "name": e.name,
+                    "path": rel,
+                    "is_dir": not is_file,
+                    "size": st.st_size if is_file else 0,
+                    "mtime": st.st_mtime,
+                })
         return items
 
     def read_text(self, rel_path: str, max_chars: int = 8000) -> str:

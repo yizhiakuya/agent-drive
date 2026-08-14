@@ -84,6 +84,7 @@ export default function ChatPanel() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const sidRef = useRef<string | null>(sessionId);
   const abortRef = useRef<AbortController | null>(null);
+  const streamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function loadSession(sid: string) {
     try {
@@ -194,19 +195,28 @@ export default function ChatPanel() {
 
     let replyRef = "";
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
+    // 流式节流：token 高频到达时每 80ms 批量刷一帧 UI（长回复不再逐 token 全量重渲染）
+    const applyReply = () => {
+      setMessages((m) => {
+        const copy = [...m];
+        if (copy.length && copy[copy.length - 1].type === "tool_step") {
+          copy.push({ type: "assistant", content: "" });
+        }
+        copy[copy.length - 1] = { type: "assistant", content: replyRef };
+        return copy;
+      });
+    };
 
     try {
       const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
         if (event === "text") {
           replyRef += data as unknown as string;
-          setMessages((m) => {
-            const copy = [...m];
-            if (copy.length && copy[copy.length - 1].type === "tool_step") {
-              copy.push({ type: "assistant", content: "" });
-            }
-            copy[copy.length - 1] = { type: "assistant", content: replyRef };
-            return copy;
-          });
+          if (!streamTimerRef.current) {
+            streamTimerRef.current = setTimeout(() => {
+              streamTimerRef.current = null;
+              applyReply();
+            }, 80);
+          }
         } else if (event === "tool_start") {
           setMessages((m) => [...m, { type: "tool_step", status: "running", content: "", ...(data as object) } as Message]);
         } else if (event === "tool_trace") {
@@ -230,6 +240,12 @@ export default function ChatPanel() {
         }
       }, controller.signal);
 
+      // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
+      if (streamTimerRef.current) {
+        clearTimeout(streamTimerRef.current);
+        streamTimerRef.current = null;
+        applyReply();
+      }
       if (sendSid !== sidRef.current) return;
       const rPlan = (r?.plan ?? []) as PlanStep[];
       if (rPlan.length) setPlan(rPlan);

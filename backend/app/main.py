@@ -56,6 +56,10 @@ def create_app(container: Container | None = None) -> FastAPI:
 
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str):
+            if full_path.startswith("api/"):
+                # API 404 保持 JSON（否则前端会拿到 index.html 解析失败）
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": "Not Found"}, status_code=404)
             f = _DIST / full_path
             if f.is_file():
                 return FileResponse(f)

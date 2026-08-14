@@ -35,7 +35,9 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 - 同名冲突：noclobber 参数 → 服务端自动加序号 name-2.jpg，绝不覆盖
 - 整秒检查点（1.0.22 起）：`lastSyncAt` 只推进到「整秒全部成功」的秒；同秒内有失败或未取完则挂 `pendingSecond+pendingMaxId`（_ID 水位）下一轮续传——同秒失败张、单秒超 200 张（连拍/批量导入）都不会再被 `DATE_ADDED > 检查点` 永久跳过
 - 单张失败不阻塞整批：跳过继续，Worker 指数退避重试；重试零流量（已传文件秒传命中）
-- 事件驱动：MediaStore ContentObserver 拍照秒级触发快速同步（周期任务兜底）；查询 SQL LIMIT 不 COUNT 全量统计
+- 事件驱动：MediaStore ContentObserver 拍照触发快速同步（1 秒防抖合并连拍，周期任务兜底）；查询 SQL LIMIT 不 COUNT 全量统计
+- 断网中止（1.0.23 起）：连接失败/401/403/5xx 整批中止 + 退避重试（不再逐张串行超时）；单张 4xx 跳过继续
+- 权限判定只看图片读取权限：通知权限被拒不算同步失败（仅失去进度通知）
 - 令牌与配置加密存储：服务器地址/设备令牌/同步设置存 EncryptedSharedPreferences；`allowBackup=false` 防云备份恢复克隆令牌；旧版明文数据首次启动自动迁移并清空
 - 进度可视：App 内进度块（实时事件）+ 通知栏进度条；全局下拉刷新（App/PWA 通用）
 

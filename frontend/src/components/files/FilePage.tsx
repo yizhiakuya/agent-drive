@@ -258,9 +258,9 @@ export default function FilePage() {
         )}
       </div>
 
-      {/* 回收站面板 */}
+      {/* 回收站面板：移动端为全屏覆盖层，桌面端固定侧栏 */}
       {showTrash && (
-        <div className="hidden lg:flex w-[42%] min-w-72 flex-col border-l border-border bg-panel animate-fade-in">
+        <div className="fixed inset-0 z-40 flex flex-col bg-panel animate-fade-in lg:static lg:z-auto lg:w-[42%] lg:min-w-72 lg:border-l lg:border-border">
           <div className="flex justify-between items-center px-3 py-2.5 border-b border-border">
             <b className="text-sm">♻️ 回收站</b>
             <span className="flex gap-1.5">
@@ -286,8 +286,8 @@ export default function FilePage() {
         </div>
       )}
 
-      {/* 预览面板：移动端隐藏（小屏用下载） */}
-      <div className="hidden lg:flex w-[42%] min-w-72 flex-col border-l border-border bg-panel">
+      {/* 预览面板：移动端选中后全屏覆盖（含关闭按钮），桌面端固定侧栏 */}
+      <div className={`${selected ? "fixed inset-0 z-40" : "hidden"} flex flex-col bg-panel lg:static lg:z-auto lg:flex lg:w-[42%] lg:min-w-72 lg:border-l lg:border-border`}>
         {!selected && (
           <div className="p-5 text-sm flex flex-col items-center gap-2 text-center">
             <span className="text-3xl">👁️</span>
@@ -300,6 +300,7 @@ export default function FilePage() {
             <div className="flex justify-between items-center gap-2 px-3 py-2.5 border-b border-border">
               <b className="text-sm truncate flex-1" title={selected.path}>{selected.path.split("/").pop()}</b>
               <a className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg" href={fileDownloadUrl(selected.path)} download>⬇ 下载</a>
+              <button className="lg:hidden border border-border text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={() => setSelected(null)} aria-label="关闭预览">✕</button>
             </div>
             {selected.info && (
               <div className="px-3 py-1 text-muted text-xs">

@@ -1,10 +1,25 @@
 """v1 文件路由"""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..deps import get_container
+
+
+def _friendly(e: Exception) -> HTTPException:
+    """把存储层异常映射为语义化 HTTP 状态码（不再一律吞成 400）。"""
+    if isinstance(e, HTTPException):
+        return e
+    if isinstance(e, FileNotFoundError):
+        return HTTPException(404, str(e))
+    if isinstance(e, FileExistsError):
+        return HTTPException(409, str(e))
+    if isinstance(e, (PermissionError, NotADirectoryError, IsADirectoryError)):
+        return HTTPException(403, str(e))
+    return HTTPException(400, str(e))
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -30,7 +45,7 @@ async def list_files(container=Depends(get_container), path: str = ""):
     try:
         return {"path": path, "items": st.list_dir(path), "disk": st.disk_usage()}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 def _unique_path(st, rel: str) -> str:
@@ -80,10 +95,11 @@ async def upload(container=Depends(get_container), file: UploadFile = File(...),
         info = st.save_bytes(rel, data)
     if md5:
         container.upload_index.record(md5, rel, info["size"])
-    # M2a：上传即解析（尽力而为，失败不影响上传）
+    # M2a：上传即解析（尽力而为，失败不影响上传）。extract 是 CPU/IO 重操作（PDF/OCR），
+    # 放线程池执行，避免阻塞事件循环影响其它请求
     indexed = None
     try:
-        indexed = container.ingest.extract(rel)
+        indexed = await asyncio.to_thread(container.ingest.extract, rel)
     except Exception:
         pass
     return {"uploaded": info, "indexed": indexed}
@@ -100,7 +116,7 @@ async def download(container=Depends(get_container), path: str = ""):
     except PermissionError:
         raise HTTPException(403, "路径越界")
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 @router.post("/upload-share")
@@ -119,7 +135,7 @@ async def upload_share(container=Depends(get_container), file: UploadFile = File
         i += 1
     st.save_bytes(candidate, data)
     try:
-        container.ingest.extract(candidate)
+        await asyncio.to_thread(container.ingest.extract, candidate)  # 线程池：不阻塞事件循环
     except Exception:
         pass
     return RedirectResponse(url=f"/?shared={candidate}", status_code=303)
@@ -132,7 +148,7 @@ async def mkdir(container=Depends(get_container), path: str = ""):
         st.mkdir(path)
         return {"created": path}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 # ---- 业务页面补充：预览 + 信息 ----
@@ -166,7 +182,7 @@ async def raw(container=Depends(get_container), path: str = ""):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 @router.get("/info")
@@ -204,7 +220,7 @@ async def info(container=Depends(get_container), path: str = ""):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 # ---- 文件操作（文件页人工入口） ----
@@ -215,7 +231,7 @@ async def rename(container=Depends(get_container), src: str = "", dst: str = "")
         container.storage.rename(src, dst)
         return {"renamed": f"{src} → {dst}"}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 @router.post("/move")
@@ -224,7 +240,7 @@ async def move(container=Depends(get_container), src: str = "", dst_dir: str = "
         container.storage.move(src, dst_dir, overwrite=overwrite)
         return {"moved": f"{src} → {dst_dir}/"}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 @router.post("/copy")
@@ -233,7 +249,7 @@ async def copy(container=Depends(get_container), src: str = "", dst: str = "", o
         container.storage.copy(src, dst, overwrite=overwrite)
         return {"copied": f"{src} → {dst}"}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 @router.post("/delete")
@@ -242,7 +258,7 @@ async def delete(container=Depends(get_container), path: str = ""):
     try:
         return container.storage.move_to_trash(path)
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 # ---- 回收站 ----
@@ -257,7 +273,7 @@ async def trash_restore(container=Depends(get_container), path: str = ""):
     try:
         return container.storage.restore_from_trash(path)
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)
 
 
 @router.post("/trash/empty")
@@ -265,4 +281,4 @@ async def trash_empty(container=Depends(get_container)):
     try:
         return container.storage.purge_trash()
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise _friendly(e)

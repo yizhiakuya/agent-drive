@@ -39,6 +39,13 @@ public final class SyncEngine {
 
     private static final int MAX_PER_RUN = 200;
 
+    /** 连接级失败（断网/服务端故障/鉴权失效）：中止整批，Worker 退避重试。 */
+    private static final class AbortBatchException extends IOException {
+        AbortBatchException(String msg, Throwable cause) {
+            super(msg, cause);
+        }
+    }
+
     // 进度状态（Worker 与插件同进程，插件 getStatus 直接读；JS 经事件实时收）
     public static volatile boolean running = false;
     public static volatile String phase = "idle";
@@ -146,6 +153,7 @@ public final class SyncEngine {
         boolean groupFailed = false;
         long lastDrained = lastSync; // 本轮确认「整秒完成」的最大秒
         boolean pendingReplaced = false;
+        boolean aborted = false;
         try {
             while (c.moveToNext()) {
                 long ts = c.getLong(2);
@@ -187,6 +195,10 @@ public final class SyncEngine {
                         emitProgress();          // JS 实时进度
                         notifyProgress(ctx);      // 通知栏进度（节流）
                     }
+                } catch (AbortBatchException e) {
+                    aborted = true;      // 连接级失败：中止整批
+                    groupFailed = true;  // 当前秒组标记未完成 → pending 续传
+                    break;
                 } catch (Exception e) {
                     failures++; // 单张失败不阻塞整批（同秒挂 pending，下轮续传）
                     groupFailed = true;
@@ -215,7 +227,9 @@ public final class SyncEngine {
             ServerConfigStore.clearPending(ctx);
         }
 
-        if (failures > 0) {
+        if (aborted) {
+            ServerConfigStore.setLastError(ctx, "网络或服务器异常，已中止本批，将自动重试");
+        } else if (failures > 0) {
             ServerConfigStore.setLastError(ctx, failures + " 张上传失败，将自动重试");
         } else {
             ServerConfigStore.setLastError(ctx, null);
@@ -305,10 +319,19 @@ public final class SyncEngine {
             os.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
             os.flush();
         }
-        int code = conn.getResponseCode();
+        int code;
+        try {
+            code = conn.getResponseCode();
+        } catch (IOException e) {
+            conn.disconnect();
+            throw new AbortBatchException("网络连接失败", e); // 断网：整批中止而非 200 张串行超时
+        }
         conn.disconnect();
+        if (code == 401 || code == 403 || code >= 500) {
+            throw new AbortBatchException("服务器拒绝/异常 HTTP " + code, null); // 令牌失效或服务端故障：整批中止
+        }
         if (code < 200 || code >= 300) {
-            throw new IOException("上传失败 HTTP " + code);
+            throw new IOException("上传失败 HTTP " + code); // 单张 4xx：跳过继续
         }
     }
 

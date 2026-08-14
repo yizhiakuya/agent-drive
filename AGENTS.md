@@ -76,6 +76,15 @@ cd frontend/android && gradlew.bat assembleRelease
 - **审计日志轮转**：1MB 轮转保留 5 份历史（logging.MAX_BACKUPS），勿改回只留 1 份
 - **限速内存态**：仅适用单 worker 部署（现部署即单进程）；check_rate 已做过期 key 清理（>1000 触发全量清扫）
 - **API Key 掩码只显前缀**（绝不回显尾部）；agent-config.json 写入 chmod 0600
+- **同步断网中止**：SyncEngine 连接失败/401/403/5xx 抛 AbortBatchException 整批中止（勿改回 200 张串行超时）；单张 4xx 跳过继续；中止时当前秒组同样挂 pending 续传
+- **观察者防抖**：ContentObserver 1 秒防抖（连拍/批量导入合并成一次快速同步），勿去掉 debounceHandler
+- **通知权限非致命**：相册权限判定只看 READ_MEDIA_IMAGES/READ_EXTERNAL_STORAGE（通知被拒不算失败）
+- **错误语义化**：files.py 用 `_friendly()` 映射 404/409/403（透传 HTTPException），勿改回 `except Exception → 400`
+- **/api 404 保持 JSON**：main.py SPA fallback 对 `api/` 前缀返回 JSON 404，前端不再拿到 HTML
+- **extract 移出事件循环**：上传端点的 ingest.extract 走 `asyncio.to_thread`（PDF/OCR 不阻塞其它请求）
+- **前端 GET 去重**：client.ts 对 GET 做 in-flight 合并 + 15s TTL 缓存；非 GET 自动清缓存（勿移除：改文件后列表会陈旧）
+- **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
+- **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
 - **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）

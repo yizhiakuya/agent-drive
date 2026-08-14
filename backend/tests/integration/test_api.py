@@ -197,6 +197,25 @@ def test_files_upload_and_list(client):
     assert any(i["name"] == "测试.txt" for i in items)
 
 
+def test_error_semantics(client):
+    """错误语义化：不存在→404，同名冲突→409，不再一律 400。"""
+    c, _ = client
+    assert c.get("/api/v1/files/info", params={"path": "不存在.txt"}).status_code == 404
+    assert c.get("/api/v1/files/download", params={"path": "不存在.txt"}).status_code == 404
+    c.post("/api/v1/files/upload", files={"file": ("a.txt", b"1", "text/plain")})
+    c.post("/api/v1/files/upload", files={"file": ("b.txt", b"2", "text/plain")})
+    r = c.post("/api/v1/files/move", params={"src": "b.txt", "dst_dir": ""})
+    assert r.status_code == 409
+
+
+def test_api_404_returns_json(client):
+    """未匹配的 /api 路径返回 JSON 404（SPA fallback 不再吐 HTML）。"""
+    c, _ = client
+    r = c.get("/api/v1/definitely-not-exists")
+    assert r.status_code == 404
+    assert isinstance(r.json(), dict)
+
+
 def test_files_path_traversal_blocked(client):
     c, _ = client
     r = c.get("/api/v1/files/download", params={"path": "../../../etc/passwd"})

@@ -100,6 +100,8 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 
 ### 3.8 版本化 API
 - `/api/v1/*`，版本路由聚合在 `api/v1/router.py`
+- 错误语义化：存储层异常映射 404/409/403（files.py `_friendly`），未匹配的 `/api` 路径返回 JSON 404（SPA fallback 不吐 HTML）
+- 上传端点：大小上限 413（流式限幅）；ingest.extract 走线程池，不阻塞事件循环
 - 破坏性变更升 v2，不破坏客户端
 
 ## 四、目录结构（目标态）

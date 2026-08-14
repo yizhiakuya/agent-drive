@@ -1,5 +1,6 @@
 package top.rainaki.agentdrive;
 
+import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
@@ -44,13 +45,22 @@ public class MainActivity extends BridgeActivity {
         registerMediaObserver();
     }
 
-    /** MediaStore 观察者：新照片落库立即触发快速同步（遵守仅 Wi-Fi 约束）。 */
+    /** MediaStore 观察者：新照片落库触发快速同步（1 秒防抖：连拍/批量导入合并成一次）。 */
+    private final Handler debounceHandler = new Handler(Looper.getMainLooper());
+    private final Runnable quickSyncRunnable = new Runnable() {
+        @Override
+        public void run() {
+            PhotoSyncScheduler.enqueueQuickSync(getApplicationContext());
+        }
+    };
+
     private void registerMediaObserver() {
         try {
-            ContentObserver observer = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            ContentObserver observer = new ContentObserver(debounceHandler) {
                 @Override
                 public void onChange(boolean selfChange) {
-                    PhotoSyncScheduler.enqueueQuickSync(getApplicationContext());
+                    debounceHandler.removeCallbacks(quickSyncRunnable);
+                    debounceHandler.postDelayed(quickSyncRunnable, 1000);
                 }
             };
             getContentResolver().registerContentObserver(
@@ -75,11 +85,20 @@ public class MainActivity extends BridgeActivity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_PHOTO_PERM) {
-            boolean granted = grantResults.length > 0;
-            for (int r : grantResults) {
-                if (r != PackageManager.PERMISSION_GRANTED) granted = false;
+            // 只按图片读取权限判定：通知权限被拒不算失败（同步照常工作，只是没通知）
+            boolean photoGranted = true;
+            boolean hasPhotoPerm = false;
+            for (int i = 0; i < permissions.length; i++) {
+                String p = permissions[i];
+                if (Manifest.permission.READ_MEDIA_IMAGES.equals(p)
+                        || Manifest.permission.READ_EXTERNAL_STORAGE.equals(p)) {
+                    hasPhotoPerm = true;
+                    if (grantResults.length <= i || grantResults[i] != PackageManager.PERMISSION_GRANTED) {
+                        photoGranted = false;
+                    }
+                }
             }
-            PhotoSyncPlugin.onPermissionResult(granted);
+            PhotoSyncPlugin.onPermissionResult(!hasPhotoPerm || photoGranted);
         }
     }
 }
