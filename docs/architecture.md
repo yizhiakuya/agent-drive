@@ -163,8 +163,12 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4）
 | 扩展 | 状态 | 接入点 |
 |------|------|--------|
 | 语义搜索 | ✅ 已落地 | ingest/pipeline + llm/embeddings（Jina 云）+ .index 向量 sidecar（规模化迁 pgvector） |
-| 规则自动执行 | ✅ 已落地 | agent/scheduler.py + run_automation_now/automation_status 工具 |
+| 规则自动执行 | ✅ 已落地 | agent/scheduler.py + run_automation_now/automation_status 工具 + /automation/latest API(主动汇报) |
 | 文件理解 | ✅ 已落地 | M2a 摄入(PDF/OCR/文本) + M2b 语义 + M2c 问答 |
+| 回收站 | ✅ 已落地 | storage .trash(30天自动清) + list_trash/restore_file/empty_trash 工具 + /files/trash API |
+| 影音在线播放 | ✅ 已落地 | preview_kind video/audio + raw 端点 media_type + 前端 <video>/<audio> |
+| 分享到网盘 | ✅ 已落地 | Web Share Target(manifest share_target) + /files/upload-share 端点 |
+| 文件页人工操作 | ✅ 已落地 | /files/rename|move|copy|delete|mkdir API + 前端工具栏/回收站面板 |
 | 流式输出 | ✅ 已落地 | SSE /chat/stream + 前端 chatStream |
 | 向量库迁移 | 待规模需求 | db/(pgvector, compose 已备) |
 | 音视频转写 | 未做（资源评估后） | ingest 加 whisper 解析器 |

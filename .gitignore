@@ -32,3 +32,4 @@ out/
 *.tsbuildinfo
 
 *.keystore
+.ruff_cache/

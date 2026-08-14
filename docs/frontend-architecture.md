@@ -59,18 +59,17 @@ AbortController: 切会话中止在途流（防串消息）+ 停止按钮复用
 - vitest + testing-library：SSE 解析单测（跨 chunk 缓冲/AbortError）+ 小组件导出测试
 - **务实模式**：把纯展示组件（ToolStep/ContextBar/PlanCard/fmtToolArgs）从 ChatPanel 导出独立测，避免 mock 大组件
 
-## 三、问题清单（按优先级）
+## 三、问题清单（迁移后状态：2026-08-14 复核）
 
-1. **client.js 半废弃层**：`getStatus → /api/v1/api/status` 是死路径（应为 /status），
-   且 `chat/listFiles/...` 与专用模块重复导出——双真相源。
-   ⚠️ 放大因素：SPA fallback 对所有未匹配路径返回 200+HTML，API 拼错不会 404 而是静默返回 HTML。
-2. **组件绕层 fetch**：FilePage/FilePanel 直连 /files/info|raw、SettingsPage 直连 /config、
-   App 直连 /config——api 层封装没有覆盖新增 API，分层纪律侵蚀。
-3. **ChatPanel 452 行**：容器逻辑 + 6 个展示组件/工具函数混一个文件，修改风险高。
-4. **事件总线魔法字符串**：'agent-drive:files-changed'/'toast' 无类型、无常量，拼错零提示。
-5. **无 URL 路由**：刷新回 tab 丢失、不可分享链接、后退无效。
-6. **上传无进度**：fetch 不支持进度事件，现在只有 spinner（需 XHR 版 uploadFile）。
-7. 小项：Markdown 组件 3 处重复 import；styles.css 单文件增长；SSE 错误信息粗糙。
+> ✅ = 已随 Next.js 迁移修复；⏳ = 仍未处理。
+
+1. ✅ **client.js 半废弃层**：已重写为 client.ts 单一真相源 + apiPath()，死导出/死路径清零。
+2. ✅ **组件绕层 fetch**：API 层已补全（files.info/raw/mkdir/rename/move/copy/delete/trash、config.getConfig/saveEmbeddings），组件全部走封装。
+3. ✅ **ChatPanel 452 行**：已拆分 ChatPanel + ToolStep/ContextBar/PlanCard + lib/format.ts（现各 <280 行）。
+4. ✅ **事件总线魔法字符串**：lib/events.ts 类型化常量（EV.filesChanged/EV.toast + emit* 函数）。
+5. ⏳ **无 URL 路由**：仍是 tab state（个人项目可接受；若需分享链接再上 hash 路由）。
+6. ⏳ **上传无进度**：仍 spinner（share target 场景浏览器自带进度；后续可 XHR）。
+7. ✅ 小项：Markdown 用全局 .markdown-body 类；Tailwind 取代单文件样式；SSE 错误已有友好文案。
 
 ## 四、优点（保持）
 

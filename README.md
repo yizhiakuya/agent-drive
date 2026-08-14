@@ -50,27 +50,30 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # :3000
 
 ```
 agent-drive/
-├── docs/                        # 架构 + Agent 定义规范
+├── docs/                        # 架构/Agent定义/前端架构/安卓端/质量报告/审查记录
+├── deploy/                      # nginx 部署配置（HTTPS 13311）
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # 入口：应用工厂 create_app()
-│   │   ├── core/                # 基础设施: config/logging/errors/container
-│   │   ├── api/v1/              # 版本化路由: chat/config/files/sessions
-│   │   ├── schemas/             # Pydantic 数据模型
-│   │   ├── agent/               # 领域: loop/prompt/tools/memory/onboarding
-│   │   ├── llm/                 # 领域: base/manager/providers/(3协议)
-│   │   ├── storage/             # 领域: base/local/(s3 M2)
-│   │   └── ingest/              # M2 摄入管线占位
-│   ├── tests/                   # unit/(脚本套件) + integration/(pytest)
-│   ├── scripts/                 # benchmark_real.py / mock_llm.py
-│   ├── pyproject.toml           # 项目元数据 + 开发依赖
-│   └── .env.example             # 环境配置模板
-├── frontend/src/
-│   ├── api/                     # client + chat/files/sessions/config
-│   ├── components/              # chat/ files/ sessions/ onboarding/
-│   └── hooks/
+│   │   ├── main.py              # 入口：create_app() + 托管前端静态(SPA)
+│   │   ├── core/                # config/logging/errors/container/retry
+│   │   ├── api/v1/              # chat/config/files/sessions/automation
+│   │   ├── agent/               # loop/prompt/router/skills/onboarding/
+│   │   │   │                    #   scheduler(自动化)/confirm/context/
+│   │   │   ├── tools/           # files/system/analytics/plan/memory
+│   │   │   └── memory/          # preferences/sessions
+│   │   ├── llm/                 # base/manager/embeddings/providers(3协议)
+│   │   ├── storage/             # base/local（回收站 .trash）
+│   │   └── ingest/              # pipeline（PDF/OCR 摄入+向量索引）
+│   ├── tests/                   # unit 9套 + integration pytest
+│   ├── scripts/                 # benchmark_real.py / mock_llm.py / backup.sh
+│   └── pyproject.toml           # 依赖唯一真相源
+├── frontend/                    # Next.js 16 + Tailwind + TS + zustand
+│   └── src/
+│       ├── app/                 # layout/page + globals.css(主题)
+│       ├── components/          # chat/ files/ sessions/ settings/ onboarding
+│       └── lib/                 # store/events/format/api(5模块)
 ├── Makefile                     # install/dev/test/bench/build
-└── docker-compose.yml           # (M2: postgres + redis + app)
+└── docker-compose.yml           # db(pgvector)+redis+backend+frontend
 ```
 
 ## 🧪 开发命令
@@ -118,13 +121,16 @@ python3 mock_llm.py &              # Mock LLM (端口 9999)
 
 ## 🗺️ 路线图
 
-- **M1 (当前)**：三协议 LLM + Onboarding + Agent 对话 + 基础文件管理 ✅
-- **M2**：摄入管线（OCR/PDF/音视频转写）+ 语义搜索 (pgvector) + 全文检索
-- **M3**：整理 Agent + 定时规则执行 + 知识图谱
-- **M4**：全文件类型理解 + 高级报告生成
+- **M1** ✅：三协议 LLM + Onboarding + Agent 对话 + 基础文件管理
+- **M2** ✅：摄入管线（PDF/OCR）+ 语义搜索（Jina 云向量）+ 全文检索 + 文档问答
+- **M3** ✅：规则自动执行（每天 03:30）+ 主动汇报 + 回收站
+- **M4 候选**：音视频转写 / 文件关系图谱 / 知识图谱问答 / 推送通知
+- **业务层** ✅：三页面（对话/文件/设置）+ PWA + 分享到网盘 + 影音播放 + 备份
 
 ## ⚠️ 安全说明
 
-- 所有写操作前会做快照（M3 完善回滚）
 - 路径穿越防护已内置
-- 工具按 green/yellow/red 分级，红色操作需确认
+- 工具按 green/yellow/red 分级，红色操作需 HMAC 签名确认（nonce 防重放）
+- 删除进回收站（30 天可恢复），彻底删除需 red 确认
+- 文件内容注入防护（多模式正则 + 内容一律视为数据）
+- 审计日志轮转 + API Key 掩码 + 敏感信息不入库
