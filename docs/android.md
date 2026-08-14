@@ -1,63 +1,57 @@
-# 📱 安卓端方案与进度（2026-08-14）
+# 📱 安卓端方案与进度
 
-> 状态：**已暂停打包，PWA 可用**。本文档记录完整方案、已有资产、卡点与续做步骤。
+> 更新（2026-08）：TWA 工程已入库 `android/`，Windows 本机可直接构建签名 APK，不再依赖服务器上的 bubblewrap/expect 交互。
+> PWA 仍是日常主用形态；APK 是给想要原生图标/免地址栏/系统分享入口的补充形态。
 
 ## 一、方案决策
 
 | 路线 | 状态 | 说明 |
 |------|------|------|
-| **A. PWA**（主方案） | ✅ 已上线 | 手机浏览器打开 → 添加到主屏幕。全屏/图标/离线壳/分享/相机上传 |
-| B. TWA 打包 APK | ⏸ 暂停（本地打包坑多） | 换 PWABuilder 在线打包（2 分钟）或本地续做（步骤见 §四） |
+| **A. PWA**（主方案） | ✅ 已上线，日常主用 | 手机浏览器打开 → 添加到主屏幕。全屏/图标/离线壳/分享/相机上传 |
+| **B. TWA 打包 APK** | ✅ 工程已入库 | `android/` Gradle 工程（androidbrowserhelper），本机构建见 §四 |
 | C. Flutter 原生 | 备选 | 需要后台上传/系统集成时再做 |
 
 ## 二、已完成的（有效资产）
 
 | 项 | 详情 |
 |----|------|
-| HTTPS 证书 | `*.rainaki.top` 通配符（Let's Encrypt EC-256），acme.sh 自动续期；证书文件 `/etc/nginx/certs/rainaki.{pem,key}` |
-| nginx | 13311 端口 HTTPS → Agent Drive，SSE 友好（`/etc/nginx/sites-available/agent-drive`） |
-| 域名/端口 | `https://home.rainaki.top:13311`（Cloudflare DNS-01 验证，家宽自定义端口） |
+| HTTPS 证书 | `*.rainaki.top` 通配符（Let's Encrypt EC-256），acme.sh 自动续期；`/etc/nginx/certs/rainaki.{pem,key}` |
+| nginx | 13311 端口 HTTPS → Agent Drive，SSE 友好（`deploy/nginx-agent-drive.conf` 已入库） |
+| 域名/端口 | `https://home.rainaki.top:13311`（Cloudflare DNS-01，家宽自定义端口） |
 | PWA 能力 | manifest + sw 离线壳 + 分享到网盘(share_target) + 相机上传 + safe-area |
-| 签名 keystore | `/root/agent-drive-android/agentdrive.keystore`（alias=agentdrive，密码见服务器本地 `/root/agent-drive-android/README.txt`） |
-| assetlinks.json | 已在 `frontend/public/.well-known/assetlinks.json`（包名 `top.rainaki.agentdrive`，SHA256 指纹 `8ef4635c9f505891d0c9251ed229e610c7a5d7799bd7eb73311df1de4fe90a94`） |
-| TWA 配置 | `/root/agent-drive-android/twa-manifest.json` |
+| assetlinks.json | `frontend/public/.well-known/assetlinks.json`（包名 `top.rainaki.agentdrive`，SHA256 `8ef4635c…e90a94`） |
+| **TWA 工程** | ✅ `android/`（2026-08 入库）：AGP 8.7.3 + Gradle 8.14.3 wrapper + androidbrowserhelper 2.5.0，源码/图标/文档齐全，可本机构建 |
+| 签名 keystore | 服务器 `/root/agent-drive-android/agentdrive.keystore`（alias=agentdrive，密码见服务器本地 README.txt，不入 git） |
 
-## 三、TWA 本地打包卡点复盘（如果续做）
+## 三、历史卡点（服务器 bubblewrap 打包，已废弃归档）
 
-环境已就绪：JDK 17（`/usr/lib/jvm/java-17-openjdk-amd64`）、Android SDK（`~/.bubblewrap/android_sdk`，build-tools 35 + platform 35）、bubblewrap CLI。
+早先尝试在服务器上用 bubblewrap 生成 TWA 工程，卡在交互提示（JDK 询问/SDK 路径校验/regenerate 确认/versionName≥6/keystore 密码/gradle 镜像），需 expect 应答。
+该路线已废弃：工程改为手写模板直接入库 `android/`，构建在 Windows 本机完成，全程无交互。服务器环境（JDK17/SDK35/bubblewrap）保留备查。
 
-bubblewrap 的连环交互坑（都需要 expect 应答）：
-1. JDK 询问（必须 17）→ 已配 config.json
-2. Android SDK 路径校验 → 已配（顶层需真实 `bin/` 拷贝，不是符号链接）
-3. 项目 regenerate 确认（y）
-4. versionName 要求 ≥6 字符（如 `1.0.10`）
-5. keystore 密码提示（见本地 README.txt）
-6. 构建改用腾讯 gradle 镜像（wrapper 里已换 `mirrors.cloud.tencent.com`）
+## 四、APK 构建（当前路径：Windows 本机）
 
-expect 脚本在 `/tmp/twa3.exp`（临时，重启会丢；续做时按 §三 列表重写）。
+前置环境（本机已装好）：
 
-## 四、续做路线（推荐 B1）
+- JDK 17+（Temurin 21）
+- Android SDK：`C:\Android\Sdk`（cmdline-tools + platform-tools + platforms;android-35 + build-tools;35.0.0）
+- Gradle 8.14.3：`C:\Android\gradle-8.14.3`（wrapper 已入库，日常用 `gradlew.bat` 即可）
 
-### B1. PWABuilder 在线打包（推荐，2 分钟）
-1. 路由器把外网 **13311 → 服务器 13311** 端口转发（家宽）
-2. 浏览器开 https://www.pwabuilder.com → 输入 `https://home.rainaki.top:13311`
-3. 按提示生成 APK 下载 → 手机安装（需允许未知来源）
-
-### B2. 本地续做
 ```bash
-cd /root/agent-drive-android
-# 项目已生成（app/ + gradlew）。若项目目录完整，直接构建：
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-export ANDROID_HOME=~/.bubblewrap/android_sdk
-./gradlew assembleRelease
-# APK: app/build/outputs/apk/release/app-release-unsigned.apk
-# 签名（若 gradle 未内嵌签名）:
-$ANDROID_HOME/build-tools/35.0.0/apksigner sign \
-  --ks agentdrive.keystore --ks-pass pass:$(cat /root/agent-drive-android/README.txt) \
-  --out AgentDrive.apk app-release-unsigned.apk
+# 1. keystore：从服务器 scp 到本机（指纹与 assetlinks.json 一致，免地址栏直接生效）
+scp root@服务器:/root/agent-drive-android/agentdrive.keystore D:/ds/agent-drive-keystore/
+
+# 2. 签名配置（不入 git）
+cd android && copy keystore.properties.template keystore.properties   # 填 storeFile/密码
+
+# 3. 构建（keystore 就位则直接出签名 APK）
+gradlew.bat assembleRelease
+# 产物: app/build/outputs/apk/release/app-release.apk
 ```
 
+keystore 未就位时产物为 `app-release-unsigned.apk`，用 apksigner 单独签名即可（步骤见 `android/README.md`）。
+
 ### 安装到手机
+
 - APK 传到手机（微信文件传输助手/网盘分享/数据线）→ 点击安装 → 允许未知来源
 - 或干脆用 PWA：手机 Chrome/Edge 打开网址 → 菜单 → 添加到主屏幕
 
