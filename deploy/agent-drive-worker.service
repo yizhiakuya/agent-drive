@@ -1,0 +1,28 @@
+[Unit]
+Description=Agent Drive durable task worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/projects/agent-drive/backend
+ExecStart=/usr/bin/python3 -m app.tasks.worker
+Restart=on-failure
+RestartSec=3
+StartLimitBurst=5
+StartLimitIntervalSec=60
+TimeoutStopSec=45
+Environment=PYTHONUNBUFFERED=1
+Environment=AGENT_DRIVE_APP_ENV=prod
+Environment=AGENT_DRIVE_TASK_WORKER_ENABLED=false
+EnvironmentFile=/etc/agent-drive/proxy.env
+UnsetEnvironment=ALL_PROXY all_proxy
+
+UMask=077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

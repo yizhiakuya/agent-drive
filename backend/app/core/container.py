@@ -22,6 +22,10 @@ from ..ingest.pipeline import IngestPipeline
 from ..llm.manager import LLMManager
 from ..storage.local import LocalStorage
 from ..storage.upload_index import UploadIndex
+from ..tasks.handlers import build_job_registry
+from ..tasks.runner import JobRunner
+from ..tasks.service import TaskService
+from ..tasks.store import JobStore
 from .config import Settings, get_settings
 from .logging import AuditLogger, setup_logging
 
@@ -54,14 +58,35 @@ class Container:
         self.skills = SkillsRegistry(self.settings.backend_dir / "skills")
         self.ingest = IngestPipeline(self.storage, embedder=self.llm.get_embedding_provider())
         from ..agent.scheduler import AutomationScheduler
+
+        self.job_store = JobStore(self.settings.system_path / "tasks.sqlite3")
+        self.tasks = TaskService(
+            self.job_store,
+            self.storage,
+            self.ingest,
+            self.llm,
+            timezone=self.settings.task_timezone,
+        )
+        self.storage.attach_change_listener(self.tasks.handle_storage_change)
         self.scheduler = AutomationScheduler(self)
+        self.task_registry = build_job_registry(self)
+        self.task_runner = JobRunner(
+            self.job_store,
+            self.task_registry,
+            poll_seconds=self.settings.task_poll_seconds,
+            lease_seconds=self.settings.task_lease_seconds,
+        )
+        self.tasks.ensure_default_schedules()
 
     # ---- 工厂 ----
     def build_tool_registry(self) -> ToolRegistry:
         reg = ToolRegistry()
         self.ingest.embedder = self.llm.get_embedding_provider()  # 热刷新（对话改配置后生效）
-        register_system_tools(reg, self.llm, self.memory, audit_fn=self.audit.tail, scheduler=self.scheduler)
-        register_file_tools(reg, self.storage, self.ingest)
+        register_system_tools(
+            reg, self.llm, self.memory, audit_fn=self.audit.tail,
+            scheduler=self.scheduler, tasks=self.tasks,
+        )
+        register_file_tools(reg, self.storage, self.ingest, tasks=self.tasks)
         register_memory_tools(reg, self.memory)
         register_analytics_tools(reg, self.llm.get_provider, self.audit, self.sessions)
         return reg

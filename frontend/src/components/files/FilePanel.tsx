@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { listFiles, uploadFile, getFileInfo, FileInfo, fileRawUrl, fileDownloadUrl } from "@/lib/api/files";
 import { fmtSize } from "@/lib/format";
-import { EV, emitToast } from "@/lib/events";
+import { EV, emitToast, emitTasksChanged } from "@/lib/events";
 
 export default function FilePanel() {
   const [path, setPath] = useState("");
@@ -39,8 +39,9 @@ export default function FilePanel() {
     const file = e.target.files?.[0];
     if (file) {
       try {
-        await uploadFile(file, path);
-        emitToast({ kind: "ok", text: `已上传 ${file.name}` });
+        const result = await uploadFile(file, path);
+        if (result.indexed?.task_id) emitTasksChanged();
+        emitToast({ kind: "ok", text: `已上传 ${file.name}，内容将在后台处理` });
         load(path);
       } catch (err) {
         emitToast({ kind: "error", text: `上传失败: ${err}` });

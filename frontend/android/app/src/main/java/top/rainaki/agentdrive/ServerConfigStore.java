@@ -4,7 +4,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKey;
@@ -53,30 +57,101 @@ public final class ServerConfigStore {
         }
     }
 
-    /** 旧版明文 prefs → 加密 prefs 一次性迁移（迁移后清空明文，幂等）。 */
+    /**
+     * 旧版明文 prefs → 加密 prefs 一次性迁移（幂等）。
+     *
+     * EncryptedSharedPreferences 与旧版明文 prefs 使用同一个底层文件时，底层 map
+     * 会同时包含 AndroidX 的 keyset 条目和旧明文条目。只迁移应用自己的键，并在
+     * 加密提交成功后逐项清理旧键，不能对底层文件调用 clear()，否则会把新 keyset 一起删掉。
+     */
     private static void migrateLegacy(Context ctx, SharedPreferences encrypted) {
+        if (!(encrypted instanceof EncryptedSharedPreferences)) {
+            // 降级到明文 SharedPreferences 时，旧值已经可直接使用，不做迁移或清理。
+            return;
+        }
         SharedPreferences legacy = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         Map<String, ?> all = legacy.getAll();
         if (all.isEmpty()) {
             return;
         }
+
         SharedPreferences.Editor ed = encrypted.edit();
+        List<String> migratedKeys = new ArrayList<>();
         for (Map.Entry<String, ?> e : all.entrySet()) {
+            String key = e.getKey();
+            if (!isLegacyConfigKey(key)) {
+                // 跳过 AndroidX 内部 keyset 及已经加密的底层键。
+                continue;
+            }
             Object v = e.getValue();
+            boolean copied = false;
             if (v instanceof String) {
-                ed.putString(e.getKey(), (String) v);
+                ed.putString(key, (String) v);
+                copied = true;
             } else if (v instanceof Boolean) {
-                ed.putBoolean(e.getKey(), (Boolean) v);
+                ed.putBoolean(key, (Boolean) v);
+                copied = true;
             } else if (v instanceof Integer) {
-                ed.putInt(e.getKey(), (Integer) v);
+                ed.putInt(key, (Integer) v);
+                copied = true;
             } else if (v instanceof Long) {
-                ed.putLong(e.getKey(), (Long) v);
+                ed.putLong(key, (Long) v);
+                copied = true;
             } else if (v instanceof Float) {
-                ed.putFloat(e.getKey(), (Float) v);
+                ed.putFloat(key, (Float) v);
+                copied = true;
+            } else if (v instanceof Set<?>) {
+                Set<String> strings = new HashSet<>();
+                boolean valid = true;
+                for (Object item : (Set<?>) v) {
+                    if (!(item instanceof String)) {
+                        valid = false;
+                        break;
+                    }
+                    strings.add((String) item);
+                }
+                if (valid) {
+                    ed.putStringSet(key, strings);
+                    copied = true;
+                }
+            }
+            if (copied) {
+                migratedKeys.add(key);
             }
         }
-        ed.commit();
-        legacy.edit().clear().commit();
+        if (migratedKeys.isEmpty() || !ed.commit()) {
+            Log.w(TAG, "旧版配置迁移写入失败");
+            return;
+        }
+
+        // 只删除旧的明文键，保留加密值和 AndroidX keyset。
+        SharedPreferences.Editor cleanup = legacy.edit();
+        for (String key : migratedKeys) {
+            cleanup.remove(key);
+        }
+        if (!cleanup.commit()) {
+            Log.w(TAG, "旧版配置明文清理失败");
+        }
+    }
+
+    private static boolean isLegacyConfigKey(String key) {
+        switch (key) {
+            case "server":
+            case "device_id":
+            case "device_token":
+            case "sync_enabled":
+            case "sync_wifi_only":
+            case "sync_interval_bits":
+            case "sync_folder":
+            case "sync_last_at":
+            case "sync_pending_second":
+            case "sync_pending_max_id":
+            case "sync_last_count":
+            case "sync_last_error":
+                return true;
+            default:
+                return false;
+        }
     }
 
     // ---- 服务器连接（扫码） ----

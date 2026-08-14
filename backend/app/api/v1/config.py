@@ -1,7 +1,7 @@
 """v1 配置路由（Onboarding 用）"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ...llm.manager import LLMConfig
 from ...schemas.config import LLMConfigIn
@@ -62,13 +62,17 @@ async def save_embeddings(body: dict, container=Depends(get_container)):
     """保存 embeddings 配置（云 API，如 Jina）。key 为空表示沿用现有。"""
     cfg = container.llm.load()
     if cfg is None:
-        from fastapi import HTTPException
         raise HTTPException(400, "LLM 未配置，请先完成 Onboarding")
     from ...llm.manager import EmbeddingConfig
     incoming_key = str(body.get("api_key") or "")
     key = incoming_key or (cfg.embeddings.api_key if cfg.embeddings else "")
+    provider = str(body.get("provider") or "jina")
+    if provider != "jina":
+        raise HTTPException(400, "当前仅支持 Jina embedding provider")
+    if not key:
+        raise HTTPException(400, "Embedding API Key 不能为空")
     new_emb = EmbeddingConfig(
-        provider=str(body.get("provider") or "jina"),
+        provider=provider,
         base_url=str(body.get("base_url") or "https://api.jina.ai/v1"),
         api_key=key,
         model=str(body.get("model") or "jina-embeddings-v3"),
@@ -77,4 +81,14 @@ async def save_embeddings(body: dict, container=Depends(get_container)):
     container.llm.save(cfg)
     # 测试连接（不阻塞保存）
     diag = await container.llm.get_embedding_provider().test_connection()
-    return {"ok": True, "saved": {"provider": new_emb.provider, "model": new_emb.model}, "test": diag}
+    task = None
+    if diag.get("ok"):
+        container.tasks.refresh_embedder()
+        job, _ = container.tasks.enqueue_rebuild(force=True, origin="embedding.config")
+        task = job.to_dict()
+    return {
+        "ok": True,
+        "saved": {"provider": new_emb.provider, "model": new_emb.model},
+        "test": diag,
+        "rebuild_task": task,
+    }

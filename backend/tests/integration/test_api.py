@@ -1,12 +1,12 @@
 """API 集成测试（pytest 风格）：验证 v1 路由 + Container 组装。"""
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.core.config import Settings
 from app.core.container import Container
 from app.main import create_app
@@ -214,6 +214,31 @@ def test_api_404_returns_json(client):
     r = c.get("/api/v1/definitely-not-exists")
     assert r.status_code == 404
     assert isinstance(r.json(), dict)
+
+
+def test_spa_fallback_blocks_path_traversal(tmp_path: Path, monkeypatch):
+    """静态资源回退不得通过编码路径逃出 frontend/out。"""
+    dist = tmp_path / "frontend" / "out"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<html>spa</html>", encoding="utf-8", newline="\n")
+    (dist / "asset.txt").write_text("public", encoding="utf-8", newline="\n")
+    (tmp_path / "secret.txt").write_text("private", encoding="utf-8", newline="\n")
+    monkeypatch.setattr(main_module, "_DIST", dist)
+
+    settings = Settings(
+        app_env="test",
+        backend_dir=tmp_path,
+        system_dir=Path("system"),
+        data_dir=Path("data"),
+    )
+    app = main_module.create_app(Container(settings))
+    with TestClient(app) as c:
+        assert c.get("/asset.txt").text == "public"
+        assert c.get("/client/route").text == "<html>spa</html>"
+        assert c.get("/api").status_code == 404
+        assert c.get("/%2e%2e/%2e%2e/secret.txt").status_code == 404
+        assert c.get("/..%2f..%2fsecret.txt").status_code == 404
+        assert c.get("/..%5c..%5csecret.txt").status_code == 404
 
 
 def test_files_path_traversal_blocked(client):

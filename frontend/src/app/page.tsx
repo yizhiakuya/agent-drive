@@ -5,6 +5,7 @@ import FilePanel from "@/components/files/FilePanel";
 import FilePage from "@/components/files/FilePage";
 import SessionList from "@/components/sessions/SessionList";
 import SettingsPage from "@/components/settings/SettingsPage";
+import TaskPage from "@/components/tasks/TaskPage";
 import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -17,6 +18,7 @@ import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
 import { EV, emitFilesChanged, emitRefresh } from "@/lib/events";
+import { Folder, ListChecks, MessageSquare, Settings } from "lucide-react";
 
 function SkeletonScreen() {
   return (
@@ -164,22 +166,26 @@ export default function Home() {
     </>;
 
   const NAV = [
-    { key: "chat", label: "💬 对话" },
-    { key: "files", label: "📁 文件" },
-    { key: "settings", label: "⚙️ 设置" },
+    { key: "chat", label: "对话", icon: MessageSquare },
+    { key: "files", label: "文件", icon: Folder },
+    { key: "tasks", label: "任务", icon: ListChecks },
+    { key: "settings", label: "设置", icon: Settings },
   ] as const;
 
   return (
     <div className="flex flex-col h-screen">
       <PullToRefresh onRefresh={() => refreshAllRef.current()} />
       <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 border-b border-border bg-panel gap-2">
-        <div className="font-bold text-base sm:text-lg whitespace-nowrap">🦋 Agent Drive</div>
-        <nav className="flex gap-0.5 sm:gap-1 flex-1 justify-center">
+        <div className="font-bold text-base sm:text-lg whitespace-nowrap">🦋 <span className="max-[359px]:sr-only">Agent Drive</span></div>
+        <nav className="flex min-w-0 gap-0.5 sm:gap-1 flex-1 justify-center">
           {NAV.map((n) => (
             <button key={n.key}
-                    className={`px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs sm:text-sm cursor-pointer transition-all whitespace-nowrap ${tab === n.key ? "bg-accent text-white font-semibold" : "text-text hover:bg-card"}`}
+                    title={n.label}
+                    aria-label={n.label}
+                    className={`h-10 min-w-10 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm cursor-pointer transition-all whitespace-nowrap inline-flex items-center justify-center gap-1.5 ${tab === n.key ? "bg-accent text-white font-semibold" : "text-text hover:bg-card"}`}
                     onClick={() => setTab(n.key)}>
-              {n.label}
+              <n.icon className="size-4" />
+              <span className="hidden min-[430px]:inline">{n.label}</span>
             </button>
           ))}
         </nav>
@@ -195,6 +201,7 @@ export default function Home() {
         </main>
       )}
       {tab === "files" && <main className="flex flex-1 overflow-hidden"><FilePage /></main>}
+      {tab === "tasks" && <main className="flex flex-1 overflow-hidden"><TaskPage /></main>}
       {tab === "settings" && <main className="flex flex-1 overflow-hidden"><SettingsPage /></main>}
       <ToastStack />
     </div>

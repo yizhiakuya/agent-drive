@@ -1,8 +1,6 @@
 """v1 文件路由"""
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -78,7 +76,9 @@ async def upload(container=Depends(get_container), file: UploadFile = File(...),
     if md5:
         hit = container.upload_index.lookup(md5)
         if hit:
-            return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}, "indexed": None}
+            job, _ = container.tasks.enqueue_index(hit["path"], origin="upload.dedupe", priority=30)
+            indexed = {"task_id": job.id, "status": job.status} if job else None
+            return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}, "indexed": indexed}
 
     data = await _read_limited(file, container.settings.max_upload_mb * 1024 * 1024)
     if noclobber:
@@ -95,13 +95,8 @@ async def upload(container=Depends(get_container), file: UploadFile = File(...),
         info = st.save_bytes(rel, data)
     if md5:
         container.upload_index.record(md5, rel, info["size"])
-    # M2a：上传即解析（尽力而为，失败不影响上传）。extract 是 CPU/IO 重操作（PDF/OCR），
-    # 放线程池执行，避免阻塞事件循环影响其它请求
-    indexed = None
-    try:
-        indexed = await asyncio.to_thread(container.ingest.extract, rel)
-    except Exception:
-        pass
+    job, _ = container.tasks.enqueue_index(rel, origin="upload", priority=30)
+    indexed = {"task_id": job.id, "status": job.status} if job else None
     return {"uploaded": info, "indexed": indexed}
 
 
@@ -134,10 +129,7 @@ async def upload_share(container=Depends(get_container), file: UploadFile = File
         candidate = f"{base}-{i}.{ext}" if ext else f"{base}-{i}"
         i += 1
     st.save_bytes(candidate, data)
-    try:
-        await asyncio.to_thread(container.ingest.extract, candidate)  # 线程池：不阻塞事件循环
-    except Exception:
-        pass
+    container.tasks.enqueue_index(candidate, origin="share", priority=30)
     return RedirectResponse(url=f"/?shared={candidate}", status_code=303)
 
 

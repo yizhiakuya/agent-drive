@@ -8,7 +8,7 @@ import { Capacitor } from "@capacitor/core";
 import { V1, authHeaders, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
-import { EV } from "@/lib/events";
+import { EV, emitTasksChanged } from "@/lib/events";
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -63,8 +63,16 @@ export default function SettingsPage() {
     setMsg(null);
     setSaving("emb");
     try {
-      const d = await saveEmbeddings(embForm) as { ok?: boolean; test?: { ok: boolean; dimensions?: number; error?: string } };
-      if (d.ok) setMsg({ kind: "ok", text: `✅ 向量化已保存 · 连接: ${d.test?.ok ? `ok(${d.test.dimensions}维)` : d.test?.error}` });
+      const d = await saveEmbeddings(embForm) as {
+        ok?: boolean;
+        test?: { ok: boolean; dimensions?: number; error?: string };
+        rebuild_task?: { id: string } | null;
+      };
+      if (d.ok) {
+        const suffix = d.rebuild_task ? " · 索引重建已进入后台" : "";
+        setMsg({ kind: "ok", text: `✅ 向量化已保存 · 连接: ${d.test?.ok ? `ok(${d.test.dimensions}维)` : d.test?.error}${suffix}` });
+        if (d.rebuild_task) emitTasksChanged();
+      }
       else setMsg({ kind: "error", text: JSON.stringify(d) });
       load();
     } catch (e) { setMsg({ kind: "error", text: String(e) }); }

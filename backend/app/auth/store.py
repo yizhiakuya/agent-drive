@@ -22,7 +22,9 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -35,6 +37,10 @@ RATE_LIMIT = 5
 RATE_WINDOW = 60.0
 PAIRING_TTL_SECONDS = 300  # 配对码 5 分钟有效
 PAIRING_MAX_OUTSTANDING = 3  # 最多 3 个未使用配对码
+
+
+class AuthStoreLoadError(RuntimeError):
+    """认证配置存在但无法安全加载。"""
 
 
 def hash_password(password: str, salt: str | None = None, iterations: int = PBKDF2_ITERATIONS) -> str:
@@ -62,16 +68,27 @@ class AuthStore:
             return
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                self._data = {"device_tokens": {}, "pairings": {}, **data}
-        except (json.JSONDecodeError, OSError):
-            pass  # 坏文件：按未初始化处理，不阻塞启动
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            raise AuthStoreLoadError(f"认证配置损坏或不可读，拒绝按未初始化状态启动: {self._path}") from exc
+        if not isinstance(data, dict):
+            raise AuthStoreLoadError(f"认证配置必须是 JSON 对象，拒绝按未初始化状态启动: {self._path}")
+        self._data = {"device_tokens": {}, "pairings": {}, **data}
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{self._path.name}.", suffix=".tmp", dir=self._path.parent)
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(self._data, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            tmp.chmod(0o600)
+            tmp.replace(self._path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
     # ---- 密码 ----
     def is_initialized(self) -> bool:

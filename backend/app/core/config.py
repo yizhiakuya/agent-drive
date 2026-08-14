@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     max_tool_output: int = 2000
     summarize_threshold: int = 12
 
+    # 持久后台任务。开发环境可随 API 内嵌运行；生产由独立 worker service 执行。
+    task_worker_enabled: bool = True
+    task_poll_seconds: float = 1.0
+    task_lease_seconds: float = 90.0
+    task_timezone: str = "Asia/Shanghai"
+
     # 上传大小上限（MB）：公网闸门是 nginx client_max_body_size 200m；
     # 后端上限兜底直连 8000 的滥用，超限返回 413
     max_upload_mb: int = 300

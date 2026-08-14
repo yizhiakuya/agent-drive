@@ -10,6 +10,7 @@ import os
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +20,22 @@ class LocalStorage:
         self.root = Path(root).resolve()  # 规范化根路径（防根路径含符号链接绕过）
         self.root.mkdir(parents=True, exist_ok=True)
         self.index: Any | None = None  # UploadIndex 可选挂载（container 组装后注入）
+        self._change_listeners: list[Callable[[str, list[str]], None]] = []
 
     def attach_index(self, index: Any) -> None:
         """挂载秒传索引：此后所有内容变更自动失效对应条目。"""
         self.index = index
+
+    def attach_change_listener(self, listener: Callable[[str, list[str]], None]) -> None:
+        """Register a best-effort observer for index/task lifecycle updates."""
+        self._change_listeners.append(listener)
+
+    def _notify_change(self, event: str, *paths: str) -> None:
+        for listener in self._change_listeners:
+            try:
+                listener(event, list(paths))
+            except Exception:
+                pass
 
     def _index_forget(self, rel_path: str) -> None:
         """内容将被改变/移走：失效其秒传条目（索引失败不阻塞主流程）。"""
@@ -115,33 +128,45 @@ class LocalStorage:
             tmp.unlink(missing_ok=True)
         if existed and not exclusive:
             self._index_forget(rel_path)
-        return {"path": p.relative_to(self.root).as_posix(), "size": len(data)}
+        saved_path = p.relative_to(self.root).as_posix()
+        self._notify_change("write", saved_path)
+        return {"path": saved_path, "size": len(data)}
 
     def mkdir(self, rel_path: str) -> None:
         self.resolve(rel_path).mkdir(parents=True, exist_ok=True)
 
     def rename(self, src: str, dst: str) -> None:
         # POSIX rename 会覆盖 dst：两侧索引都失效（src 移走，dst 旧内容被替换）
-        self.resolve(src).rename(self.resolve(dst))
-        self._index_forget(src)
-        self._index_forget(dst)
+        source = self.resolve(src)
+        target = self.resolve(dst)
+        source_rel = source.relative_to(self.root).as_posix()
+        target_rel = target.relative_to(self.root).as_posix()
+        source.rename(target)
+        self._index_forget(source_rel)
+        self._index_forget(target_rel)
+        self._notify_change("rename", source_rel, target_rel)
 
     def move(self, src: str, dst_dir: str, overwrite: bool = False) -> None:
         p = self.resolve(src)
         target = self.resolve(dst_dir) / p.name
         if target.exists() and not overwrite:
             raise FileExistsError(f"目标已存在: {target.relative_to(self.root).as_posix()}（需 overwrite=true）")
+        source_rel = p.relative_to(self.root).as_posix()
+        target_rel = target.relative_to(self.root).as_posix()
         shutil.move(str(p), str(target))
-        self._index_forget(src)
-        self._index_forget(target.relative_to(self.root).as_posix())
+        self._index_forget(source_rel)
+        self._index_forget(target_rel)
+        self._notify_change("move", source_rel, target_rel)
 
     def delete(self, rel_path: str) -> None:
         p = self.resolve(rel_path)
+        normalized = p.relative_to(self.root).as_posix()
         if p.is_dir():
             shutil.rmtree(p)
         else:
             p.unlink()
-        self._index_forget(rel_path)
+        self._index_forget(normalized)
+        self._notify_change("delete", normalized)
 
     def exists(self, rel_path: str) -> bool:
         return self.resolve(rel_path).exists()
@@ -158,17 +183,18 @@ class LocalStorage:
         p = self.resolve(rel_path)
         if not p.exists():
             raise FileNotFoundError(rel_path)
-        dest = self.trash_root / rel_path
+        normalized = p.relative_to(self.root).as_posix()
+        dest = self.trash_root / normalized
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists():
             # 同名已存在：加时间戳后缀
-            dest = self.trash_root / f"{rel_path}.{int(time.time())}"
+            dest = self.trash_root / f"{normalized}.{int(time.time())}"
         shutil.move(str(p), str(dest))
-        self._index_forget(rel_path)  # 内容移入回收站：秒传条目失效
+        self._index_forget(normalized)  # 内容移入回收站：秒传条目失效
         # 记录元信息
-        meta_path = self.trash_root / f"{rel_path}.meta.json"
+        meta_path = self.trash_root / f"{normalized}.meta.json"
         meta = {
-            "path": rel_path,
+            "path": normalized,
             "trash_path": dest.relative_to(self.trash_root).as_posix(),
             "deleted_at": time.time(),
             "size": dest.stat().st_size if dest.is_file() else 0,
@@ -176,6 +202,7 @@ class LocalStorage:
         }
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        self._notify_change("trash", normalized)
         return meta
 
     def list_trash(self) -> list[dict[str, Any]]:
@@ -202,6 +229,7 @@ class LocalStorage:
         original.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(trash_path), str(original))
         (self.trash_root / f"{rel_path}.meta.json").unlink(missing_ok=True)
+        self._notify_change("restore", original.relative_to(self.root).as_posix())
         return {"restored": rel_path}
 
     def purge_trash(self, rel_path: str | None = None) -> dict[str, Any]:
@@ -256,8 +284,10 @@ class LocalStorage:
             f.write(content)
         if existed:
             self._index_forget(rel_path)  # 内容已变：旧 md5 失效
+        normalized = p.relative_to(self.root).as_posix()
+        self._notify_change("write", normalized)
         return {
-            "path": p.relative_to(self.root).as_posix(),
+            "path": normalized,
             "size": len(content.encode("utf-8")),
             "existed": existed,
             "action": "覆盖" if existed else "新建",
@@ -271,8 +301,10 @@ class LocalStorage:
         with open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write(content)
         self._index_forget(rel_path)  # 内容已变：旧 md5 失效
+        normalized = p.relative_to(self.root).as_posix()
+        self._notify_change("write", normalized)
         return {
-            "path": p.relative_to(self.root).as_posix(),
+            "path": normalized,
             "size": p.stat().st_size,
             "existed": existed,
             "action": "追加" if existed else "新建",
@@ -295,9 +327,11 @@ class LocalStorage:
             shutil.copy2(s_p, d_p)
         if d_p.exists() and overwrite:
             self._index_forget(dst)  # 目标旧内容被覆盖：失效其秒传条目
+        destination = d_p.relative_to(self.root).as_posix()
+        self._notify_change("copy", destination)
         return {
             "src": src,
-            "dst": d_p.relative_to(self.root).as_posix(),
+            "dst": destination,
             "is_dir": s_p.is_dir(),
         }
 

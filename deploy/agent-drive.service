@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent Drive - AI 个人网盘（单服务：FastAPI + 前端 SPA）
+Description=Agent Drive API and frontend SPA
 After=network-online.target
 Wants=network-online.target
 
@@ -14,6 +14,11 @@ StartLimitBurst=5
 StartLimitIntervalSec=60
 TimeoutStopSec=30
 Environment=PYTHONUNBUFFERED=1
+Environment=AGENT_DRIVE_APP_ENV=prod
+Environment=AGENT_DRIVE_TASK_WORKER_ENABLED=false
+EnvironmentFile=/etc/agent-drive/proxy.env
+# httpx must use the explicit HTTP(S) proxy. Never inherit a SOCKS ALL_PROXY.
+UnsetEnvironment=ALL_PROXY all_proxy
 
 # 纵深防御（仓库在 /root 下，降权 User= 会失去读写权限，保持 root + 能力受限）：
 UMask=077                 # 新建文件默认仅 owner 可读（含上传文件）

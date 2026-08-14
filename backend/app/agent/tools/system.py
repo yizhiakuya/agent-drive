@@ -8,7 +8,15 @@ from ...llm.manager import PROVIDER_LABELS, LLMConfig, LLMManager, ProviderType
 from .registry import ToolRegistry
 
 
-def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path=None, audit_fn=None, scheduler=None) -> None:
+def register_system_tools(
+    reg: ToolRegistry,
+    llm: LLMManager,
+    memory,
+    rules_path=None,
+    audit_fn=None,
+    scheduler=None,
+    tasks=None,
+) -> None:
     # ---------- 查看系统状态 ----------
     async def get_system_status() -> dict[str, Any]:
         cfg = llm.load()
@@ -38,6 +46,74 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
             ),
         ),
         get_system_status,
+        group="system",
+    )
+
+    # ============ 持久后台任务 ============
+    async def task_status(task_id: str) -> dict[str, Any]:
+        if tasks is None:
+            return {"ok": False, "error": "后台任务系统未启用"}
+        job = tasks.store.get(task_id)
+        if job is None:
+            return {"ok": False, "error": "任务不存在"}
+        return {"ok": True, "task": job.to_dict()}
+
+    reg.register(
+        ToolSpec(
+            "task_status",
+            "查看后台任务状态和进度",
+            {
+                "type": "object",
+                "properties": {"task_id": {"type": "string", "description": "任务 ID"}},
+                "required": ["task_id"],
+            },
+        ),
+        task_status,
+        group="system",
+    )
+
+    async def cancel_task(task_id: str) -> dict[str, Any]:
+        if tasks is None:
+            return {"ok": False, "error": "后台任务系统未启用"}
+        job = tasks.store.cancel(task_id)
+        if job is not None and job.type == "index.rebuild":
+            tasks.store.cancel_children(job.id)
+        return {"ok": job is not None, "task": job.to_dict() if job else None}
+
+    reg.register(
+        ToolSpec(
+            "cancel_task",
+            "取消一个仍在排队或执行中的后台任务",
+            {
+                "type": "object",
+                "properties": {"task_id": {"type": "string", "description": "任务 ID"}},
+                "required": ["task_id"],
+            },
+        ),
+        cancel_task,
+        level="yellow",
+        group="system",
+    )
+
+    async def rebuild_search_index(force: bool = False) -> dict[str, Any]:
+        if tasks is None:
+            return {"ok": False, "error": "后台任务系统未启用"}
+        job, created = tasks.enqueue_rebuild(force=force, origin="agent")
+        return {"ok": True, "queued": created, "task_id": job.id, "status": job.status}
+
+    reg.register(
+        ToolSpec(
+            "rebuild_search_index",
+            "后台重建全文与向量搜索索引",
+            {
+                "type": "object",
+                "properties": {
+                    "force": {"type": "boolean", "description": "是否强制重建已是最新的索引"},
+                },
+            },
+        ),
+        rebuild_search_index,
+        level="yellow",
         group="system",
     )
 
@@ -222,7 +298,7 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
             doc=(
                 "用途：手动触发规则自动执行（平时每天 03:30 自动运行）。\n"
                 "参数：无。\n"
-                "输出：{ok, rules, steps, elapsed_ms} 或 {skipped}。\n"
+                "输出：{ok, queued, task_id, status}，实际执行在后台任务中完成。\n"
                 "注意：自动执行只做整理类动作（移动/重命名/复制/建文件夹/写文件），"
                 "严禁删除，执行报告写入 notes/自动化报告-*.md。"
             ),
@@ -235,7 +311,12 @@ def register_system_tools(reg: ToolRegistry, llm: LLMManager, memory, rules_path
         """查看最近一次自动执行结果"""
         if scheduler is None:
             return {"enabled": False}
-        return {"enabled": True, "last_run": scheduler.last_run}
+        latest = tasks.store.latest_by_type("automation.run") if tasks is not None else None
+        return {
+            "enabled": True,
+            "last_run": scheduler.last_run,
+            "current_task": latest.to_dict() if latest and latest.status not in {"succeeded", "failed", "cancelled"} else None,
+        }
 
     reg.register(
         ToolSpec(

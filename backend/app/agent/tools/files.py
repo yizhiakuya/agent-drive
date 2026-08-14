@@ -15,7 +15,7 @@ from ...storage.local import LocalStorage
 from .registry import ToolRegistry
 
 
-def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -> None:
+def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None, tasks=None) -> None:
     # ============ 🟢 查询 ============
     async def list_files(path: str = "") -> list[dict[str, Any]]:
         return storage.list_dir(path)
@@ -293,26 +293,24 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -
         """语义搜索（M2b，向量相似度）"""
         if ingest is None or ingest.embedder is None:
             return [{"error": "未配置 embedding（请在对话中说：帮我配置向量化，用 Jina）"}]
+        stats = ingest.vector_stats()
+        if stats["vector_files"] == 0 and stats["missing_vectors"] > 0 and tasks is not None:
+            job, created = tasks.enqueue_rebuild(origin="semantic_search")
+            return [{
+                "status": "indexing",
+                "task_id": job.id,
+                "queued": created,
+                "message": f"搜索索引尚未就绪，已在后台处理 {stats['missing_vectors']} 个文件",
+            }]
         results = await ingest.semantic_search(query, limit)
-        # 自动向量化未索引的文件（首次搜索时兜底，递归遍历）
-        if not any(r.get("score", 0) > 0.3 for r in results):
-            files_to_index: list[str] = []
-
-            def walk(d: str):
-                for item in storage.list_dir(d):
-                    if item["is_dir"]:
-                        walk(item["path"])
-                    elif item["path"].lower().endswith((".txt", ".md", ".pdf", ".png", ".jpg", ".jpeg")):
-                        files_to_index.append(item["path"])
-
-            walk("")
-            for f in files_to_index:
-                try:
-                    ingest.extract(f)
-                    await ingest.embed_file(f)
-                except Exception:
-                    pass
-            results = await ingest.semantic_search(query, limit)
+        if not results and stats["missing_vectors"] > 0 and tasks is not None:
+            job, created = tasks.enqueue_rebuild(origin="semantic_search")
+            return [{
+                "status": "indexing",
+                "task_id": job.id,
+                "queued": created,
+                "message": "当前索引未命中，已在后台补齐缺失文件",
+            }]
         return results
 
     reg.register(

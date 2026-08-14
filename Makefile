@@ -12,7 +12,7 @@ help:
 	@echo "  make clean         清理缓存"
 
 install:
-	cd backend && pip install -r requirements.txt && pip install pytest
+	cd backend && pip install -e ".[dev]"
 	cd frontend && npm install
 
 dev-backend:
@@ -23,8 +23,9 @@ dev-frontend:
 
 test:
 	cd frontend && npm test
+	cd backend && python3 -m pytest tests/unit -q
 	cd backend && python3 -m pytest tests/integration -q
-	@for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes test_ingest_m2; do \
+	@for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do \
 		echo "== $$t =="; \
 		(cd backend && python3 tests/unit/$$t.py) || exit 1; \
 	done

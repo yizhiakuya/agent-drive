@@ -78,6 +78,9 @@ export async function api<T = unknown>(path: string, options: RequestInit = {}):
     cache.clear(); // 写操作：清空 GET 缓存，保证下次读取是新鲜数据
     return doFetch<T>(path, options);
   }
+  if (options.cache === "no-store") {
+    return doFetch<T>(path, options);
+  }
   const hit = cache.get(path);
   if (hit && Date.now() - hit.at < GET_TTL_MS) {
     return hit.value as T;

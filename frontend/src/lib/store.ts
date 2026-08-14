@@ -1,7 +1,7 @@
 "use client";
 import { create } from "zustand";
 
-type Tab = "chat" | "files" | "settings";
+type Tab = "chat" | "files" | "tasks" | "settings";
 export type AuthMode = "loading" | "setup" | "login" | "ready" | "rescan"; // rescan=原生 App 待扫码授权
 
 interface AppState {

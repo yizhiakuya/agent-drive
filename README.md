@@ -11,6 +11,8 @@
 - **技能包**：可插拔 Skills（周报生成器/文件整理器），read_skill 按需加载
 - **意图路由**：闲聊走轻量路径（更快更省），任务走完整 Loop
 - **重试与退避**：LLM/工具瞬态错误指数退避重试，永久错误立即失败
+- **持久后台任务**：SQLite WAL 队列 + 独立 Worker，支持租约恢复、去重、进度、取消、重试、父子任务和定时计划
+- **任务中心**：网页/PWA 通过 SSE、Android App 通过轮询查看索引与自动化进度，可手动重建向量索引
 - **工具分级安全**：查询自动 / 低风险写自动 / 高风险写需确认
 - **审计日志**：Agent 每一步操作都可回放
 - **记忆系统**：用户偏好 + 多会话 + 跨会话摘要
@@ -27,6 +29,9 @@ cd backend
 pip install -e ".[dev]"            # pyproject 为依赖唯一真相源（dev 组含 pytest/ruff/mypy）
 python -m uvicorn app.main:app --port 8000
 ```
+
+开发环境默认由 API 进程内嵌执行后台任务。生产环境设置
+`AGENT_DRIVE_TASK_WORKER_ENABLED=false`，并单独运行 `python -m app.tasks.worker`；systemd 配置见 `deploy/`。
 
 ### 2. 启动前端（Next.js 16）
 
@@ -58,29 +63,30 @@ App 与 PWA 均为客户端：AI 配置只在网页端进行（App 内不提供 
 ```
 agent-drive/
 ├── docs/                        # 架构/Agent定义/前端架构/安卓端/质量报告/审查记录
-├── deploy/                      # nginx 部署配置（HTTPS 13311）+ systemd 单元（8000 仅回环+沙箱加固）+ 每日备份 timer
+├── deploy/                      # nginx + API/Worker systemd 单元 + HTTP(S) 代理模板 + 每日一致性备份
 ├── backend/
 │   ├── app/
 │   │   ├── main.py              # 入口：create_app() + 托管前端静态(SPA)
 │   │   ├── core/                # config/logging/errors/container/retry
 │   │   ├── auth/                # 认证：密码/会话令牌/设备令牌/配对码（store.py）
 │   │   ├── devices/             # 设备注册表（devices.json）
-│   │   ├── api/v1/              # auth/chat/config/files/sessions/automation/devices
+│   │   ├── api/v1/              # auth/chat/config/files/sessions/automation/devices/tasks
 │   │   ├── agent/               # loop/prompt/router/skills/onboarding/
 │   │   │   │                    #   scheduler(自动化)/confirm/context/
 │   │   │   ├── tools/           # files/system/analytics/plan/memory
 │   │   │   └── memory/          # preferences/sessions
 │   │   ├── llm/                 # base/manager/embeddings/providers(3协议)
 │   │   ├── storage/             # base/local（回收站 .trash）+ upload_index（秒传去重）
-│   │   └── ingest/              # pipeline（PDF/OCR 摄入+向量索引）
+│   │   ├── ingest/              # pipeline（PDF/OCR 摄入+版本化向量索引）
+│   │   └── tasks/               # SQLite 队列/store、runner、handler、任务服务与独立 Worker
 │   ├── tests/                   # unit 13 套（pytest 收集 5 + 脚本直跑 8）+ integration pytest
 │   ├── scripts/                 # benchmark_real.py / mock_llm.py / backup.sh
 │   └── pyproject.toml           # 依赖唯一真相源
 ├── frontend/                    # Next.js 16 + Tailwind + TS + zustand
 │   └── src/
 │       ├── app/                 # layout/page + globals.css(主题)
-│       ├── components/          # chat/ files/ sessions/ settings/ onboarding/ auth(登录·扫码)· PullToRefresh
-│       └── lib/                 # store/events/format + api(6模块) + native(插件桥)
+│       ├── components/          # chat/files/tasks/sessions/settings/onboarding/auth + PullToRefresh
+│       └── lib/                 # store/events/format + api + native(插件桥)
 ├── frontend/android/           # Capacitor 原生壳（扫码连接 + 相册自动同步 + 后台任务）
 ├── Makefile                     # install/dev/test/bench/build
 └── docker-compose.yml           # db(pgvector)+redis+backend+frontend
@@ -107,7 +113,7 @@ make bench          # 真实 LLM 可靠性基准
 ```bash
 cd backend
 ruff check app/                              # lint
-python -m pytest tests/unit -q               # pytest 单测（auth/设备/秒传索引/存储安全/ingest）
+python -m pytest tests/unit -q               # pytest 单测（auth/设备/存储/ingest/任务队列）
 python -m pytest tests/integration -q        # API 集成测试
 # 遗留脚本式单测（8 套，逐一直跑；CI 同款）
 for t in test_agent test_critic test_reliability test_retry \
@@ -137,8 +143,8 @@ python scripts/mock_llm.py &                 # Mock LLM (端口 9999)
 ## 🗺️ 路线图
 
 - **M1** ✅：三协议 LLM + Onboarding + Agent 对话 + 基础文件管理
-- **M2** ✅：摄入管线（PDF/OCR）+ 语义搜索（Jina 云向量）+ 全文检索 + 文档问答
-- **M3** ✅：规则自动执行（每天 03:30）+ 主动汇报 + 回收站
+- **M2** ✅：摄入管线（PDF/OCR）+ 版本化 Jina 向量（原子发布）+ 全文检索 + 文档问答
+- **M3** ✅：持久任务系统 + 每日规则自动执行 + 主动汇报 + 回收站维护
 - **M4 候选**：音视频转写 / 文件关系图谱 / 知识图谱问答 / 推送通知
 - **安全与多端** ✅：全站认证（密码/扫码配对/设备令牌）+ 安卓原生壳 + 相册自动同步（去重/断点/进度）+ 设备列表 + APK 下载
 - **安卓客户端** ✅：Capacitor 原生壳（frontend/android）——web UI 原样打包 + 原生插件桥：扫码连接服务器、相册自动同步（WorkManager 后台任务）、通知（见 docs/android.md）

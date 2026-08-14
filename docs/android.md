@@ -38,8 +38,11 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 - 事件驱动：MediaStore ContentObserver 拍照触发快速同步（1 秒防抖合并连拍，周期任务兜底）；查询 SQL LIMIT 不 COUNT 全量统计
 - 断网中止（1.0.23 起）：连接失败/401/403/5xx 整批中止 + 退避重试（不再逐张串行超时）；单张 4xx 跳过继续
 - 权限判定只看图片读取权限：通知权限被拒不算同步失败（仅失去进度通知）
-- 令牌与配置加密存储：服务器地址/设备令牌/同步设置存 EncryptedSharedPreferences；`allowBackup=false` 防云备份恢复克隆令牌；旧版明文数据首次启动自动迁移并清空
-- 进度可视：App 内进度块（实时事件）+ 通知栏进度条；全局下拉刷新（App/PWA 通用）
+- 令牌与配置加密存储：服务器地址/设备令牌/同步设置存 EncryptedSharedPreferences；`allowBackup=false` 防云备份恢复克隆令牌；旧版明文迁移只复制应用配置键，跳过 AndroidX 内部 keyset，并在加密写入成功后逐项清理旧明文
+- 1.0.24：修复旧版明文配置迁移在 Android 16 上因误处理 AndroidX 保留键导致的启动崩溃
+- 1.0.25：文件页手机工具栏改为 3×2、44px 触控网格；320px 极窄屏隐藏品牌文字但保留图标与无障碍名称，修复标题竖排、设置入口被截断和整页横向滚动；viewport 使用 Next.js 16 独立导出
+- 1.0.26：新增「后台任务」页，展示文件索引、批量重建、维护与自动化任务的状态/进度/错误，支持取消、失败重试和手动重建索引；原生 App 每 5 秒携带 Bearer 令牌轮询，web/PWA 使用 Cookie SSE
+- 相册同步进度可视：App 内进度块（实时事件）+ 通知栏进度条；全局下拉刷新（App/PWA 通用）
 
 ## 三、已完成的（有效资产）
 
@@ -53,6 +56,7 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 | 原生壳工程 | ✅ frontend/android（Capacitor 7 + AGP 8.7.3 + Gradle 8.14.3 wrapper），含 ServerConfig/PhotoSync 插件、扫码页、相册同步 Worker |
 | web 端二维码 | ✅ 设置页「连接手机 App」卡片（qrcode 生成 agentdrive://connect?server=当前origin） |
 | **设备列表** | ✅ App 启动/回前台/同步完成时 POST /api/v1/devices/register 心跳登记；web 设置页「🖥️ 设备列表」实时显示（名称/型号/版本/活跃时间/相册同步状态），可移除；存储 backend/system/devices.json |
+| **后台任务中心** | ✅ 任务列表/索引覆盖率/Worker 在线状态；取消与重试；向量配置保存后自动入队重建，上传和相册同步后的内容解析不阻塞请求 |
 | 签名 keystore | 服务器 /root/agent-drive-android/agentdrive.keystore（alias=agentdrive，密码见服务器本地 README.txt，不入 git） |
 
 ## 四、构建（Windows 本机）

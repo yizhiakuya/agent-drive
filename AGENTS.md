@@ -49,13 +49,13 @@ cd frontend/android && gradlew.bat assembleRelease
 
 1. **推送**：`git push origin main`（remote = github.com/yizhiakuya/agent-drive）
 2. **服务器同步**：`ssh megumin "cd /root/projects/agent-drive && git pull"`；
-   后端有改动再 `systemctl restart agent-drive.service`（纯前端改动无需重启）
+   后端/任务代码有改动重启 `agent-drive.service agent-drive-worker.service`（纯前端改动无需重启）。首次安装或 unit 变更还要复制 `deploy/agent-drive*.service` 到 `/etc/systemd/system/` 后 `systemctl daemon-reload`；`/etc/agent-drive/proxy.env` 从 `deploy/proxy.env.example` 创建、chmod 0600，并确认只含 HTTP(S) 代理
 3. **前端产物**：`tar -cf out.tar -C out .` → scp → 服务器 out.new 解包 → 原子替换 out/。
    ⚠️ 不要用 PowerShell 通配符 `out\*` scp——会漏掉点开头的目录（.well-known/assetlinks.json）；tar 全量打包是安全做法
 4. **发布 APK**：拷贝 app-release.apk → `out/app/agent-drive.apk` → 随前端一起部署。
    下载地址恒定：https://home.rainaki.top:13311/app/agent-drive.apk；
    ⚠️ APK 不要放进 public/（会被 cap sync 嵌套打包进 App 自身资源）
-5. **数据备份**：deploy/agent-drive-backup.{service,timer} 已在服务器安装启用（每日 04:00，/root/backups 轮转 7 份）；改备份策略改 deploy/ + scripts/backup.sh 后需同步到服务器
+5. **数据备份**：deploy/agent-drive-backup.{service,timer} 已在服务器安装启用（每日 04:00，/root/backups 轮转 7 份）；`tasks.sqlite3` 必须经 Python sqlite3 backup API 生成一致快照，禁止直接打包活动中的 WAL 三件套
 
 ## 4. 关键约定与坑位（改动前必读）
 
@@ -65,35 +65,47 @@ cd frontend/android && gradlew.bat assembleRelease
 - **上传接口约定**：`path` 是查询参数；`md5`（秒传去重）与 `noclobber`（同名自动序号）是表单字段；multipart 文件 part 名为 `file`
 - **MediaStore DATE_ADDED 是秒级**：`lastSyncAt` 只推进到「整秒全部成功」的秒；同秒有失败/未取完挂 `pendingSecond+pendingMaxId`（_ID 水位）续传。勿改回严格 `> 检查点` + 单张推进的旧实现——同秒失败张、单秒超 200 张会永久丢失（1.0.22 修复）
 - **去重索引**：`system/upload-index.json`（md5→路径）；内容变更（改名/移动/删除/覆盖）自动失效（`storage.attach_index` 反向注入），lookup 时文件不在则自愈兜底
+- **持久任务库**：`system/tasks.sqlite3`（SQLite WAL + 0600）是唯一任务状态源；生产 API 必须 `AGENT_DRIVE_TASK_WORKER_ENABLED=false`，由独立 `agent-drive-worker.service` 执行；开发环境才允许 API 内嵌 Worker
+- **任务状态机**：只经 `JobStore` 做 queued/running/retry_wait/cancelling/terminal 迁移；领取使用租约+心跳，租约过期必须遵守 max_attempts；停机 release 遇到 cancel_requested 必须落为 cancelled，勿留下不可领取的 queued 任务
+- **任务去重与进度**：活跃 dedupe_key 由 SQLite 部分唯一索引保证；相同进度不重复写事件；无游标 SSE 从事件尾部订阅，勿回放全库。终态历史每日保留至少最近 2000 条并清理 30 天前旧记录；子任务仍保留时不得先删父任务
+- **索引任务链**：文件写/移动/删除先同步失效旧全文与向量，再由 `storage.attach_change_listener` 入队 `index.file`；全量重建是 `index.rebuild` 父任务 + index lane 子任务，禁止在上传请求或 Agent 工具内串行跑 OCR/embedding
+- **任务中心口径**：列表/状态计数只算顶层任务，子任务汇总进父任务；`vector_stats` 是全盘扫描，任务总览必须保留 15 秒缓存，文件变更或 embedding 指纹变化时在本进程失效
+- **向量有效性**：全文元数据记录 source_revision + extractor_version；向量元数据记录 source_revision + embedding fingerprint + chunk_version。文档用 `retrieval.passage`、查询用 `retrieval.query`；`.npy` 与 metadata 分别原子发布，读取必须同时校验，旧格式/模型切换自动视为失效
 - **同步检查点**：整秒完成后才写 `lastSyncAt`（每轮一次）；失败不阻塞整批，Worker 按 lastError 退避重试
 - **noclobber 原子独占**：`save_bytes(..., exclusive=True)` 用 os.link 原子不覆盖 + 端点重试改名；web 覆盖上传走原子 replace
 - **resolve 拒绝符号链接**：组件级检查（业务从不产生 symlink），下载/预览/上传共用
-- **设备令牌加密存储**：EncryptedSharedPreferences(AES256-GCM/SIV，MasterKey 在 Keystore) + `allowBackup=false`；旧明文自动迁移清空；勿改回明文
+- **设备令牌加密存储**：EncryptedSharedPreferences(AES256-GCM/SIV，MasterKey 在 Keystore) + `allowBackup=false`；旧明文迁移只处理应用配置键，跳过 AndroidX 保留 keyset，并在加密提交成功后逐项清理，勿对同一底层 prefs 调用 clear()；勿改回明文
 - **显式编码**：backend/app 全部 read_text/write_text/open 显式 `encoding="utf-8"`；用户可编辑记忆文件用 `preferences._read_tolerant`（utf-8→gbk→latin-1）容错读；`write_text` 固定 `newline="\n"`（Windows 不转 CRLF）
 - **CI（GitHub Actions）**：backend = ruff + mypy(非阻断) + integration + unit(pytest) + 8 个遗留脚本直跑；frontend = vitest + build。新增测试一律 pytest 风格（自动被收集）
+- **Vitest ESM 配置**：使用 `vitest.config.mts` + `import.meta.url` 解析别名；勿改回含 ESM 语法的 `.ts`/CommonJS 加载方式（未来 Vite native config loader 不支持）
 - **上传大小上限**：`max_upload_mb=300`（后端 413；公网闸门仍是 nginx 200m）——直连 8000 的滥用兜底
 - **健康检查**：`/api/v1/health` 公开豁免（探活用，不泄露业务信息）
 - **审计日志轮转**：1MB 轮转保留 5 份历史（logging.MAX_BACKUPS），勿改回只留 1 份
-- **限速内存态**：仅适用单 worker 部署（现部署即单进程）；check_rate 已做过期 key 清理（>1000 触发全量清扫）
+- **限速内存态**：仅适用单 API 进程部署（独立任务 Worker 不承载 HTTP）；check_rate 已做过期 key 清理（>1000 触发全量清扫）
 - **API Key 掩码只显前缀**（绝不回显尾部）；agent-config.json 写入 chmod 0600
+- **认证配置失败关闭**：已有 `system/auth.json` 损坏、编码错误、非 JSON 对象或不可读时必须抛 `AuthStoreLoadError` 拒绝启动并保留原文件；勿静默当作未初始化（会重开首设密码造成接管）。正常保存用 0600 安全临时文件 + fsync + 原子 replace
 - **同步断网中止**：SyncEngine 连接失败/401/403/5xx 抛 AbortBatchException 整批中止（勿改回 200 张串行超时）；单张 4xx 跳过继续；中止时当前秒组同样挂 pending 续传
 - **观察者防抖**：ContentObserver 1 秒防抖（连拍/批量导入合并成一次快速同步），勿去掉 debounceHandler
 - **通知权限非致命**：相册权限判定只看 READ_MEDIA_IMAGES/READ_EXTERNAL_STORAGE（通知被拒不算失败）
 - **错误语义化**：files.py 用 `_friendly()` 映射 404/409/403（透传 HTTPException），勿改回 `except Exception → 400`
 - **/api 404 保持 JSON**：main.py SPA fallback 对 `api/` 前缀返回 JSON 404，前端不再拿到 HTML
-- **extract 移出事件循环**：上传端点的 ingest.extract 走 `asyncio.to_thread`（PDF/OCR 不阻塞其它请求）
+- **SPA 静态文件边界**：main.py `_resolve_dist_path` 拒绝 `..` 路径段，并要求 resolve 后仍在 `frontend/out` 内；越界返回 JSON 404，勿改回 `_DIST / full_path` 直接读取
+- **extract 不进请求路径**：上传只持久化并入队；`index.file` handler 用 `asyncio.to_thread(ingest.extract)` 跑 PDF/OCR，勿改回上传端点同步摄入
+- **生产代理边界**：API/Worker 都读 `/etc/agent-drive/proxy.env` 的 HTTP(S) proxy；systemd 用 `UnsetEnvironment=ALL_PROXY all_proxy` 阻止 SOCKS 继承。Jina 在服务器直连会超时，勿移除
 - **前端 GET 去重**：client.ts 对 GET 做 in-flight 合并 + 15s TTL 缓存；非 GET 自动清缓存（勿移除：改文件后列表会陈旧）
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
+- **移动端文件工具栏**：`<640px` 保持 3×2、44px 高触控网格；`<360px` 顶栏只视觉隐藏 Agent Drive 文字（保留无障碍文本），320/407px 必须无横向滚动
+- **Next viewport**：Next.js 16 在 `layout.tsx` 用独立 `export const viewport: Viewport`；勿放回 `metadata.viewport`（构建会警告并可能被忽略）
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
-- **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
+- **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:tasks-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
 
 ## 5. 安全红线（勿破坏）
 
 - 除 `/api/v1/health` 与 `auth/status|setup|login|logout|pair-exchange` 外，**全部 /api/v1 走 get_owner 鉴权**（Cookie / Bearer session|device / 媒体 ?token= 三通道）
 - 密码 PBKDF2 只存哈希；设备令牌/配对码服务端只存 SHA-256；配对码一次性 5 分钟
-- `system/auth.json` 删除 = 重置认证；8000 端口必须只绑 127.0.0.1（见 deploy/agent-drive.service）
+- `system/auth.json` 删除 = 显式重置认证；文件存在但损坏必须失败关闭，禁止隐式重置；8000 端口必须只绑 127.0.0.1（见 deploy/agent-drive.service）
 - 密钥不进 git：*.keystore、keystore.properties、keystore 密码（仓库外 D:\ds\agent-drive-keystore\）
 - 移除设备 = 吊销令牌；重扫配对 = 吊销旧令牌换新
 
@@ -103,10 +115,10 @@ cd frontend/android && gradlew.bat assembleRelease
 - [ ] 全量门禁：backend unit + integration + vitest 全绿再提交
 - [ ] 版本号 +1（涉及 App 行为/资源变更时）
 - [ ] 同步文档 + 本 skill：README / docs/* 相应小节 / AGENTS.md（铁律 §0，同一次提交内完成）
-- [ ] 提交并推送 → 服务器 git pull（+ 需要时 restart）→ 前端 tar 部署 / APK 发布
+- [ ] 提交并推送 → 服务器 git pull（后端同时 restart API+Worker）→ 前端 tar 部署 / APK 发布
 
 ## 7. 环境事实
 
 - 本机（Windows）：JDK 21（Temurin）、Android SDK `C:\Android\Sdk`（build-tools 35 + platform 35）、Gradle `C:\Android\gradle-8.14.3`
-- 服务器：`ssh megumin`，仓库 `/root/projects/agent-drive`，服务 `agent-drive.service`（uvicorn 127.0.0.1:8000），nginx 13311 单入口
+- 服务器：`ssh megumin`，仓库 `/root/projects/agent-drive`，服务 `agent-drive.service`（uvicorn 127.0.0.1:8000）+ `agent-drive-worker.service`（无监听端口），nginx 13311 单入口；HTTP 代理 127.0.0.1:7890
 - keystore：服务器 `/root/agent-drive-android/agentdrive.keystore`（密码在本地 `D:\ds\agent-drive-keystore\password.txt`）

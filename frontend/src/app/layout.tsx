@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,7 +11,13 @@ export const metadata: Metadata = {
     statusBarStyle: "default",
   },
   icons: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
-  viewport: { width: "device-width", initialScale: 1, maximumScale: 1, viewportFit: "cover" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
 };
 
 function SWRegister() {

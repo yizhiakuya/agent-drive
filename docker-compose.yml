@@ -1,5 +1,5 @@
 # Agent Drive 服务编排（预留参考，生产未使用）
-# 生产部署 = systemd 单服务（deploy/agent-drive.service）+ nginx 13311 + frontend/out 静态托管
+# 生产部署 = systemd API + 独立任务 Worker + nginx 13311 + frontend/out 静态托管
 # - db/redis：M3 语义索引规模化时的候选；backend 目前【不读取】DATABASE_URL/REDIS_URL
 # - backend/frontend 镜像：历史产物，未随最新架构维护
 services:
@@ -28,7 +28,7 @@ services:
       args:
         http_proxy: ${HTTP_PROXY:-http://127.0.0.1:7890}
         https_proxy: ${HTTPS_PROXY:-http://127.0.0.1:7890}
-    # M2 阶段为文件存储（data/ + system/ 卷），db/redis 供 M3 语义索引启用
+    # 备用容器形态仍由 API 内嵌任务 Worker；生产使用 deploy/ 下的双 service。
     # depends_on: [db, redis]
     environment:
       DATABASE_URL: postgresql+asyncpg://agent:agent@db:5432/agentdrive

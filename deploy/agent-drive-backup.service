@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent Drive 数据备份（data/ + system/ → /root/backups 轮转7天）
+Description=Agent Drive data and consistent task database backup
 After=network-online.target
 
 [Service]

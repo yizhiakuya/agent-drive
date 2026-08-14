@@ -3,6 +3,7 @@ export const EV = {
   filesChanged: "agent-drive:files-changed",
   toast: "agent-drive:toast",
   refresh: "agent-drive:refresh",
+  tasksChanged: "agent-drive:tasks-changed",
 } as const;
 
 export interface ToastDetail {
@@ -21,4 +22,8 @@ export function emitToast(detail: ToastDetail) {
 /** 全局刷新信号（下拉刷新触发）：各面板监听后重新拉取数据 */
 export function emitRefresh() {
   window.dispatchEvent(new CustomEvent(EV.refresh));
+}
+
+export function emitTasksChanged() {
+  window.dispatchEvent(new CustomEvent(EV.tasksChanged));
 }

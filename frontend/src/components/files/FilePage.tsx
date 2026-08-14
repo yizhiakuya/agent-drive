@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { listFiles, uploadFile, getFileInfo, renameFile, moveFile, copyFile, mkdir,
   deleteToTrash, listTrash, restoreFromTrash, emptyTrash, FileInfo, fileRawUrl, fileDownloadUrl } from "@/lib/api/files";
 import { fmtSize } from "@/lib/format";
-import { EV, emitToast, emitFilesChanged } from "@/lib/events";
+import { EV, emitToast, emitFilesChanged, emitTasksChanged } from "@/lib/events";
 
 export default function FilePage() {
   const [path, setPath] = useState("");
@@ -44,8 +44,9 @@ export default function FilePage() {
   async function doUpload(file: File) {
     setUploading(true);
     try {
-      await uploadFile(file, path);
-      emitToast({ kind: "ok", text: `已上传 ${file.name}` });
+      const result = await uploadFile(file, path);
+      if (result.indexed?.task_id) emitTasksChanged();
+      emitToast({ kind: "ok", text: `已上传 ${file.name}，内容将在后台处理` });
       load(path);
     } catch (e) {
       emitToast({ kind: "error", text: `上传失败: ${e}` });
@@ -151,22 +152,22 @@ export default function FilePage() {
       }}
     >
       <div className="flex-1 flex flex-col min-w-0 p-3 gap-2">
-        <div className="flex justify-between items-center">
-          <b className="text-sm">📁 文件</b>
-          <span className="flex gap-1.5 items-center">
-            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}>⬆ 上级</button>
-            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <b className="text-sm whitespace-nowrap">📁 文件</b>
+          <span className="grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center">
+            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}><span aria-hidden="true">⬆</span> 上级</button>
+            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
                     onClick={() => fileRef.current?.click()} disabled={uploading}>
-              {uploading ? <><span className="inline-block w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow align-middle" /> 上传中</> : "⬆ 上传"}
+              {uploading ? <><span className="inline-block w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow align-middle" /> 上传中</> : <><span aria-hidden="true">⬆</span> 上传</>}
             </button>
-            <button className="bg-accent text-white text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={() => load(path)} title="刷新">🔄</button>
-            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer sm:hidden" title="拍照上传"
-                    onClick={() => cameraRef.current?.click()}>📷</button>
-            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer" title="新建文件夹"
-                    onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}>📁+</button>
-            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer" title="回收站"
-                    onClick={openTrash}>♻️</button>
+            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer" onClick={() => load(path)} title="刷新" aria-label="刷新"><span aria-hidden="true">🔄</span><span className="sm:hidden">刷新</span></button>
+            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 py-1.5 rounded-lg cursor-pointer sm:hidden" title="拍照上传" aria-label="拍照上传"
+                    onClick={() => cameraRef.current?.click()}><span aria-hidden="true">📷</span><span>拍照</span></button>
+            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer" title="新建文件夹" aria-label="新建文件夹"
+                    onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}><span aria-hidden="true">📁+</span><span className="sm:hidden">新建</span></button>
+            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer" title="回收站" aria-label="回收站"
+                    onClick={openTrash}><span aria-hidden="true">♻️</span><span className="sm:hidden">回收站</span></button>
           </span>
           <input ref={fileRef} type="file" style={{ display: "none" }}
                  onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />

@@ -1,9 +1,33 @@
-"""认证存储单测：设密/验密/会话令牌/设备令牌/限速。"""
+"""认证存储单测：持久化/设密/验密/会话令牌/设备令牌/限速。"""
 from __future__ import annotations
+
+import os
+import stat
 
 import pytest
 
-from app.auth.store import AuthStore
+from app.auth.store import AuthStore, AuthStoreLoadError
+
+
+def test_auth_file_is_secure_and_stably_formatted(tmp_path):
+    path = tmp_path / "auth.json"
+    AuthStore(path)
+
+    assert path.read_bytes().endswith(b"\n")
+    assert list(tmp_path.glob(".auth.json.*.tmp")) == []
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("contents", [b"{broken", b"[]", b'"text"', b"\xff"])
+def test_corrupt_auth_file_fails_closed_and_is_preserved(tmp_path, contents):
+    path = tmp_path / "auth.json"
+    path.write_bytes(contents)
+
+    with pytest.raises(AuthStoreLoadError, match="拒绝按未初始化状态启动"):
+        AuthStore(path)
+
+    assert path.read_bytes() == contents
 
 
 def test_setup_and_verify(tmp_path):

@@ -3,7 +3,6 @@
 用法: python3 tests/unit/test_ingest_m2.py
 """
 import asyncio
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -112,10 +111,14 @@ class FakeEmbedder:
     """Jina 云 API 打桩：字符集向量（共享字符多 ⇒ 相似度高，模拟 embedding 语义近似）"""
     def __init__(self):
         self.calls = 0
+        self.tasks = []
+        self.base_url = "https://embedding.invalid/v1"
+        self.model = "fake-v1"
         self.vocab = "租赁合同租房协议预算计划"
 
     async def embed(self, texts, task="text-matching"):
         self.calls += 1
+        self.tasks.append(task)
         vecs = []
         for t in texts:
             chars = set(t.lower())
@@ -144,6 +147,8 @@ def test_embed_and_semantic_search():
         hits = await ing.semantic_search("租房合同", limit=3)
         assert hits and hits[0]["path"] == "docs/租赁协议.txt", hits
         assert hits[0]["score"] > 0
+        assert "retrieval.passage" in embedder.tasks
+        assert "retrieval.query" in embedder.tasks
         # 无向量文件不崩溃
         st2_hits = await ing.semantic_search("预算")
         assert st2_hits[0]["path"] == "docs/预算表.txt"
@@ -153,6 +158,11 @@ def test_embed_and_semantic_search():
     # 统计
     stats = ing.stats()
     assert stats["indexed_files"] >= 2
+    assert stats["vectors"]["vector_files"] == 2
+
+    # 模型切换后旧向量不可继续使用
+    embedder.model = "fake-v2"
+    assert ing.is_vector_current("docs/租赁协议.txt") is False
 
 
 def test_embed_requires_provider():

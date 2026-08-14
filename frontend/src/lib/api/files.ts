@@ -1,5 +1,5 @@
 // 文件 API（补全：info/raw 走封装，组件不再绕层）
-import { api, apiPath, getDeviceToken } from "./client";
+import { api, apiPath, authHeaders, getDeviceToken } from "./client";
 
 export interface FileItem {
   name: string;
@@ -19,20 +19,30 @@ export interface FileInfo {
   indexed: { method: string; chars: number } | null;
 }
 
+export interface UploadResponse {
+  uploaded: { path: string; size: number; deduped?: boolean };
+  indexed: { task_id: string; status: string } | null;
+}
+
 export const listFiles = (path = "") =>
   api<{ path: string; items: FileItem[]; disk: { used: number; total: number; free: number } | null }>(
     `/files?path=${encodeURIComponent(path)}`,
   );
 
-export const uploadFile = async (file: File, path = "") => {
+export const uploadFile = async (file: File, path = ""): Promise<UploadResponse> => {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(apiPath(`/files/upload?path=${encodeURIComponent(path)}`), {
     method: "POST",
     body: form,
+    credentials: "include",
+    headers: authHeaders(),
   });
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("agent-drive:unauthorized"));
+  }
   if (!res.ok) throw new Error("上传失败");
-  return res.json();
+  return res.json() as Promise<UploadResponse>;
 };
 
 export const mkdir = (path: string) =>
