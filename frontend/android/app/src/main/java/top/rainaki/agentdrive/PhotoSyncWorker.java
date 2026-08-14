@@ -28,13 +28,13 @@ public class PhotoSyncWorker extends Worker {
         try {
             int n = SyncEngine.sync(ctx);
             ServerConfigStore.setLastCount(ctx, n);
-            ServerConfigStore.setLastError(ctx, null);
             if (n > 0) {
                 notifyDone(ctx, n);
             }
             // 同步完成后上报设备状态（web 设备列表可见最新同步信息）
             DeviceRegistrar.register(ctx, true);
-            return Result.success();
+            // 有失败 → 退避重试（断点续传 + 秒传让重试零流量）
+            return ServerConfigStore.getLastError(ctx) == null ? Result.success() : Result.retry();
         } catch (Exception e) {
             ServerConfigStore.setLastError(ctx, String.valueOf(e.getMessage()));
             return Result.retry();

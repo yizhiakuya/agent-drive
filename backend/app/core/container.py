@@ -21,6 +21,7 @@ from ..agent.tools.system import register_system_tools
 from ..ingest.pipeline import IngestPipeline
 from ..llm.manager import LLMManager
 from ..storage.local import LocalStorage
+from ..storage.upload_index import UploadIndex
 from .config import Settings, get_settings
 from .logging import AuditLogger, setup_logging
 
@@ -38,6 +39,8 @@ class Container:
         # ---- 领域服务 ----
         self.llm = LLMManager(self.settings.system_path / "agent-config.json")
         self.storage = LocalStorage(self.settings.data_path)
+        # 上传去重索引（秒传）：挂 storage 以便校验条目是否过期
+        self.upload_index = UploadIndex(self.settings.system_path / "upload-index.json", storage=self.storage)
         # Agent 工作空间：网盘内的 Agent/ 目录（记忆/角色/笔记都在文件空间，用户可见可编辑）
         agent_ws = self.storage.resolve("Agent")
         agent_ws.mkdir(parents=True, exist_ok=True)

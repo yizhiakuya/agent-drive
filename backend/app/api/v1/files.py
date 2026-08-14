@@ -1,7 +1,7 @@
 """v1 文件路由"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..deps import get_container
@@ -18,12 +18,45 @@ async def list_files(container=Depends(get_container), path: str = ""):
         raise HTTPException(400, str(e))
 
 
+def _unique_path(st, rel: str) -> str:
+    """同名冲突自动加序号：name.jpg → name-2.jpg → name-3.jpg …"""
+    from pathlib import PurePosixPath
+
+    p = PurePosixPath(rel)
+    stem, suffix = p.stem, p.suffix
+    candidate = rel
+    i = 2
+    while st.exists(candidate):
+        candidate = str(p.with_name(f"{stem}-{i}{suffix}"))
+        i += 1
+    return candidate
+
+
 @router.post("/upload")
-async def upload(container=Depends(get_container), file: UploadFile = File(...), path: str = ""):
+async def upload(container=Depends(get_container), file: UploadFile = File(...),
+                 path: str = "", md5: str = Form(""), noclobber: bool = Form(False)):
+    """上传。path 走查询参数（web 同款）；md5/noclobber 为表单字段（相册同步专用）。
+
+    - md5：内容去重（秒传）——命中且文件仍在则跳过传输与索引
+    - noclobber：同名冲突自动加序号（不覆盖）；web 上传不传此字段，保持覆盖语义
+    """
     st = container.storage
+    filename = file.filename or "未命名"
+    rel = f"{path.strip('/')}/{filename}".lstrip("/") if path else filename
+
+    # 秒传：内容去重命中 → 直接返回已有文件
+    if md5:
+        hit = container.upload_index.lookup(md5)
+        if hit:
+            return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}, "indexed": None}
+
+    if noclobber and st.exists(rel):
+        rel = _unique_path(st, rel)
+
     data = await file.read()
-    rel = f"{path.strip('/')}/{file.filename}".lstrip("/") if path else file.filename
     info = st.save_bytes(rel, data)
+    if md5:
+        container.upload_index.record(md5, rel, info["size"])
     # M2a：上传即解析（尽力而为，失败不影响上传）
     indexed = None
     try:

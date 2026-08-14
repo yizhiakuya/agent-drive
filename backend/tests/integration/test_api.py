@@ -126,6 +126,29 @@ def test_status_not_configured(client):
     assert r.json()["configured"] is False
 
 
+def test_upload_dedup_and_noclobber(client):
+    """秒传（md5 去重）与同名冲突自动加序号。"""
+    c, _ = client
+    # 首次上传（带 md5 + noclobber）
+    r = c.post("/api/v1/files/upload?path=相册同步/2026-08-14",
+               files={"file": ("IMG_0001.jpg", b"photo-bytes", "image/jpeg")},
+               data={"md5": "d41d8cd98f00b204e9800998ecf8427e", "noclobber": "true"})
+    assert r.status_code == 200
+    assert r.json()["uploaded"]["path"] == "相册同步/2026-08-14/IMG_0001.jpg"
+    # 同内容再传（不同名）→ 秒传命中，不落新文件
+    r2 = c.post("/api/v1/files/upload?path=相册同步/2026-08-14",
+                files={"file": ("别的名字.jpg", b"photo-bytes", "image/jpeg")},
+                data={"md5": "d41d8cd98f00b204e9800998ecf8427e"})
+    assert r2.status_code == 200
+    assert r2.json()["uploaded"].get("deduped") is True
+    # 同名不同内容 + noclobber → 自动 -2 序号，不覆盖
+    r3 = c.post("/api/v1/files/upload?path=相册同步/2026-08-14",
+                files={"file": ("IMG_0001.jpg", b"other-bytes", "image/jpeg")},
+                data={"md5": "aabbccdd11223344556677889900aabb", "noclobber": "true"})
+    assert r3.status_code == 200
+    assert r3.json()["uploaded"]["path"] == "相册同步/2026-08-14/IMG_0001-2.jpg"
+
+
 def test_files_upload_and_list(client):
     c, _ = client
     # 上传

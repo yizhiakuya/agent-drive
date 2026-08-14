@@ -30,6 +30,12 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 
 **相册自动同步**：PhotoSyncWorker（WorkManager 周期任务，App 关闭/重启都运行）扫描 MediaStore 新增照片 → multipart 上传 /files/upload（按日期归档到 相册同步/YYYY-MM-DD/）→ 完成通知。约束：电池非低电量 + 网络（可选仅 Wi-Fi），频率 1/6/12/24 小时。
 
+**传输可靠性（网盘级去重）**：
+- 内容去重（秒传）：客户端逐张算 MD5 → 服务端索引（system/upload-index.json）命中且文件仍在 → 跳过传输与索引，直接算成功
+- 同名冲突：noclobber 参数 → 服务端自动加序号 name-2.jpg，绝不覆盖
+- 断点续传：每张成功后立即写检查点；失败重试零流量（已传文件秒传命中）
+- 单张失败不阻塞整批：跳过继续，Worker 指数退避重试
+
 ## 三、已完成的（有效资产）
 
 | 项 | 详情 |

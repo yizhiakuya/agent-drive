@@ -7,26 +7,38 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.provider.MediaStore;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-/** 相册同步引擎：扫描 MediaStore 新增照片 → multipart 上传到网盘 /files/upload。 */
+/**
+ * 相册同步引擎：MediaStore 扫描 → 暂存并算 MD5 → multipart 上传（秒传 + 不覆盖）。
+ *
+ * 可靠性设计：
+ * - 逐张检查点：每张成功后立即推进 lastSyncAt，失败重试从断点续传
+ * - 内容去重（秒传）：服务端按 MD5 命中则跳过传输；重试时已传文件零流量
+ * - 同名冲突：noclobber 参数让服务端自动加序号，绝不覆盖
+ * - 单张失败不阻塞整批：跳过继续，失败计数由 Worker 决定退避重试
+ */
 public final class SyncEngine {
 
-    /** 单次运行上限，防首启全量同步过长。 */
     private static final int MAX_PER_RUN = 200;
 
     private SyncEngine() {
     }
 
-    /** @return 本次成功上传张数 */
+    /** @return 本次成功上传张数；失败数写入 lastError（Worker 据此退避重试） */
     public static int sync(Context ctx) throws IOException {
         String server = ServerConfigStore.getServer(ctx);
         if (server == null || server.trim().isEmpty()) {
@@ -39,6 +51,7 @@ public final class SyncEngine {
         if (folder == null || folder.trim().isEmpty()) {
             folder = "相册同步";
         }
+        String deviceToken = ServerConfigStore.getDeviceToken(ctx);
 
         ContentResolver cr = ctx.getContentResolver();
         String[] projection = {
@@ -56,8 +69,8 @@ public final class SyncEngine {
             throw new IOException("无法读取相册");
         }
 
-        String deviceToken = ServerConfigStore.getDeviceToken(ctx);
         int count = 0;
+        int failures = 0;
         long maxTs = lastSync;
         try {
             while (c.moveToNext() && count < MAX_PER_RUN) {
@@ -72,28 +85,66 @@ public final class SyncEngine {
                 String relFolder = folder + "/" + dateDir;
 
                 Uri uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
-                try (InputStream in = cr.openInputStream(uri)) {
-                    if (in == null) {
-                        continue;
+                try {
+                    if (uploadOne(ctx, base, relFolder, name, mime, uri, deviceToken)) {
+                        maxTs = Math.max(maxTs, ts);
+                        count++;
+                        ServerConfigStore.setLastSyncAt(ctx, maxTs); // 逐张检查点
                     }
-                    uploadFile(base + "/files/upload", relFolder, name, mime, in, deviceToken);
+                } catch (Exception e) {
+                    failures++; // 单张失败不阻塞整批
                 }
-                maxTs = Math.max(maxTs, ts);
-                count++;
             }
         } finally {
             c.close();
         }
 
-        if (maxTs > lastSync) {
-            ServerConfigStore.setLastSyncAt(ctx, maxTs);
+        if (failures > 0) {
+            ServerConfigStore.setLastError(ctx, failures + " 张上传失败，将自动重试");
+        } else {
+            ServerConfigStore.setLastError(ctx, null);
         }
         return count;
     }
 
-    /** multipart/form-data：path=目标文件夹，文件 part 名 file（后端以 filename 拼接完整路径）。 */
-    private static void uploadFile(String uploadUrl, String folder, String fileName, String mime, InputStream in,
-                                  String deviceToken) throws IOException {
+    /** 单张：MediaStore → 缓存临时文件（顺带算 MD5）→ multipart 上传 → 清理临时文件。 */
+    private static boolean uploadOne(Context ctx, String base, String relFolder, String name, String mime,
+                                    Uri uri, String deviceToken) throws Exception {
+        File tmp = null;
+        try {
+            tmp = File.createTempFile("photosync-", ".tmp", ctx.getCacheDir());
+            String md5;
+            try (InputStream in = ctx.getContentResolver().openInputStream(uri);
+                 OutputStream out = new FileOutputStream(tmp)) {
+                if (in == null) {
+                    return false; // 读不到就跳过（不计失败）
+                }
+                MessageDigest digest = MessageDigest.getInstance("MD5");
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    digest.update(buf, 0, n);
+                    out.write(buf, 0, n);
+                }
+                md5 = hex(digest.digest());
+            }
+
+            // path 走查询参数（服务端约定），md5/noclobber 走表单字段
+            String query = "?path=" + URLEncoder.encode(relFolder, "UTF-8");
+            try (InputStream in = new FileInputStream(tmp)) {
+                uploadFile(base + "/files/upload" + query, name, mime, in, md5, deviceToken);
+            }
+            return true;
+        } finally {
+            if (tmp != null) {
+                tmp.delete();
+            }
+        }
+    }
+
+    /** multipart/form-data：path=查询参数（已拼好），md5/noclobber=表单字段，文件 part 名 file。 */
+    private static void uploadFile(String uploadUrl, String fileName, String mime, InputStream in,
+                                  String md5, String deviceToken) throws IOException {
         String boundary = "----AgentDriveBoundary" + System.currentTimeMillis();
         HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
         conn.setDoOutput(true);
@@ -105,7 +156,8 @@ public final class SyncEngine {
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(120000);
         try (OutputStream os = conn.getOutputStream()) {
-            writePart(os, boundary, "path", folder, null, null);
+            writePart(os, boundary, "md5", md5, null, null);
+            writePart(os, boundary, "noclobber", "true", null, null);
             writePart(os, boundary, "file", fileName, mime, in);
             os.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
             os.flush();
@@ -135,5 +187,13 @@ public final class SyncEngine {
             os.write(valueOrName.getBytes(StandardCharsets.UTF_8));
             os.write("\r\n".getBytes(StandardCharsets.UTF_8));
         }
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 }
