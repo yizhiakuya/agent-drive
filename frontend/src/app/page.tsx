@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import ChatPanel from "@/components/chat/ChatPanel";
 import FilePanel from "@/components/files/FilePanel";
 import FilePage from "@/components/files/FilePage";
@@ -7,6 +7,7 @@ import SessionList from "@/components/sessions/SessionList";
 import SettingsPage from "@/components/settings/SettingsPage";
 import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
+import PullToRefresh from "@/components/PullToRefresh";
 import { getStatus, getConfig } from "@/lib/api/config";
 import LoginCard from "@/components/auth/LoginCard";
 import RescanCard from "@/components/auth/RescanCard";
@@ -15,6 +16,7 @@ import { V1, ApiError, authHeaders, ensureBase, getDeviceToken } from "@/lib/api
 import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
+import { EV, emitFilesChanged, emitRefresh } from "@/lib/events";
 
 function SkeletonScreen() {
   return (
@@ -47,6 +49,7 @@ export default function Home() {
   const setAuthMode = useAppStore((s) => s.setAuthMode);
   const setConfigured = useAppStore((s) => s.setConfigured);
   const setModelName = useAppStore((s) => s.setModelName);
+  const bumpSessions = useAppStore((s) => s.bumpSessions);
 
   useEffect(() => {
     // 会话过期（任意 API 返回 401）→ web 回登录页；原生 App 回重扫码页（令牌被吊销）
@@ -78,6 +81,15 @@ export default function Home() {
     }
     boot();
   }, []);
+
+  // 全局刷新：重新走认证+状态 → 广播给各面板（会话/文件/设置/设备/同步卡片）
+  const refreshAllRef = useRef<() => Promise<void>>(async () => {});
+  refreshAllRef.current = async () => {
+    await boot();
+    bumpSessions();
+    emitFilesChanged();
+    emitRefresh();
+  };
 
   async function boot() {
     try {
@@ -159,6 +171,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen">
+      <PullToRefresh onRefresh={() => refreshAllRef.current()} />
       <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 border-b border-border bg-panel gap-2">
         <div className="font-bold text-base sm:text-lg whitespace-nowrap">🦋 Agent Drive</div>
         <nav className="flex gap-0.5 sm:gap-1 flex-1 justify-center">

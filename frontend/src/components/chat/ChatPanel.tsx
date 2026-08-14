@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { chatStream } from "@/lib/api/chat";
 import { V1, authHeaders } from "@/lib/api/client";
 import { getSession, summarizeSession } from "@/lib/api/sessions";
-import { emitFilesChanged } from "@/lib/events";
+import { EV, emitFilesChanged } from "@/lib/events";
 import { ToolStep } from "./ToolStep";
 import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
@@ -125,6 +125,15 @@ export default function ChatPanel() {
       } catch { /* 忽略 */ }
     })();
   }, [messages.length === 0 ? sessionId : sessionId]);
+
+  // 全局刷新（下拉刷新）：重载当前会话消息
+  useEffect(() => {
+    const h = () => {
+      if (sessionId) loadSession(sessionId);
+    };
+    window.addEventListener(EV.refresh, h);
+    return () => window.removeEventListener(EV.refresh, h);
+  }, [sessionId]);
 
   useEffect(() => {
     if (sessionId !== sidRef.current) {

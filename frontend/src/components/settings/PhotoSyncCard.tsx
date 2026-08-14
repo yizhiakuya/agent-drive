@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PhotoSync, PhotoSyncStatus, SyncProgress } from "@/lib/native/photo-sync";
+import { EV } from "@/lib/events";
 
 const INTERVALS = [1, 6, 12, 24];
 
@@ -38,9 +39,12 @@ export default function PhotoSyncCard() {
         if (s.running) setProgress(s);
       } catch { /* 忽略 */ }
     }, 2000);
+    const h = () => load(); // 全局刷新
+    window.addEventListener(EV.refresh, h);
     return () => {
       handle?.remove().catch(() => {});
       clearInterval(timer);
+      window.removeEventListener(EV.refresh, h);
     };
   }, [native]);
 

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { getDevices, removeDevice, DeviceInfo } from "@/lib/api/devices";
+import { EV } from "@/lib/events";
 
 function relTime(ts: number): string {
   const diff = Math.max(0, Date.now() / 1000 - ts);
@@ -39,7 +40,9 @@ export default function DevicesCard() {
   useEffect(() => {
     load();
     timer.current = setInterval(load, 30000); // 30s 轮询
-    return () => { if (timer.current) clearInterval(timer.current); };
+    const h = () => load(); // 全局刷新
+    window.addEventListener(EV.refresh, h);
+    return () => { if (timer.current) clearInterval(timer.current); window.removeEventListener(EV.refresh, h); };
   }, []);
 
   async function rm(id: string) {

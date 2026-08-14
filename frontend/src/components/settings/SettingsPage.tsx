@@ -8,6 +8,7 @@ import { Capacitor } from "@capacitor/core";
 import { V1, authHeaders, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
+import { EV } from "@/lib/events";
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -40,6 +41,11 @@ export default function SettingsPage() {
     }
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const h = () => load(); // 全局刷新
+    window.addEventListener(EV.refresh, h);
+    return () => window.removeEventListener(EV.refresh, h);
+  }, []);
 
   async function saveLlm() {
     setMsg(null);
