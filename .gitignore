@@ -25,3 +25,8 @@ htmlcov/
 backend/.coverage
 frontend/coverage/
 *.egg-info/
+
+# Next.js
+.next/
+out/
+*.tsbuildinfo

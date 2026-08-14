@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+/* Agent Drive 灰白 light 主题（设计 token 与旧 styles.css 一致） */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --card: #f0f1f5;
+  --border: #dde1e8;
+  --text: #23293a;
+  --muted: #7a8194;
+  --accent: #4f6ef7;
+  --accent-soft: #e8ecff;
+  --accent2: #0891b2;
+  --danger: #dc2626;
+  --danger-soft: #fde8e8;
+  --success: #15803d;
+  --success-soft: #e3f6ec;
+  --warn: #b45309;
+  --warn-soft: #fef3c7;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent2: var(--accent2);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --font-sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --animate-slide-in: slide-in 0.2s ease;
+  --animate-fade-in: fade-in 0.3s ease;
+
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pulse {
+    50% { opacity: 0.4; }
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes float {
+    50% { transform: translateY(-6px); }
+  }
+  @keyframes shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* 保留少量组件级动画（Tailwind 动画类之外的） */
+.animate-pulse-soft { animation: pulse 1.2s infinite; }
+.animate-spin-slow { animation: spin 0.8s linear infinite; }
+.animate-float { animation: float 3s ease-in-out infinite; }
+.animate-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+/* Markdown 渲染样式（复用旧设计） */
+.markdown-body { line-height: 1.7; font-size: 14px; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 0.5em 0; font-weight: 700; }
+.markdown-body h1 { font-size: 1.3em; }
+.markdown-body h2 { font-size: 1.15em; }
+.markdown-body h3 { font-size: 1.05em; }
+.markdown-body p { margin: 0.4em 0; }
+.markdown-body ul, .markdown-body ol { padding-left: 1.4em; margin: 0.4em 0; }
+.markdown-body code { background: var(--card); padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+.markdown-body pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow: auto; margin: 0.6em 0; }
+.markdown-body pre code { background: none; padding: 0; }
+.markdown-body table { border-collapse: collapse; margin: 0.6em 0; }
+.markdown-body td, .markdown-body th { border: 1px solid var(--border); padding: 4px 10px; }
+.markdown-body blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); margin: 0.5em 0; }

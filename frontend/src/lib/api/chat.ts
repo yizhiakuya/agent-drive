@@ -1,19 +1,30 @@
-// 对话 API（含流式 SSE）
-import { api } from "./client.js";
+// 对话 API：聚合 + SSE 流式（含跨 chunk 缓冲）
+import { api, apiPath } from "./client";
 
-export const chat = (message, history, sessionId, confirmations = []) => api("/chat", {
+export interface ChatEvent {
+  event: "text" | "tool_start" | "tool_trace" | "done" | "error";
+  data: Record<string, unknown>;
+}
+
+export const chat = (
+  message: string,
+  history: { role: string; content: string }[],
+  sessionId: string | null,
+  confirmations: Record<string, unknown>[] = [],
+) => api("/chat", {
   method: "POST",
   body: JSON.stringify({ message, history, session_id: sessionId, confirmations }),
 });
 
-/**
- * 流式对话：SSE 解析。
- * onEvent: (event, payload) => void
- *   event = "text" | "tool_trace" | "done" | "error"
- * 返回 Promise<donePayload>
- */
-export async function chatStream(message, history, sessionId, confirmations = [], onEvent, signal) {
-  const res = await fetch("/api/v1/chat/stream", {
+export async function chatStream(
+  message: string,
+  history: { role: string; content: string }[],
+  sessionId: string | null,
+  confirmations: Record<string, unknown>[],
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+  signal: AbortSignal,
+) {
+  const res = await fetch(apiPath("/chat/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, history, session_id: sessionId, confirmations }),
@@ -24,15 +35,14 @@ export async function chatStream(message, history, sessionId, confirmations = []
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let donePayload = null;
+  let donePayload: Record<string, unknown> | null = null;
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    // 按空行分隔 SSE 事件
     const parts = buffer.split("\n\n");
-    buffer = parts.pop(); // 保留未完成部分
+    buffer = parts.pop() ?? "";
     for (const part of parts) {
       const lines = part.split("\n");
       const evLine = lines.find((l) => l.startsWith("event:"));

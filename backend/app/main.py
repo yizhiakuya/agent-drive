@@ -17,7 +17,7 @@ from .core.container import Container
 from .core.errors import AppError
 
 # 前端构建产物（单服务部署：backend 同时托管 SPA）
-_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "out"
 
 
 def create_app(container: Container | None = None) -> FastAPI:

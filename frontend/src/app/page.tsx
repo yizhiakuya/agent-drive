@@ -1,0 +1,99 @@
+"use client";
+import { useEffect } from "react";
+import ChatPanel from "@/components/chat/ChatPanel";
+import FilePanel from "@/components/files/FilePanel";
+import FilePage from "@/components/files/FilePage";
+import SessionList from "@/components/sessions/SessionList";
+import SettingsPage from "@/components/settings/SettingsPage";
+import Onboarding from "@/components/onboarding/Onboarding";
+import ToastStack from "@/components/ToastStack";
+import { getStatus, getConfig } from "@/lib/api/config";
+import { useAppStore } from "@/lib/store";
+
+function SkeletonScreen() {
+  return (
+    <div className="flex flex-col h-screen">
+      <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-panel">
+        <div className="font-bold text-lg">🦋 Agent Drive</div>
+        <div className="skeleton w-24 h-6 rounded-full" />
+      </header>
+      <main className="flex flex-1 overflow-hidden">
+        <div className="w-60 border-r border-border bg-panel"><div className="skeleton m-3 h-10" /></div>
+        <section className="flex-1 p-5 flex flex-col gap-3.5">
+          <div className="skeleton w-3/5 h-10" />
+          <div className="skeleton w-2/5 h-10 self-end" />
+          <div className="skeleton w-4/5 h-10" />
+        </section>
+        <div className="w-80 border-l border-border bg-panel"><div className="skeleton m-3 h-52" /></div>
+      </main>
+    </div>
+  );
+}
+
+export default function Home() {
+  const loading = useAppStore((s) => s.loading);
+  const configured = useAppStore((s) => s.configured);
+  const tab = useAppStore((s) => s.tab);
+  const setTab = useAppStore((s) => s.setTab);
+  const modelName = useAppStore((s) => s.modelName);
+  const setLoading = useAppStore((s) => s.setLoading);
+  const setConfigured = useAppStore((s) => s.setConfigured);
+  const setModelName = useAppStore((s) => s.setModelName);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await getStatus() as { configured: boolean };
+        setConfigured(status.configured);
+        if (status.configured) {
+          try {
+            const cfg = await getConfig();
+            setModelName(cfg.llm?.model || "");
+          } catch { /* 忽略 */ }
+        }
+      } catch {
+        setConfigured(false);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [setConfigured, setLoading, setModelName]);
+
+  if (loading) return <SkeletonScreen />;
+  if (!configured) return <><Onboarding /><ToastStack /></>;
+
+  const NAV = [
+    { key: "chat", label: "💬 对话" },
+    { key: "files", label: "📁 文件" },
+    { key: "settings", label: "⚙️ 设置" },
+  ] as const;
+
+  return (
+    <div className="flex flex-col h-screen">
+      <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-panel">
+        <div className="font-bold text-lg">🦋 Agent Drive</div>
+        <nav className="flex gap-1 mx-4">
+          {NAV.map((n) => (
+            <button key={n.key}
+                    className={`px-3.5 py-1.5 rounded-lg text-sm cursor-pointer transition-all ${tab === n.key ? "bg-accent text-white font-semibold" : "text-text hover:bg-card"}`}
+                    onClick={() => setTab(n.key)}>
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="bg-success-soft text-success px-3 py-1 rounded-full text-xs" title={modelName}>🟢 {modelName || "Agent 已就绪"}</div>
+      </header>
+
+      {tab === "chat" && (
+        <main className="flex flex-1 overflow-hidden">
+          <SessionList />
+          <ChatPanel />
+          <FilePanel />
+        </main>
+      )}
+      {tab === "files" && <main className="flex flex-1 overflow-hidden"><FilePage /></main>}
+      {tab === "settings" && <main className="flex flex-1 overflow-hidden"><SettingsPage /></main>}
+      <ToastStack />
+    </div>
+  );
+}
