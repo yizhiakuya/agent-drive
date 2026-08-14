@@ -11,6 +11,7 @@ from ..agent.memory.preferences import MemoryStore
 from ..agent.memory.sessions import SessionStore
 from ..agent.onboarding import Onboarding
 from ..agent.skills import SkillsRegistry
+from ..devices.registry import DeviceRegistry
 from ..agent.tools.analytics import register_analytics_tools
 from ..agent.tools.files import register_file_tools
 from ..agent.tools.memory import register_memory_tools
@@ -41,6 +42,7 @@ class Container:
         agent_ws.mkdir(parents=True, exist_ok=True)
         self.memory = MemoryStore(agent_ws, migrate_from=self.settings.system_path)
         self.sessions = SessionStore(self.settings.sessions_path)
+        self.devices = DeviceRegistry(self.settings.system_path / "devices.json")
         self.onboarding = Onboarding(self.llm, self.memory)
         self.skills = SkillsRegistry(self.settings.backend_dir / "skills")
         self.ingest = IngestPipeline(self.storage, embedder=self.llm.get_embedding_provider())

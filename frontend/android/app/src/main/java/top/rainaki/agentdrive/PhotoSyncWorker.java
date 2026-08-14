@@ -32,6 +32,8 @@ public class PhotoSyncWorker extends Worker {
             if (n > 0) {
                 notifyDone(ctx, n);
             }
+            // 同步完成后上报设备状态（web 设备列表可见最新同步信息）
+            DeviceRegistrar.register(ctx, true);
             return Result.success();
         } catch (Exception e) {
             ServerConfigStore.setLastError(ctx, String.valueOf(e.getMessage()));

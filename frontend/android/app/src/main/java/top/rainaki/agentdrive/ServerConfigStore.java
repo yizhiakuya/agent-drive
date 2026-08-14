@@ -29,6 +29,16 @@ public final class ServerConfigStore {
         return s != null && !s.trim().isEmpty();
     }
 
+    // ---- 设备身份（首次生成，持久保存） ----
+    public static String getDeviceId(Context ctx) {
+        String id = prefs(ctx).getString("device_id", null);
+        if (id == null) {
+            id = java.util.UUID.randomUUID().toString();
+            prefs(ctx).edit().putString("device_id", id).apply();
+        }
+        return id;
+    }
+
     // ---- 相册同步设置 ----
     public static boolean isSyncEnabled(Context ctx) {
         return prefs(ctx).getBoolean("sync_enabled", false);

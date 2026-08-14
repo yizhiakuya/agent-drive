@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { getConfig, saveEmbeddings, configureLLM, testLLM } from "@/lib/api/config";
 import ConnectAppCard from "./ConnectAppCard";
+import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
 
 export default function SettingsPage() {
@@ -89,6 +90,7 @@ export default function SettingsPage() {
       </div>
 
       <ConnectAppCard />
+      <DevicesCard />
       <PhotoSyncCard />
 
       <div className="bg-panel border border-border rounded-xl p-4">

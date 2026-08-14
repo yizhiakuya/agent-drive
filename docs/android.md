@@ -41,6 +41,7 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 | assetlinks.json | frontend/public/.well-known/assetlinks.json（包名 top.rainaki.agentdrive，SHA256 8ef4635c…e90a94） |
 | 原生壳工程 | ✅ frontend/android（Capacitor 7 + AGP 8.7.3 + Gradle 8.14.3 wrapper），含 ServerConfig/PhotoSync 插件、扫码页、相册同步 Worker |
 | web 端二维码 | ✅ 设置页「连接手机 App」卡片（qrcode 生成 agentdrive://connect?server=当前origin） |
+| **设备列表** | ✅ App 启动/回前台/同步完成时 POST /api/v1/devices/register 心跳登记；web 设置页「🖥️ 设备列表」实时显示（名称/型号/版本/活跃时间/相册同步状态），可移除；存储 backend/system/devices.json |
 | 签名 keystore | 服务器 /root/agent-drive-android/agentdrive.keystore（alias=agentdrive，密码见服务器本地 README.txt，不入 git） |
 
 ## 四、构建（Windows 本机）

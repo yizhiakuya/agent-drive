@@ -44,6 +44,19 @@ export default function Home() {
   const setModelName = useAppStore((s) => s.setModelName);
 
   useEffect(() => {
+    // 原生 App：回前台/窗口聚焦时心跳，刷新服务器设备列表活跃时间
+    if (Capacitor.isNativePlatform()) {
+      const beat = () => { ServerConfig.heartbeat().catch(() => {}); };
+      window.addEventListener("visibilitychange", beat);
+      window.addEventListener("focus", beat);
+      return () => {
+        window.removeEventListener("visibilitychange", beat);
+        window.removeEventListener("focus", beat);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
     // 分享上传回跳提示
     const shared = new URLSearchParams(window.location.search).get("shared");
     if (shared) {

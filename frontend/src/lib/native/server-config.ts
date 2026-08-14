@@ -7,6 +7,8 @@ export interface ServerConfigPlugin {
   hasServer(): Promise<{ has: boolean }>;
   /** 原生端重新扫码连接：成功后自动保存并重载 web 界面 */
   rescan(): Promise<{ started: boolean }>;
+  /** 回前台心跳：刷新服务器设备列表的活跃时间 */
+  heartbeat(): Promise<{ sent: boolean }>;
 }
 
 export const ServerConfig = registerPlugin<ServerConfigPlugin>("ServerConfig");

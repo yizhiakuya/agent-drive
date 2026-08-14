@@ -4,12 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from ..deps import get_container
-from . import automation, chat, config, files, sessions
+from . import automation, chat, config, devices, files, sessions
 
 api_v1 = APIRouter(prefix="/api/v1")
 api_v1.include_router(automation.router)
 api_v1.include_router(chat.router)
 api_v1.include_router(config.router)
+api_v1.include_router(devices.router)
 api_v1.include_router(files.router)
 api_v1.include_router(sessions.router)
 

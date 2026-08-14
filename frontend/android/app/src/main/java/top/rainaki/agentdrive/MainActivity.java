@@ -32,6 +32,9 @@ public class MainActivity extends BridgeActivity {
         // 同步已启用时确保后台周期任务在册（App 更新/重启后仍有效）
         PhotoSyncWorker.ensureChannel(getApplicationContext());
         PhotoSyncScheduler.ensureScheduled(getApplicationContext());
+
+        // 设备登记（web 设备列表可见）；回前台心跳由前端 visibilitychange 触发 heartbeat()
+        DeviceRegistrar.register(getApplicationContext(), true);
     }
 
     @Override

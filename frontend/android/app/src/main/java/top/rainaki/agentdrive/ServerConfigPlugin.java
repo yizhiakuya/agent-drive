@@ -39,6 +39,15 @@ public class ServerConfigPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    /** 心跳：App 回前台时由前端触发，刷新 web 端设备列表的活跃时间。 */
+    @PluginMethod
+    public void heartbeat(PluginCall call) {
+        DeviceRegistrar.register(getContext(), true);
+        JSObject ret = new JSObject();
+        ret.put("sent", true);
+        call.resolve(ret);
+    }
+
     /** 重新扫码：打开原生扫码页，成功后 MainActivity 重载 web 界面。 */
     @PluginMethod
     public void rescan(PluginCall call) {
