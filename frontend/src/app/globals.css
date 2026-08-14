@@ -94,3 +94,17 @@ body {
 .markdown-body table { border-collapse: collapse; margin: 0.6em 0; }
 .markdown-body td, .markdown-body th { border: 1px solid var(--border); padding: 4px 10px; }
 .markdown-body blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); margin: 0.5em 0; }
+
+
+/* ============ PWA/移动端细节 ============ */
+/* 刘海屏安全区 */
+@supports (padding: max(0px)) {
+  .input-bar-safe, body { padding-bottom: env(safe-area-inset-bottom, 0px); }
+}
+
+/* 移动端触控目标 ≥44px */
+@media (max-width: 640px) {
+  button, .btn { min-height: 44px; }
+  .nav-tab, nav button { min-height: 40px; padding-left: 12px; padding-right: 12px; }
+  input, textarea { font-size: 16px !important; } /* 防 iOS 聚焦缩放 */
+}

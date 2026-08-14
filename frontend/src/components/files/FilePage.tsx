@@ -19,6 +19,7 @@ export default function FilePage() {
   const [action, setAction] = useState<{ type: string; item: { name: string; path: string; is_dir: boolean } } | null>(null);
   const [actionValue, setActionValue] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const pathRef = useRef("");
 
   const load = useCallback(async (p: string) => {
@@ -160,12 +161,16 @@ export default function FilePage() {
               {uploading ? <><span className="inline-block w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow align-middle" /> 上传中</> : "⬆ 上传"}
             </button>
             <button className="bg-accent text-white text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={() => load(path)} title="刷新">🔄</button>
+            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer sm:hidden" title="拍照上传"
+                    onClick={() => cameraRef.current?.click()}>📷</button>
             <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer" title="新建文件夹"
                     onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}>📁+</button>
             <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer" title="回收站"
                     onClick={openTrash}>♻️</button>
           </span>
           <input ref={fileRef} type="file" style={{ display: "none" }}
+                 onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
                  onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
         </div>
 

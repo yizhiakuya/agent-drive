@@ -41,6 +41,12 @@ export default function Home() {
   const setModelName = useAppStore((s) => s.setModelName);
 
   useEffect(() => {
+    // 分享上传回跳提示
+    const shared = new URLSearchParams(window.location.search).get("shared");
+    if (shared) {
+      window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "ok", text: `已接收分享的文件：${shared}` } }));
+      window.history.replaceState(null, "", "/");
+    }
     (async () => {
       try {
         const status = await getStatus() as { configured: boolean };

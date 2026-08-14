@@ -359,7 +359,7 @@ export default function ChatPanel() {
       {plan.length > 0 && <div className="px-4 pb-2"><PlanCard plan={plan} /></div>}
       {contextUsage && <ContextBar usage={contextUsage} />}
 
-      <div className="flex gap-2.5 px-5 py-3.5 border-t border-border bg-panel">
+      <div className="input-bar-safe flex gap-2.5 px-5 py-3.5 border-t border-border bg-panel">
         <textarea
           ref={taRef}
           value={input}

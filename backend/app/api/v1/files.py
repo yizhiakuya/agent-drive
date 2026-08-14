@@ -47,6 +47,28 @@ async def download(container=Depends(get_container), path: str = ""):
         raise HTTPException(400, str(e))
 
 
+@router.post("/upload-share")
+async def upload_share(container=Depends(get_container), file: UploadFile = File(...)):
+    """Web Share Target 入口：分享的文件存到根目录，303 回前端首页"""
+    from fastapi.responses import RedirectResponse
+
+    st = container.storage
+    data = await file.read()
+    # 同名处理：自动加序号
+    rel = file.filename or "分享的文件"
+    base, ext = (rel.rsplit(".", 1) + [""])[:2] if "." in rel else (rel, "")
+    candidate, i = rel, 1
+    while st.exists(candidate):
+        candidate = f"{base}-{i}.{ext}" if ext else f"{base}-{i}"
+        i += 1
+    st.save_bytes(candidate, data)
+    try:
+        container.ingest.extract(candidate)
+    except Exception:
+        pass
+    return RedirectResponse(url=f"/?shared={candidate}", status_code=303)
+
+
 @router.post("/mkdir")
 async def mkdir(container=Depends(get_container), path: str = ""):
     st = container.storage
