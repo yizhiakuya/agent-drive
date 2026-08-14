@@ -1,61 +1,78 @@
 # 📱 安卓端方案与进度
 
-> 更新（2026-08）：TWA 工程已入库 `android/`，Windows 本机可直接构建签名 APK，不再依赖服务器上的 bubblewrap/expect 交互。
-> PWA 仍是日常主用形态；APK 是给想要原生图标/免地址栏/系统分享入口的补充形态。
+> 更新（2026-08）：安卓客户端改为 **Capacitor 原生壳**（frontend/android）——web 前端代码原样打包进 App，
+> 通过插件桥接入安卓 SDK（扫码连接服务器 / 相册自动同步 / 通知）。TWA 套壳方案已废弃（历史见 git 255d41e）。
+> PWA 仍是日常主用形态；原生壳负责 PWA 做不到的事：后台同步、系统集成。
 
 ## 一、方案决策
 
 | 路线 | 状态 | 说明 |
 |------|------|------|
-| **A. PWA**（主方案） | ✅ 已上线，日常主用 | 手机浏览器打开 → 添加到主屏幕。全屏/图标/离线壳/分享/相机上传 |
-| **B. TWA 打包 APK** | ✅ 工程已入库 | `android/` Gradle 工程（androidbrowserhelper），本机构建见 §四 |
-| C. Flutter 原生 | 备选 | 需要后台上传/系统集成时再做 |
+| **A. PWA**（日常主用） | ✅ 已上线 | 手机浏览器打开 → 添加到主屏幕。全屏/图标/离线壳/分享/相机上传 |
+| **B. Capacitor 原生壳** | ✅ 已落地 | frontend/android：web 资源本地打包 + 原生插件桥（扫码连接/相册自动同步），同包名同签名 |
+| ~~TWA 套壳~~ | ❌ 已废弃 | 只能打开网页，无后台/系统能力；工程存档于 git 255d41e |
+| C. Flutter 原生 | 备选 | 仅在需要重写全部 UI 时考虑 |
 
-## 二、已完成的（有效资产）
+## 二、原生壳架构（Capacitor）
+
+```
+frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（离线壳）
+        │                                      │
+        │  JS 插件桥 (@capacitor/core)          │  Java 插件
+        ▼                                      ▼
+  ServerConfig / PhotoSync      SharedPreferences + WorkManager + MediaStore
+        │                                      │
+        └──────────▶  HTTP API ◀──────────────┘
+                       扫码配置的服务器地址（默认 https://home.rainaki.top:13311）
+```
+
+**首启流程**：App 打开 → 原生扫码页 → 扫网页「设置 → 连接手机 App」的二维码（agentdrive://connect?server=...）→ 存入 SharedPreferences → 加载本地 web 资源，前端经插件读取服务器地址发起 API 调用。
+
+**相册自动同步**：PhotoSyncWorker（WorkManager 周期任务，App 关闭/重启都运行）扫描 MediaStore 新增照片 → multipart 上传 /files/upload（按日期归档到 相册同步/YYYY-MM-DD/）→ 完成通知。约束：电池非低电量 + 网络（可选仅 Wi-Fi），频率 1/6/12/24 小时。
+
+## 三、已完成的（有效资产）
 
 | 项 | 详情 |
 |----|------|
-| HTTPS 证书 | `*.rainaki.top` 通配符（Let's Encrypt EC-256），acme.sh 自动续期；`/etc/nginx/certs/rainaki.{pem,key}` |
-| nginx | 13311 端口 HTTPS → Agent Drive，SSE 友好（`deploy/nginx-agent-drive.conf` 已入库） |
-| 域名/端口 | `https://home.rainaki.top:13311`（Cloudflare DNS-01，家宽自定义端口） |
-| PWA 能力 | manifest + sw 离线壳 + 分享到网盘(share_target) + 相机上传 + safe-area |
-| assetlinks.json | `frontend/public/.well-known/assetlinks.json`（包名 `top.rainaki.agentdrive`，SHA256 `8ef4635c…e90a94`） |
-| **TWA 工程** | ✅ `android/`（2026-08 入库）：AGP 8.7.3 + Gradle 8.14.3 wrapper + androidbrowserhelper 2.5.0，源码/图标/文档齐全，可本机构建 |
-| 签名 keystore | 服务器 `/root/agent-drive-android/agentdrive.keystore`（alias=agentdrive，密码见服务器本地 README.txt，不入 git） |
+| HTTPS 证书 | *.rainaki.top 通配符（Let's Encrypt EC-256），acme.sh 自动续期 |
+| nginx | 13311 端口 HTTPS → Agent Drive，SSE 友好（deploy/nginx-agent-drive.conf） |
+| 域名/端口 | https://home.rainaki.top:13311（Cloudflare DNS-01，家宽自定义端口） |
+| PWA 能力 | manifest + sw 离线壳 + share_target + 相机上传 + safe-area |
+| assetlinks.json | frontend/public/.well-known/assetlinks.json（包名 top.rainaki.agentdrive，SHA256 8ef4635c…e90a94） |
+| 原生壳工程 | ✅ frontend/android（Capacitor 7 + AGP 8.7.3 + Gradle 8.14.3 wrapper），含 ServerConfig/PhotoSync 插件、扫码页、相册同步 Worker |
+| web 端二维码 | ✅ 设置页「连接手机 App」卡片（qrcode 生成 agentdrive://connect?server=当前origin） |
+| 签名 keystore | 服务器 /root/agent-drive-android/agentdrive.keystore（alias=agentdrive，密码见服务器本地 README.txt，不入 git） |
 
-## 三、历史卡点（服务器 bubblewrap 打包，已废弃归档）
+## 四、构建（Windows 本机）
 
-早先尝试在服务器上用 bubblewrap 生成 TWA 工程，卡在交互提示（JDK 询问/SDK 路径校验/regenerate 确认/versionName≥6/keystore 密码/gradle 镜像），需 expect 应答。
-该路线已废弃：工程改为手写模板直接入库 `android/`，构建在 Windows 本机完成，全程无交互。服务器环境（JDK17/SDK35/bubblewrap）保留备查。
-
-## 四、APK 构建（当前路径：Windows 本机）
-
-前置环境（本机已装好）：
-
-- JDK 17+（Temurin 21）
-- Android SDK：`C:\Android\Sdk`（cmdline-tools + platform-tools + platforms;android-35 + build-tools;35.0.0）
-- Gradle 8.14.3：`C:\Android\gradle-8.14.3`（wrapper 已入库，日常用 `gradlew.bat` 即可）
+前置环境（本机已装好）：JDK 17+（Temurin 21）、Android SDK C:\Android\Sdk、Gradle 8.14.3 C:\Android\gradle-8.14.3。
 
 ```bash
-# 1. keystore：从服务器 scp 到本机（指纹与 assetlinks.json 一致，免地址栏直接生效）
+cd frontend
+npm run build                 # 静态导出 out/（含二维码卡片）
+npx cap sync android          # 拷贝 web 资源进 App
+
+# keystore：从服务器 scp 到本机（指纹与 assetlinks.json 一致）
 scp root@服务器:/root/agent-drive-android/agentdrive.keystore D:/ds/agent-drive-keystore/
+cd android && copy keystore.properties.template keystore.properties   # 填路径/密码
 
-# 2. 签名配置（不入 git）
-cd android && copy keystore.properties.template keystore.properties   # 填 storeFile/密码
-
-# 3. 构建（keystore 就位则直接出签名 APK）
-gradlew.bat assembleRelease
-# 产物: app/build/outputs/apk/release/app-release.apk
+gradlew.bat assembleRelease  # 或 C:\Android\gradle-8.14.3\bin\gradle.bat assembleRelease
+# 产物: app/build/outputs/apk/release/app-release.apk（keystore 就位则已签名）
 ```
 
-keystore 未就位时产物为 `app-release-unsigned.apk`，用 apksigner 单独签名即可（步骤见 `android/README.md`）。
+无 keystore 时产物为 app-release-unsigned.apk，用 apksigner 单独签名即可。
 
 ### 安装到手机
 
-- APK 传到手机（微信文件传输助手/网盘分享/数据线）→ 点击安装 → 允许未知来源
-- 或干脆用 PWA：手机 Chrome/Edge 打开网址 → 菜单 → 添加到主屏幕
+- USB：adb install app-release.apk（C:\Android\Sdk\platform-tools\adb.exe）
+- 或 APK 传手机 → 点击安装 → 允许未知来源
 
-## 五、推送通知（第三阶段，未做）
+## 五、后续路线
 
-需要：VAPID 密钥对（`npx web-push generate-vapid-keys`）+ 后端 webpush 库 + 前端订阅 UI。
-触发场景：自动化报告生成、red 确认请求。等基本功能稳定后再评估。
+| 项 | 状态 |
+|----|------|
+| 相册自动同步 | ✅ 已落地（后台周期 + 手动立即同步 + 仅 Wi-Fi） |
+| 扫码连接服务器 | ✅ 已落地（首启 + 设置内重扫） |
+| 推送通知（VAPID + webpush） | 未做：自动化报告/red 确认的推送，等基本功能稳定后评估 |
+| 视频/文件自动同步 | 可扩展：SyncEngine 增加 MediaStore.Video 查询即可 |
+| iOS 客户端 | 未做：Capacitor 工程可 npx cap add ios（需 macOS 构建） |

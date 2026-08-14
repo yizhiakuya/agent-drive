@@ -72,7 +72,7 @@ agent-drive/
 │       ├── app/                 # layout/page + globals.css(主题)
 │       ├── components/          # chat/ files/ sessions/ settings/ onboarding
 │       └── lib/                 # store/events/format/api(5模块)
-├── android/                     # TWA 安卓客户端工程（AGP+Gradle wrapper，本机构建 APK）
+├── frontend/android/           # Capacitor 原生壳（扫码连接 + 相册自动同步 + 后台任务）
 ├── Makefile                     # install/dev/test/bench/build
 └── docker-compose.yml           # db(pgvector)+redis+backend+frontend
 ```
@@ -127,7 +127,7 @@ python3 mock_llm.py &              # Mock LLM (端口 9999)
 - **M3** ✅：规则自动执行（每天 03:30）+ 主动汇报 + 回收站
 - **M4 候选**：音视频转写 / 文件关系图谱 / 知识图谱问答 / 推送通知
 - **业务层** ✅：三页面（对话/文件/设置）+ PWA + 分享到网盘 + 影音播放 + 备份
-- **安卓客户端** ✅：TWA 工程入库（android/），本机构建免地址栏 APK（见 docs/android.md）
+- **安卓客户端** ✅：Capacitor 原生壳（frontend/android）——web UI 原样打包 + 原生插件桥：扫码连接服务器、相册自动同步（WorkManager 后台任务）、通知（见 docs/android.md）
 
 ## ⚠️ 安全说明
 

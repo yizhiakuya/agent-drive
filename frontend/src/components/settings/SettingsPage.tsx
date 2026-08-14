@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getConfig, saveEmbeddings, configureLLM, testLLM } from "@/lib/api/config";
+import ConnectAppCard from "./ConnectAppCard";
+import PhotoSyncCard from "./PhotoSyncCard";
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -85,6 +87,9 @@ export default function SettingsPage() {
           {saving === "emb" ? "测试中…" : "保存并测试"}
         </button>
       </div>
+
+      <ConnectAppCard />
+      <PhotoSyncCard />
 
       <div className="bg-panel border border-border rounded-xl p-4">
         <h3 className="font-bold text-sm mb-1">🎛️ 偏好与规则</h3>

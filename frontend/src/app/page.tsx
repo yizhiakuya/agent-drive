@@ -8,6 +8,7 @@ import SettingsPage from "@/components/settings/SettingsPage";
 import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
 import { getStatus, getConfig } from "@/lib/api/config";
+import { ensureBase } from "@/lib/api/client";
 import { useAppStore } from "@/lib/store";
 
 function SkeletonScreen() {
@@ -49,6 +50,7 @@ export default function Home() {
     }
     (async () => {
       try {
+        await ensureBase(); // 原生 App：从扫码配置解析服务器地址
         const status = await getStatus() as { configured: boolean };
         setConfigured(status.configured);
         if (status.configured) {
