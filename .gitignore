@@ -36,6 +36,6 @@ out/
 
 # Android (Capacitor 原生壳，frontend/android/)
 frontend/android/keystore.properties
-# APK 二进制产物（构建时从 android/ 拷入 public/app，不进 git）
-frontend/public/app/
+# APK 二进制产物（部署时拷入 out/app，不进 git）
+frontend/out/app/
 

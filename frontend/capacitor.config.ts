@@ -8,6 +8,11 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: "https",
   },
+  android: {
+    // Android 15 强制 edge-to-edge：强制给 WebView 加系统栏边距，
+    // 否则头部 UI 会与状态栏（时间/信号）重叠。PWA 浏览器端不受影响。
+    adjustMarginsForEdgeToEdge: "force",
+  },
 };
 
 export default config;

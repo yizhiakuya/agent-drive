@@ -66,9 +66,9 @@ gradlew.bat assembleRelease  # 或 C:\Android\gradle-8.14.3\bin\gradle.bat assem
 ### 发布 APK（web 页提供下载）
 
 ```bash
-# APK 拷入 public/app（不进 git，见 .gitignore），构建时自动进 out/
-copy app\build\outputs\apk\release\app-release.apk ..\..\public\app\agent-drive.apk
+# APK 在部署时拷入 out/app（不进 git，见 .gitignore）——不进 public/，避免被打进 App 自身资源
 cd .. && npm run build
+copy android\app\build\outputs\apk\release\app-release.apk out\app\agent-drive.apk
 # 部署 out/ 到服务器（tar 原子替换，保留 .well-known）
 # 之后下载地址稳定不变：https://home.rainaki.top:13311/app/agent-drive.apk
 # web 设置页「连接手机 App」卡片内有 📲 下载按钮

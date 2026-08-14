@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#4f6ef7</color>
+    <color name="colorPrimaryDark">#4f6ef7</color>
+    <color name="colorAccent">#4f6ef7</color>
+    <!-- 与 web 端 manifest background_color 一致，状态栏区域底色 -->
+    <color name="agentBg">#f5f6f8</color>
+</resources>
