@@ -29,7 +29,7 @@ export default function SessionList() {
   }
 
   return (
-    <aside className="w-60 border-r border-border bg-panel flex flex-col">
+    <aside className="hidden md:flex w-52 xl:w-60 border-r border-border bg-panel flex-col">
       <div className="flex justify-between items-center px-3 py-3.5 border-b border-border">
         <b className="text-sm">💬 会话</b>
         <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer"

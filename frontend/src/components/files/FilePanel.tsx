@@ -30,7 +30,6 @@ export default function FilePanel() {
   useEffect(() => { load(""); }, [load]);
 
   useEffect(() => {
-    if (window.innerWidth < 900) setCollapsed(true);
     function onFilesChanged() { load(pathRef.current); }
     window.addEventListener(EV.filesChanged, onFilesChanged);
     return () => window.removeEventListener(EV.filesChanged, onFilesChanged);

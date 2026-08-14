@@ -70,25 +70,26 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen">
-      <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-panel">
-        <div className="font-bold text-lg">🦋 Agent Drive</div>
-        <nav className="flex gap-1 mx-4">
+      <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 border-b border-border bg-panel gap-2">
+        <div className="font-bold text-base sm:text-lg whitespace-nowrap">🦋 Agent Drive</div>
+        <nav className="flex gap-0.5 sm:gap-1 flex-1 justify-center">
           {NAV.map((n) => (
             <button key={n.key}
-                    className={`px-3.5 py-1.5 rounded-lg text-sm cursor-pointer transition-all ${tab === n.key ? "bg-accent text-white font-semibold" : "text-text hover:bg-card"}`}
+                    className={`px-2.5 sm:px-3.5 py-1.5 rounded-lg text-xs sm:text-sm cursor-pointer transition-all whitespace-nowrap ${tab === n.key ? "bg-accent text-white font-semibold" : "text-text hover:bg-card"}`}
                     onClick={() => setTab(n.key)}>
               {n.label}
             </button>
           ))}
         </nav>
-        <div className="bg-success-soft text-success px-3 py-1 rounded-full text-xs" title={modelName}>🟢 {modelName || "Agent 已就绪"}</div>
+        <div className="hidden md:block bg-success-soft text-success px-3 py-1 rounded-full text-xs whitespace-nowrap" title={modelName}>🟢 {modelName || "Agent 已就绪"}</div>
       </header>
 
       {tab === "chat" && (
         <main className="flex flex-1 overflow-hidden">
           <SessionList />
           <ChatPanel />
-          <FilePanel />
+          {/* 移动端隐藏：文件管理走"文件"tab；平板(768-1100)也隐藏防挤压 */}
+          <div className="hidden xl:flex h-full"><FilePanel /></div>
         </main>
       )}
       {tab === "files" && <main className="flex flex-1 overflow-hidden"><FilePage /></main>}

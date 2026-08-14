@@ -9,7 +9,7 @@ export function ContextBar({ usage }: { usage: { used: number; total: number; pe
     <div className="flex items-center gap-2 px-4 py-2 border-t border-border bg-panel text-xs" title={`上下文占用: 已用 ${fmtTokens(used)} / ${fmtTokens(total)}`}>
       <span className="text-muted whitespace-nowrap">上下文</span>
       <div className="flex-1 h-1.5 bg-card rounded-full overflow-hidden">
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+        <div className="h-full rounded-full" style={{ width: `${Math.max(pct, 1.5)}%`, background: color }} />
       </div>
       <span className="text-muted whitespace-nowrap">{fmtTokens(used)} / {fmtTokens(total)}</span>
     </div>

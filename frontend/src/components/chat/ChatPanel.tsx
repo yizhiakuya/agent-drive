@@ -260,7 +260,7 @@ export default function ChatPanel() {
 
   return (
     <section className="flex-1 flex flex-col min-w-0 relative">
-      <div ref={listRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
+      <div ref={listRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-5 pb-8 flex flex-col gap-3">
         {messages.length === 0 && !busy && (
           <div className="flex flex-col items-center gap-3 py-14 text-center animate-fade-in">
             <div className="text-5xl animate-float">🦋</div>
@@ -325,7 +325,7 @@ export default function ChatPanel() {
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
           }}
-          placeholder="和你的 Agent 对话，管理网盘…（Enter 发送 / Shift+Enter 换行）"
+          placeholder="和你的 Agent 对话…"
           className="flex-1 bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none resize-none text-sm leading-relaxed max-h-40 focus:border-accent focus:bg-panel focus:ring-2 focus:ring-accent-soft"
         />
         {busy ? (

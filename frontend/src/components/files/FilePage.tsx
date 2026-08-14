@@ -80,8 +80,8 @@ export default function FilePage() {
         <div className="flex justify-between items-center">
           <b className="text-sm">📁 文件</b>
           <span className="flex gap-1.5 items-center">
-            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
-                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title="返回上级">⬆ 上级</button>
+            <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}>⬆ 上级</button>
             <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
                     onClick={() => fileRef.current?.click()} disabled={uploading}>
               {uploading ? <><span className="inline-block w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow align-middle" /> 上传中</> : "⬆ 上传"}
@@ -106,7 +106,7 @@ export default function FilePage() {
         <div className="flex-1 overflow-auto border border-border rounded-lg bg-panel">
           <table className="w-full text-xs border-collapse">
             <thead>
-              <tr><th className="text-left p-2 border-b border-border bg-card sticky top-0">名称</th><th className="text-left p-2 border-b border-border bg-card sticky top-0 w-24">大小</th><th className="text-left p-2 border-b border-border bg-card sticky top-0 w-44">修改时间</th></tr>
+              <tr><th className="text-left p-2 border-b border-border bg-card sticky top-0">名称</th><th className="text-left p-2 border-b border-border bg-card sticky top-0 w-20 sm:w-24">大小</th><th className="hidden sm:table-cell text-left p-2 border-b border-border bg-card sticky top-0 w-44">修改时间</th></tr>
             </thead>
             <tbody>
               {items.length === 0 && (
@@ -124,7 +124,7 @@ export default function FilePage() {
                     onDoubleClick={() => it.is_dir && load(it.path)}>
                   <td className="p-1.5 px-2 border-b border-border/50"><span className={it.is_dir ? "text-warn" : ""}>{it.is_dir ? "📂" : "📄"}</span> {it.name}</td>
                   <td className="p-1.5 px-2 border-b border-border/50">{it.is_dir ? "—" : fmtSize(it.size)}</td>
-                  <td className="p-1.5 px-2 border-b border-border/50 text-muted">{it.mtime ? new Date(it.mtime * 1000).toLocaleString() : ""}</td>
+                  <td className="hidden sm:table-cell p-1.5 px-2 border-b border-border/50 text-muted">{it.mtime ? new Date(it.mtime * 1000).toLocaleString() : ""}</td>
                 </tr>
               ))}
             </tbody>
@@ -136,8 +136,15 @@ export default function FilePage() {
         )}
       </div>
 
-      <div className="w-[42%] min-w-72 flex flex-col border-l border-border bg-panel">
-        {!selected && <div className="p-4 text-muted text-sm">← 点击文件预览（文本/Markdown/图片/PDF）</div>}
+      {/* 预览面板：移动端隐藏（小屏用下载） */}
+      <div className="hidden lg:flex w-[42%] min-w-72 flex-col border-l border-border bg-panel">
+        {!selected && (
+          <div className="p-5 text-sm flex flex-col items-center gap-2 text-center">
+            <span className="text-3xl">👁️</span>
+            <div className="text-muted">点击左侧文件进行预览</div>
+            <div className="text-muted text-xs">支持：文本 · Markdown · 图片 · PDF</div>
+          </div>
+        )}
         {selected && (
           <>
             <div className="flex justify-between items-center gap-2 px-3 py-2.5 border-b border-border">
