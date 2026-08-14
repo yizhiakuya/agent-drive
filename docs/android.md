@@ -62,6 +62,17 @@ gradlew.bat assembleRelease  # 或 C:\Android\gradle-8.14.3\bin\gradle.bat assem
 
 无 keystore 时产物为 app-release-unsigned.apk，用 apksigner 单独签名即可。
 
+### 发布 APK（web 页提供下载）
+
+```bash
+# APK 拷入 public/app（不进 git，见 .gitignore），构建时自动进 out/
+copy app\build\outputs\apk\release\app-release.apk ..\..\public\app\agent-drive.apk
+cd .. && npm run build
+# 部署 out/ 到服务器（tar 原子替换，保留 .well-known）
+# 之后下载地址稳定不变：https://home.rainaki.top:13311/app/agent-drive.apk
+# web 设置页「连接手机 App」卡片内有 📲 下载按钮
+```
+
 ### 安装到手机
 
 - USB：adb install app-release.apk（C:\Android\Sdk\platform-tools\adb.exe）

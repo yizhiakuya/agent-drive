@@ -58,7 +58,11 @@ export default function ConnectAppCard() {
           {qr
             ? <img src={qr} alt="扫码连接服务器" className="w-44 h-44 rounded-lg border border-border" />
             : <p className="text-muted text-xs">生成中…</p>}
-          <p className="text-muted text-[10px]">App 内重新扫码：设置 → 连接手机 App → 重新扫码连接</p>
+          <a href="/app/agent-drive.apk" download
+             className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer">
+            📲 下载安卓 App（APK）
+          </a>
+          <p className="text-muted text-[10px]">装好后打开 App 扫码连接；App 内重新扫码：设置 → 连接手机 App → 重新扫码连接</p>
         </div>
       )}
     </div>
