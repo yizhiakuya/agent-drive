@@ -253,8 +253,13 @@ class AgentLoop:
 
     # ---------- 闲聊轻量路径 ----------
     async def _chat_path(self, user_message: str, history, session_id: str | None):
-        """闲聊：精简提示 + 无工具 + 少量历史。"""
+        """闲聊：精简提示 + 无工具 + 少量历史。也持久化为会话（用户视角：聊了就有记录）。"""
         started = time.time()
+        sid = session_id
+        if self.sessions is not None and (sid is None or self.sessions.get(sid) is None):
+            meta = self.sessions.create()
+            sid = meta["id"]
+        reply_parts: list[str] = []
         chat_messages = [
             {"role": "system", "content": build_chat_prompt(self.memory)},
             *build_history(history, 2000),
@@ -263,15 +268,25 @@ class AgentLoop:
         try:
             async for chunk in self.llm.stream_chat(chat_messages):
                 self._add_usage(None, chunk)
+                reply_parts.append(chunk)
                 yield ("text", chunk)
         except (NotImplementedError, TypeError):
             result = await self.llm.chat(chat_messages)
             self._add_usage(result.usage)
+            reply_parts.append(result.content or "")
             yield ("text", result.content or "")
+        # 持久化（标题取首句，会话恢复时可回看）
+        if self.sessions is not None and sid:
+            self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
+            self.sessions.append(sid, {"role": "assistant", "content": "".join(reply_parts), "ts": time.time()})
+            meta = self.sessions.get(sid)
+            if meta and (not meta.get("title") or meta.get("title") == "新会话"):
+                title = user_message.strip().replace("\n", " ")[:24] or "闲聊"
+                self.sessions.update_meta(sid, title=title)
         yield ("done", {
             "steps": 1,
             "latency_ms": int((time.time() - started) * 1000),
-            "session_id": session_id,
+            "session_id": sid,
             "routed": "chat",
             "tool_trace": [],
             "plan": [],
