@@ -1,6 +1,8 @@
-# 前端架构分析（2026-08-14）
+# 前端架构（Next.js 版，2026-08-14 迁移 + 验收后更新）
 
-> 分析对象：frontend/（React 18 + Vite + vitest，1326 行源码 + 4 个测试文件）
+> 技术栈：Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + zustand + vitest
+> 部署：`output: 'export'` 静态导出 out/，由 backend（FastAPI）单服务托管
+> 演进：2026-08-14 从 React18+Vite 迁移，架构分析清单问题 ①-④ 已随迁移清零
 
 ## 一、目录结构与分层
 

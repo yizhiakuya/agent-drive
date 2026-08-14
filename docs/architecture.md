@@ -1,19 +1,19 @@
-# 🏗️ Agent Drive 架构设计 v1.0
+# 🏗️ Agent Drive 架构设计 v2.0
+
+> 更新于 2026-08-14：前端迁移 Next.js 16；ingest/embeddings/scheduler 落地；
+> 应用层与接口层合并（个人项目体量，API 直连 Container 编排，services/ 拆分暂缓）。
 
 ## 一、架构分层（严格单向依赖）
 
 ```
 ┌─────────────────────────────────────────────────┐
 │  Presentation 表现层                              │
-│  frontend (React) · CLI (M3) · WebSocket (流式)   │
+│  frontend (Next.js 16 · Tailwind · TS · zustand)  │
+│  静态导出 out/ 由 backend 单服务托管               │
 ├─────────────────────────────────────────────────┤
-│  Interface 接口层                                 │
+│  Interface 接口层（含应用编排）                    │
 │  api/v1 (FastAPI) · schemas (Pydantic)           │
-│  职责: 协议转换 · 参数校验 · 鉴权 · 版本管理       │
-├─────────────────────────────────────────────────┤
-│  Application 应用层                               │
-│  services/ (会话服务 · 文件服务 · 配置服务)         │
-│  职责: 用例编排 · 事务边界 · 跨领域协调             │
+│  职责: 协议转换 · 参数校验 · 版本管理 · 用例编排    │
 ├─────────────────────────────────────────────────┤
 │  Domain 领域层                                    │
 │  agent/ (loop · tools · memory · prompt)         │
@@ -117,38 +117,56 @@ backend/
 │   │   ├── router.py         #   意图路由（闲聊/任务）
 │   │   ├── skills.py         #   技能包注册表
 │   │   ├── tools/  registry.py  files.py  system.py  analytics.py
-│   │   └── memory/  preferences.py  sessions.py
+│   │   ├── memory/  preferences.py  sessions.py
+│   │   ├── onboarding.py  prompt.py  router.py  skills.py
+│   │   ├── scheduler.py        # M3: 规则自动执行(每天 03:30)
+│   │   └── tools/  files.py  system.py  analytics.py
+│   │               plan.py  memory.py  registry.py
 │   ├── llm/
-│   │   ├── base.py  manager.py  types.py
+│   │   ├── base.py  manager.py  embeddings.py
 │   │   └── providers/  openai_compat.py  responses.py  anthropic.py
-│   ├── storage/
-│   │   ├── base.py  local.py  s3.py
-│   └── ingest/             # M2: pipeline.py（提取+索引+向量）
-│       └── pipeline.py
+│   ├── storage/  base.py  local.py
+│   └── ingest/  pipeline.py    # M2: 提取(文本/PDF/OCR)+索引+向量(Jina 云)
 ├── tests/
-│   ├── conftest.py          # 共享 fixtures
-│   ├── unit/  test_agent.py  test_critic.py  test_reliability.py
+│   ├── conftest.py
+│   ├── unit/  test_agent test_critic test_reliability test_retry
+│   │          test_compress test_write_tools test_memory
+│   │          test_bugfixes test_ingest_m2（共 9 套）
 │   └── integration/  test_api.py
-├── scripts/  run_dev.sh  benchmark.sh
-├── pyproject.toml  .env.example  Makefile
-└── requirements.txt
+├── scripts/  mock_llm.py  benchmark_real.py
+├── system/  agent-config.json（gitignored, agent 自管理）
+├── data/    文件工作区 + Agent/(AGENT.md/USER.md/MEMORY.md/notes)
+├── pyproject.toml  .env.example  Dockerfile
+└── requirements.txt（doc-only，pyproject 为唯一真相源）
 
-frontend/
+frontend/（Next.js 16 App Router + TS + Tailwind v4）
 ├── src/
-│   ├── main.jsx  App.jsx
-│   ├── api/  client.js  chat.js  files.js  sessions.js
-│   ├── components/  chat/  files/  sessions/  onboarding/  common/
-│   ├── hooks/  useChat.js
-│   └── styles/
+│   ├── app/  layout.tsx  page.tsx  globals.css(@theme 设计 token)
+│   ├── components/
+│   │   ├── chat/  ChatPanel.tsx  ToolStep.tsx  ContextBar.tsx  PlanCard.tsx
+│   │   ├── files/  FilePage.tsx  FilePanel.tsx
+│   │   ├── sessions/  SessionList.tsx
+│   │   ├── settings/  SettingsPage.tsx
+│   │   ├── onboarding/  Onboarding.tsx
+│   │   └── ToastStack.tsx
+│   ├── lib/  store.ts(zustand)  events.ts(事件总线常量)
+│   │         format.ts(工具函数)  api/(client/chat/files/config/sessions)
+│   └── （vitest 测试与源码同目录）
+├── out/  next build 静态导出（backend 托管）
+└── next.config.ts(output:'export')  vitest.config.ts
 ```
 
-## 五、M2 扩展点（架构已预留）
+部署形态：systemd 单服务（uvicorn 托管 backend + 静态 out/）；docker compose 备用。
 
-| 扩展 | 接入点 |
-|------|--------|
-| 语义搜索 | ✅ ingest/pipeline + llm/embeddings（Jina 云，jina-embeddings-v3）+ .index 向量 sidecar（规模化后迁 pgvector） |
-| 流式输出 | llm/base 增加 stream 协议 + WS 通道 |
-| 定时任务 | services/scheduler + core/queue |
-| 认证 | api/deps + core/auth |
-| 多用户 | 会话/文件增加 owner 维度 |
-| S3 存储 | storage/s3.py 实现 base 协议 |
+## 五、扩展点与演进状态（2026-08-14）
+
+| 扩展 | 状态 | 接入点 |
+|------|------|--------|
+| 语义搜索 | ✅ 已落地 | ingest/pipeline + llm/embeddings（Jina 云）+ .index 向量 sidecar（规模化迁 pgvector） |
+| 规则自动执行 | ✅ 已落地 | agent/scheduler.py + run_automation_now/automation_status 工具 |
+| 文件理解 | ✅ 已落地 | M2a 摄入(PDF/OCR/文本) + M2b 语义 + M2c 问答 |
+| 流式输出 | ✅ 已落地 | SSE /chat/stream + 前端 chatStream |
+| 向量库迁移 | 待规模需求 | db/(pgvector, compose 已备) |
+| 音视频转写 | 未做（资源评估后） | ingest 加 whisper 解析器 |
+| 认证/多用户 | 未做（个人项目） | api/deps + core/auth + owner 维度 |
+| S3 存储 | 未做 | storage/s3.py 实现 base 协议 |

@@ -25,17 +25,20 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --port 8000
 ```
 
-### 2. 启动前端
+### 2. 启动前端（Next.js 16）
 
 ```bash
 cd frontend
 npm install
-npm run dev        # http://localhost:5173
+# 生产: 构建静态导出(backend 单服务托管 out/)
+npm run build
+# 开发: 直连后端
+NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # :3000
 ```
 
 ### 3. 首次使用（Onboarding）
 
-打开 http://localhost:5173 → 选择协议类型 → 填 Base URL / API Key / 模型 → **测试连接** → **完成配置**。
+打开 http://localhost:8000（backend 托管前端）→ 选择协议类型 → 填 Base URL / API Key / 模型 → **测试连接** → **完成配置**。
 
 之后所有操作都通过对话完成：
 - "看看网盘里有什么文件"
@@ -75,7 +78,7 @@ agent-drive/
 ```bash
 make install        # 安装依赖
 make dev-backend    # 后端 :8000 (热重载)
-make dev-frontend   # 前端 :5173
+make dev-frontend   # 前端 next dev :3333
 make test           # 全部测试（pytest + 脚本套件）
 make bench          # 真实 LLM 可靠性基准
 ```
