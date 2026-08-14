@@ -131,6 +131,7 @@ python3 mock_llm.py &              # Mock LLM (端口 9999)
 
 ## ⚠️ 安全说明
 
+- **全站鉴权**：首次访问设主人密码（PBKDF2），web 走 HttpOnly Cookie，App 走设备令牌（可单设备吊销）；登录限速防爆破。设计见 docs/security.md
 - 路径穿越防护已内置
 - 工具按 green/yellow/red 分级，红色操作需 HMAC 签名确认（nonce 防重放）
 - 删除进回收站（30 天可恢复），彻底删除需 red 确认

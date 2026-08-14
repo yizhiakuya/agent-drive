@@ -14,7 +14,7 @@ from app.main import create_app
 
 @pytest.fixture
 def client(tmp_path: Path):
-    """用临时目录 + 测试容器启动应用（不污染真实数据）"""
+    """用临时目录 + 测试容器启动应用（不污染真实数据），并完成设密+登录。"""
     settings = Settings(
         app_env="test",
         backend_dir=tmp_path,
@@ -24,7 +24,55 @@ def client(tmp_path: Path):
     container = Container(settings)
     app = create_app(container)
     with TestClient(app) as c:
+        # 认证：首设密码 → 登录（cookie 自动保持，覆盖全部受保护端点）
+        assert c.post("/api/v1/auth/setup", json={"password": "test-password-123"}).status_code == 200
         yield c, container
+
+
+def test_unauthorized_without_login(tmp_path: Path):
+    """未登录访问受保护端点 → 401。"""
+    settings = Settings(
+        app_env="test",
+        backend_dir=tmp_path,
+        system_dir=Path("system"),
+        data_dir=Path("data"),
+    )
+    container = Container(settings)
+    app = create_app(container)
+    with TestClient(app) as c:
+        assert c.get("/api/v1/files").status_code == 401
+        assert c.get("/api/v1/status").status_code == 401
+        assert c.post("/api/v1/chat", json={"message": "hi", "history": []}).status_code == 401
+
+
+def test_auth_flow(tmp_path: Path):
+    """完整认证流：未初始化 → 设密 → 登录 → 设备令牌 → 吊销。"""
+    settings = Settings(
+        app_env="test",
+        backend_dir=tmp_path,
+        system_dir=Path("system"),
+        data_dir=Path("data"),
+    )
+    container = Container(settings)
+    app = create_app(container)
+    with TestClient(app) as c:
+        assert c.get("/api/v1/auth/status").json()["initialized"] is False
+        r = c.post("/api/v1/auth/setup", json={"password": "password-abc-123"})
+        assert r.status_code == 200
+        # 设置密码后直接已登录（cookie 已下发）
+        assert c.get("/api/v1/auth/me").status_code == 200
+        # 登出
+        assert c.post("/api/v1/auth/logout").status_code == 200
+        assert c.get("/api/v1/auth/me").status_code == 401
+        # 错误密码 → 401；正确 → 200
+        assert c.post("/api/v1/auth/login", json={"password": "wrong-password"}).status_code == 401
+        assert c.post("/api/v1/auth/login", json={"password": "password-abc-123"}).status_code == 200
+        # 颁发设备令牌 → Bearer 可用 → 吊销后失效
+        tok = c.post("/api/v1/auth/device-token", json={"device_id": "dev-x"}).json()["token"]
+        assert c.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+        container.auth.revoke_device("dev-x")
+        c.cookies.clear()  # 去掉登录 cookie，单独验证 Bearer 吊销生效
+        assert c.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
 
 
 def test_root_status(client):

@@ -48,6 +48,10 @@ public final class DeviceRegistrar {
                 conn.setDoOutput(true);
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
+                String deviceToken = ServerConfigStore.getDeviceToken(ctx);
+                if (deviceToken != null && !deviceToken.isEmpty()) {
+                    conn.setRequestProperty("Authorization", "Bearer " + deviceToken);
+                }
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
                 try (OutputStream os = conn.getOutputStream()) {

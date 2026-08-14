@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { chatStream } from "@/lib/api/chat";
-import { V1 } from "@/lib/api/client";
+import { V1, authHeaders } from "@/lib/api/client";
 import { getSession, summarizeSession } from "@/lib/api/sessions";
 import { emitFilesChanged } from "@/lib/events";
 import { ToolStep } from "./ToolStep";
@@ -117,7 +117,7 @@ export default function ChatPanel() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${V1}/automation/latest`);
+        const r = await fetch(`${V1}/automation/latest`, { credentials: "include", headers: authHeaders() });
         if (r.ok) {
           const d = await r.json() as { report?: { date: string; text: string } | null };
           if (d.report && !isReportRead(d.report.date)) setAutoReport(d.report);

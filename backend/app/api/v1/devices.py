@@ -50,4 +50,5 @@ async def register_device(payload: DeviceRegister, container=Depends(get_contain
 async def remove_device(device_id: str, container=Depends(get_container)):
     if not container.devices.remove(device_id):
         raise HTTPException(404, "设备不存在")
-    return {"removed": device_id}
+    revoked = container.auth.revoke_device(device_id)  # 吊销令牌：App 立即失联
+    return {"removed": device_id, "tokens_revoked": revoked}

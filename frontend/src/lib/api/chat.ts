@@ -1,5 +1,5 @@
 // 对话 API：聚合 + SSE 流式（含跨 chunk 缓冲）
-import { api, apiPath } from "./client";
+import { api, apiPath, authHeaders } from "./client";
 
 export interface ChatEvent {
   event: "text" | "tool_start" | "tool_trace" | "done" | "error";
@@ -26,7 +26,8 @@ export async function chatStream(
 ) {
   const res = await fetch(apiPath("/chat/stream"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    credentials: "include",
     body: JSON.stringify({ message, history, session_id: sessionId, confirmations }),
     signal,
   });

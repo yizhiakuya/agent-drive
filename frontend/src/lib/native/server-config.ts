@@ -9,6 +9,12 @@ export interface ServerConfigPlugin {
   rescan(): Promise<{ started: boolean }>;
   /** 回前台心跳：刷新服务器设备列表的活跃时间 */
   heartbeat(): Promise<{ sent: boolean }>;
+  /** 设备 ID（首次生成持久保存，设备令牌绑定用） */
+  getDeviceId(): Promise<{ deviceId: string }>;
+  /** 设备令牌（登录后由服务器颁发，后台同步鉴权用） */
+  getDeviceToken(): Promise<{ token: string | null }>;
+  storeDeviceToken(options: { token: string }): Promise<{ ok: boolean }>;
+  clearDeviceToken(): Promise<{ ok: boolean }>;
 }
 
 export const ServerConfig = registerPlugin<ServerConfigPlugin>("ServerConfig");

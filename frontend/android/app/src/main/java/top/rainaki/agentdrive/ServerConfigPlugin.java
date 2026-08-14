@@ -48,6 +48,41 @@ public class ServerConfigPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    @PluginMethod
+    public void getDeviceId(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("deviceId", ServerConfigStore.getDeviceId(getContext()));
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void getDeviceToken(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("token", ServerConfigStore.getDeviceToken(getContext()));
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void storeDeviceToken(PluginCall call) {
+        String token = call.getString("token");
+        if (token == null || token.trim().isEmpty()) {
+            call.reject("token 不能为空");
+            return;
+        }
+        ServerConfigStore.setDeviceToken(getContext(), token.trim());
+        JSObject ret = new JSObject();
+        ret.put("ok", true);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void clearDeviceToken(PluginCall call) {
+        ServerConfigStore.clearDeviceToken(getContext());
+        JSObject ret = new JSObject();
+        ret.put("ok", true);
+        call.resolve(ret);
+    }
+
     /** 重新扫码：打开原生扫码页，成功后 MainActivity 重载 web 界面。 */
     @PluginMethod
     public void rescan(PluginCall call) {

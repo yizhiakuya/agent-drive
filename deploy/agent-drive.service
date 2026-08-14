@@ -1,0 +1,16 @@
+[Unit]
+Description=Agent Drive - AI 个人网盘（单服务：FastAPI + 前端 SPA）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/projects/agent-drive/backend
+# 只绑 127.0.0.1：公网唯一入口是 nginx 13311 HTTPS（安全加固，勿改回 0.0.0.0）
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

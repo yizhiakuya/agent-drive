@@ -1,5 +1,5 @@
 // 文件 API（补全：info/raw 走封装，组件不再绕层）
-import { api, apiPath } from "./client";
+import { api, apiPath, getDeviceToken } from "./client";
 
 export interface FileItem {
   name: string;
@@ -54,6 +54,11 @@ export const emptyTrash = () => api("/files/trash/empty", { method: "POST" });
 export const getFileInfo = (path: string) =>
   api<FileInfo>(`/files/info?path=${encodeURIComponent(path)}`);
 
-export const fileRawUrl = (path: string) => apiPath(`/files/raw?path=${encodeURIComponent(path)}`);
+// 媒体元素（img/video/audio）无法携带 Cookie/Header：App 端经查询参数附设备令牌
+const mediaQuery = (path: string) => {
+  const t = getDeviceToken();
+  return `path=${encodeURIComponent(path)}${t ? `&token=${encodeURIComponent(t)}` : ""}`;
+};
+export const fileRawUrl = (path: string) => apiPath(`/files/raw?${mediaQuery(path)}`);
 
-export const fileDownloadUrl = (path: string) => apiPath(`/files/download?path=${encodeURIComponent(path)}`);
+export const fileDownloadUrl = (path: string) => apiPath(`/files/download?${mediaQuery(path)}`);

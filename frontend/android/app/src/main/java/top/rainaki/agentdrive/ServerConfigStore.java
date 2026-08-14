@@ -39,6 +39,19 @@ public final class ServerConfigStore {
         return id;
     }
 
+    // ---- 设备令牌（登录后由服务器颁发，后台同步鉴权用） ----
+    public static String getDeviceToken(Context ctx) {
+        return prefs(ctx).getString("device_token", null);
+    }
+
+    public static void setDeviceToken(Context ctx, String token) {
+        prefs(ctx).edit().putString("device_token", token).apply();
+    }
+
+    public static void clearDeviceToken(Context ctx) {
+        prefs(ctx).edit().remove("device_token").apply();
+    }
+
     // ---- 相册同步设置 ----
     public static boolean isSyncEnabled(Context ctx) {
         return prefs(ctx).getBoolean("sync_enabled", false);

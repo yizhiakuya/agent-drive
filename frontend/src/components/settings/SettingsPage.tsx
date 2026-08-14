@@ -4,6 +4,10 @@ import { getConfig, saveEmbeddings, configureLLM, testLLM } from "@/lib/api/conf
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
+import { Capacitor } from "@capacitor/core";
+import { V1, authHeaders, setDeviceToken } from "@/lib/api/client";
+import { ServerConfig } from "@/lib/native/server-config";
+import { useAppStore } from "@/lib/store";
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -11,6 +15,18 @@ export default function SettingsPage() {
   const [llmForm, setLlmForm] = useState({ type: "openai_compat", base_url: "", model: "", api_key: "", temperature: "0.3" });
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
   const [saving, setSaving] = useState<"llm" | "emb" | null>(null);
+  const setAuthMode = useAppStore((s) => s.setAuthMode);
+
+  async function logout() {
+    try {
+      await fetch(`${V1}/auth/logout`, { method: "POST", credentials: "include", headers: authHeaders() });
+      if (Capacitor.isNativePlatform()) {
+        await ServerConfig.clearDeviceToken(); // 原生：同时吊销本地设备令牌
+      }
+      setDeviceToken(null);
+    } catch { /* 忽略 */ }
+    setAuthMode("login");
+  }
 
   async function load() {
     try {
@@ -107,6 +123,12 @@ export default function SettingsPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      <div className="bg-panel border border-border rounded-xl p-4">
+        <h3 className="font-bold text-sm mb-1">🔒 会话</h3>
+        <button className="text-danger text-sm cursor-pointer" onClick={logout}>退出登录</button>
+        <p className="text-muted text-[10px] mt-1">退出后需重新输入密码；App 内退出会同时清除本地设备令牌（相册同步停止，需重新登录）。</p>
       </div>
     </section>
   );

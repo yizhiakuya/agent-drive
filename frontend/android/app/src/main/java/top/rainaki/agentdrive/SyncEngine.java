@@ -56,6 +56,7 @@ public final class SyncEngine {
             throw new IOException("无法读取相册");
         }
 
+        String deviceToken = ServerConfigStore.getDeviceToken(ctx);
         int count = 0;
         long maxTs = lastSync;
         try {
@@ -75,7 +76,7 @@ public final class SyncEngine {
                     if (in == null) {
                         continue;
                     }
-                    uploadFile(base + "/files/upload", relFolder, name, mime, in);
+                    uploadFile(base + "/files/upload", relFolder, name, mime, in, deviceToken);
                 }
                 maxTs = Math.max(maxTs, ts);
                 count++;
@@ -91,13 +92,16 @@ public final class SyncEngine {
     }
 
     /** multipart/form-data：path=目标文件夹，文件 part 名 file（后端以 filename 拼接完整路径）。 */
-    private static void uploadFile(String uploadUrl, String folder, String fileName, String mime, InputStream in)
-            throws IOException {
+    private static void uploadFile(String uploadUrl, String folder, String fileName, String mime, InputStream in,
+                                  String deviceToken) throws IOException {
         String boundary = "----AgentDriveBoundary" + System.currentTimeMillis();
         HttpURLConnection conn = (HttpURLConnection) new URL(uploadUrl).openConnection();
         conn.setDoOutput(true);
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        if (deviceToken != null && !deviceToken.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + deviceToken);
+        }
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(120000);
         try (OutputStream os = conn.getOutputStream()) {
