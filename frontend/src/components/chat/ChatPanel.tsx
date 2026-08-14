@@ -60,6 +60,8 @@ export default function ChatPanel() {
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [contextUsage, setContextUsage] = useState<{ used: number; total: number; percent: number } | null>(null);
   const [showJump, setShowJump] = useState(false);
+  const [autoReport, setAutoReport] = useState<{ date: string; text: string } | null>(null);
+  const [reportDismissed, setReportDismissed] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -94,6 +96,19 @@ export default function ChatPanel() {
       setMessages([]);
     }
   }
+
+  // 主动汇报：空会话时拉取最近一次自动化报告
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || "/api/v1"}/automation/latest`);
+        if (r.ok) {
+          const d = await r.json() as { report?: { date: string; text: string } | null };
+          if (d.report) setAutoReport(d.report);
+        }
+      } catch { /* 忽略 */ }
+    })();
+  }, [messages.length === 0 ? sessionId : sessionId]);
 
   useEffect(() => {
     if (sessionId !== sidRef.current) {
@@ -261,6 +276,19 @@ export default function ChatPanel() {
   return (
     <section className="flex-1 flex flex-col min-w-0 relative">
       <div ref={listRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-5 pb-8 flex flex-col gap-3">
+        {messages.length === 0 && !busy && autoReport && !reportDismissed && (
+          <div className="border border-accent/40 bg-accent-soft/40 rounded-xl p-4 text-sm animate-slide-in">
+            <div className="flex justify-between items-start gap-2">
+              <b>🌙 昨夜自动化报告（{autoReport.date}）</b>
+              <button className="text-muted text-xs cursor-pointer hover:text-text" onClick={() => setReportDismissed(true)}>✕</button>
+            </div>
+            <div className="markdown-body mt-1 max-h-56 overflow-auto">{autoReport.text}</div>
+            <button className="mt-2 bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer hover:opacity-85"
+                    onClick={() => send("详细说说昨晚的自动化执行结果")}>
+              让 Agent 总结一下
+            </button>
+          </div>
+        )}
         {messages.length === 0 && !busy && (
           <div className="flex flex-col items-center gap-3 py-14 text-center animate-fade-in">
             <div className="text-5xl animate-float">🦋</div>
