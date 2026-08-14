@@ -83,37 +83,46 @@ public final class SyncEngine {
         String selection = MediaStore.Images.Media.DATE_ADDED + " > ?";
         String[] args = {String.valueOf(lastSync)};
 
-        // 先统计待传总数（进度条用）
+        // 限幅查询：SQL 级 LIMIT（MAX_PER_RUN+1），不再全量 COUNT 统计
         running = true;
         phase = "scanning";
         currentFile = "";
         uploaded = 0;
         total = 0;
         emitProgress();
-        try (Cursor cc = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                new String[]{"COUNT(*)"}, selection, args, null)) {
-            if (cc != null && cc.moveToFirst()) {
-                total = Math.min(cc.getInt(0), MAX_PER_RUN);
-            }
+        Cursor c;
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            android.os.Bundle b = new android.os.Bundle();
+            b.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection);
+            b.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, args);
+            b.putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, new String[]{MediaStore.Images.Media.DATE_ADDED});
+            b.putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_ASCENDING);
+            b.putInt(ContentResolver.QUERY_ARG_LIMIT, MAX_PER_RUN + 1);
+            c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, b, null);
+        } else {
+            c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, selection, args,
+                    MediaStore.Images.Media.DATE_ADDED + " ASC");
         }
-        phase = total == 0 ? "done" : "uploading";
-        emitProgress();
-
-        Cursor c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, selection, args,
-                MediaStore.Images.Media.DATE_ADDED + " ASC");
         if (c == null) {
             running = false;
             throw new IOException("无法读取相册");
         }
+        total = Math.min(c.getCount(), MAX_PER_RUN); // 限幅游标直接给总数（+1 行用于截断边界探测）
+        phase = total == 0 ? "done" : "uploading";
+        emitProgress();
 
         int count = 0;
         int failures = 0;
         long maxTs = lastSync;
+        long lastProcessedTs = -1; // 截断只在"完整的一秒"边界：同秒照片必须整批处理
         try {
-            while (c.moveToNext() && count < MAX_PER_RUN) {
+            while (c.moveToNext()) {
+                long ts = c.getLong(2);
+                if (count >= MAX_PER_RUN && lastProcessedTs != -1 && ts != lastProcessedTs) {
+                    break; // 已到上限且当前行进入新的秒：留待下一轮（检查点已覆盖同秒全部）
+                }
                 long id = c.getLong(0);
                 String name = c.getString(1);
-                long ts = c.getLong(2);
                 String mime = c.getString(3);
                 if (mime == null || mime.isEmpty()) {
                     mime = "image/jpeg";
@@ -135,6 +144,7 @@ public final class SyncEngine {
                 } catch (Exception e) {
                     failures++; // 单张失败不阻塞整批
                 }
+                lastProcessedTs = ts;
             }
         } finally {
             c.close();

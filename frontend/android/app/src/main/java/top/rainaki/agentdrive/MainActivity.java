@@ -2,7 +2,11 @@ package top.rainaki.agentdrive;
 
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.MediaStore;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -35,6 +39,25 @@ public class MainActivity extends BridgeActivity {
 
         // 设备登记（web 设备列表可见）；回前台心跳由前端 visibilitychange 触发 heartbeat()
         DeviceRegistrar.register(getApplicationContext(), true);
+
+        // 事件驱动同步：相册新增照片 → 秒级排一次快速同步（周期任务仍作兜底）
+        registerMediaObserver();
+    }
+
+    /** MediaStore 观察者：新照片落库立即触发快速同步（遵守仅 Wi-Fi 约束）。 */
+    private void registerMediaObserver() {
+        try {
+            ContentObserver observer = new ContentObserver(new Handler(Looper.getMainLooper())) {
+                @Override
+                public void onChange(boolean selfChange) {
+                    PhotoSyncScheduler.enqueueQuickSync(getApplicationContext());
+                }
+            };
+            getContentResolver().registerContentObserver(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer);
+        } catch (Exception ignored) {
+            // 注册失败不影响周期同步
+        }
     }
 
     @Override
