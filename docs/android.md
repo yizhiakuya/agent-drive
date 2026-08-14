@@ -18,7 +18,7 @@
 | nginx | 13311 端口 HTTPS → Agent Drive，SSE 友好（`/etc/nginx/sites-available/agent-drive`） |
 | 域名/端口 | `https://home.rainaki.top:13311`（Cloudflare DNS-01 验证，家宽自定义端口） |
 | PWA 能力 | manifest + sw 离线壳 + 分享到网盘(share_target) + 相机上传 + safe-area |
-| 签名 keystore | `/root/agent-drive-android/agentdrive.keystore`（alias=agentdrive, storepass/keypass=`agentdrive123`） |
+| 签名 keystore | `/root/agent-drive-android/agentdrive.keystore`（alias=agentdrive，密码见服务器本地 `/root/agent-drive-android/README.txt`） |
 | assetlinks.json | 已在 `frontend/public/.well-known/assetlinks.json`（包名 `top.rainaki.agentdrive`，SHA256 指纹 `8ef4635c9f505891d0c9251ed229e610c7a5d7799bd7eb73311df1de4fe90a94`） |
 | TWA 配置 | `/root/agent-drive-android/twa-manifest.json` |
 
@@ -31,7 +31,7 @@ bubblewrap 的连环交互坑（都需要 expect 应答）：
 2. Android SDK 路径校验 → 已配（顶层需真实 `bin/` 拷贝，不是符号链接）
 3. 项目 regenerate 确认（y）
 4. versionName 要求 ≥6 字符（如 `1.0.10`）
-5. keystore 密码提示（`agentdrive123`）
+5. keystore 密码提示（见本地 README.txt）
 6. 构建改用腾讯 gradle 镜像（wrapper 里已换 `mirrors.cloud.tencent.com`）
 
 expect 脚本在 `/tmp/twa3.exp`（临时，重启会丢；续做时按 §三 列表重写）。
@@ -53,7 +53,7 @@ export ANDROID_HOME=~/.bubblewrap/android_sdk
 # APK: app/build/outputs/apk/release/app-release-unsigned.apk
 # 签名（若 gradle 未内嵌签名）:
 $ANDROID_HOME/build-tools/35.0.0/apksigner sign \
-  --ks agentdrive.keystore --ks-pass pass:agentdrive123 \
+  --ks agentdrive.keystore --ks-pass pass:$(cat /root/agent-drive-android/README.txt) \
   --out AgentDrive.apk app-release-unsigned.apk
 ```
 
