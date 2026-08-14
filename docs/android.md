@@ -35,6 +35,8 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 - 同名冲突：noclobber 参数 → 服务端自动加序号 name-2.jpg，绝不覆盖
 - 断点续传：每张成功后立即写检查点；失败重试零流量（已传文件秒传命中）
 - 单张失败不阻塞整批：跳过继续，Worker 指数退避重试
+- 事件驱动：MediaStore ContentObserver 拍照秒级触发快速同步（周期任务兜底）；查询 SQL LIMIT 不 COUNT 全量统计
+- 进度可视：App 内进度块（实时事件）+ 通知栏进度条；全局下拉刷新（App/PWA 通用）
 
 ## 三、已完成的（有效资产）
 
@@ -93,4 +95,5 @@ copy android\app\build\outputs\apk\release\app-release.apk out\app\agent-drive.a
 | 扫码连接服务器 | ✅ 已落地（首启 + 设置内重扫） |
 | 推送通知（VAPID + webpush） | 未做：自动化报告/red 确认的推送，等基本功能稳定后评估 |
 | 视频/文件自动同步 | 可扩展：SyncEngine 增加 MediaStore.Video 查询即可 |
+| 音视频转写 | 未做（资源评估后）：ingest 加 whisper 解析器 |
 | iOS 客户端 | 未做：Capacitor 工程可 npx cap add ios（需 macOS 构建） |

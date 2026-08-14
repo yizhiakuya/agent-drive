@@ -14,6 +14,9 @@
 - **工具分级安全**：查询自动 / 低风险写自动 / 高风险写需确认
 - **审计日志**：Agent 每一步操作都可回放
 - **记忆系统**：用户偏好 + 多会话 + 跨会话摘要
+- **全站认证**：网页密码登录（PBKDF2）+ App 扫码即授权（一次性配对码换设备令牌）+ 登录限速（见 docs/security.md）
+- **设备管理**：web 设置页设备列表——型号/活跃时间/相册同步状态，移除即吊销令牌
+- **安卓原生壳**：Capacitor（frontend/android）打包 web UI + 原生能力：扫码连接、相册自动同步（WorkManager 后台/去重秒传/断点续传/进度可视）、通知、全局下拉刷新
 
 ## 🚀 快速开始
 
@@ -36,9 +39,13 @@ npm run build
 NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # :3000
 ```
 
-### 3. 首次使用（Onboarding）
+### 3. 首次使用
 
-打开 http://localhost:8000（backend 托管前端）→ 选择协议类型 → 填 Base URL / API Key / 模型 → **测试连接** → **完成配置**。
+1. 打开 http://localhost:8000（backend 托管前端）→ **设置主人密码**（第一个设置者即主人）
+2. 网页端配置 AI：选择协议类型 → 填 Base URL / API Key / 模型 → **测试连接** → **完成配置**
+3. 手机装 App（设置 → 连接手机 App → 下载 APK）→ **扫码即授权**，免输入密码
+
+App 与 PWA 均为客户端：AI 配置只在网页端进行（App 内不提供 AI 设置界面）。
 
 之后所有操作都通过对话完成：
 - "看看网盘里有什么文件"
@@ -51,27 +58,29 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # :3000
 ```
 agent-drive/
 ├── docs/                        # 架构/Agent定义/前端架构/安卓端/质量报告/审查记录
-├── deploy/                      # nginx 部署配置（HTTPS 13311）
+├── deploy/                      # nginx 部署配置（HTTPS 13311）+ systemd 单元（8000 仅回环）
 ├── backend/
 │   ├── app/
 │   │   ├── main.py              # 入口：create_app() + 托管前端静态(SPA)
 │   │   ├── core/                # config/logging/errors/container/retry
-│   │   ├── api/v1/              # chat/config/files/sessions/automation
+│   │   ├── auth/                # 认证：密码/会话令牌/设备令牌/配对码（store.py）
+│   │   ├── devices/             # 设备注册表（devices.json）
+│   │   ├── api/v1/              # auth/chat/config/files/sessions/automation/devices
 │   │   ├── agent/               # loop/prompt/router/skills/onboarding/
 │   │   │   │                    #   scheduler(自动化)/confirm/context/
 │   │   │   ├── tools/           # files/system/analytics/plan/memory
 │   │   │   └── memory/          # preferences/sessions
 │   │   ├── llm/                 # base/manager/embeddings/providers(3协议)
-│   │   ├── storage/             # base/local（回收站 .trash）
+│   │   ├── storage/             # base/local（回收站 .trash）+ upload_index（秒传去重）
 │   │   └── ingest/              # pipeline（PDF/OCR 摄入+向量索引）
-│   ├── tests/                   # unit 9套 + integration pytest
+│   ├── tests/                   # unit 12 套 + integration pytest
 │   ├── scripts/                 # benchmark_real.py / mock_llm.py / backup.sh
 │   └── pyproject.toml           # 依赖唯一真相源
 ├── frontend/                    # Next.js 16 + Tailwind + TS + zustand
 │   └── src/
 │       ├── app/                 # layout/page + globals.css(主题)
-│       ├── components/          # chat/ files/ sessions/ settings/ onboarding
-│       └── lib/                 # store/events/format/api(5模块)
+│       ├── components/          # chat/ files/ sessions/ settings/ onboarding/ auth(登录·扫码)· PullToRefresh
+│       └── lib/                 # store/events/format + api(6模块) + native(插件桥)
 ├── frontend/android/           # Capacitor 原生壳（扫码连接 + 相册自动同步 + 后台任务）
 ├── Makefile                     # install/dev/test/bench/build
 └── docker-compose.yml           # db(pgvector)+redis+backend+frontend
@@ -126,7 +135,7 @@ python3 mock_llm.py &              # Mock LLM (端口 9999)
 - **M2** ✅：摄入管线（PDF/OCR）+ 语义搜索（Jina 云向量）+ 全文检索 + 文档问答
 - **M3** ✅：规则自动执行（每天 03:30）+ 主动汇报 + 回收站
 - **M4 候选**：音视频转写 / 文件关系图谱 / 知识图谱问答 / 推送通知
-- **业务层** ✅：三页面（对话/文件/设置）+ PWA + 分享到网盘 + 影音播放 + 备份
+- **安全与多端** ✅：全站认证（密码/扫码配对/设备令牌）+ 安卓原生壳 + 相册自动同步（去重/断点/进度）+ 设备列表 + APK 下载
 - **安卓客户端** ✅：Capacitor 原生壳（frontend/android）——web UI 原样打包 + 原生插件桥：扫码连接服务器、相册自动同步（WorkManager 后台任务）、通知（见 docs/android.md）
 
 ## ⚠️ 安全说明

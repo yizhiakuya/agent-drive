@@ -1,6 +1,39 @@
-# 前端架构（Next.js 版，2026-08-14 迁移 + 验收后更新）
+# 前端架构
 
-> 技术栈：Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + zustand + vitest
+> ⚠️ **本文档正文是 2026-08-14 迁移当天做的架构分析存档**（下文目录树/行数反映迁移前 Vite 版与迁移初期状态，已不反映现状）。
+> 最新结构与实现请以 [frontend/README.md](../frontend/README.md) 与代码为准。以下"现状速览"为当前（2026-08-14 晚）真实结构摘要。
+
+## 现状速览（当前真实结构）
+
+```
+src/
+├── app/                # layout.tsx（主题/安全区/manifest）+ page.tsx（认证门控 + 三 tab + 全局下拉刷新）
+├── components/
+│   ├── chat/           # ChatPanel（SSE 流式）+ ToolStep/ContextBar/PlanCard
+│   ├── files/          # FilePage + FilePanel（文件/回收站/预览/上传）
+│   ├── sessions/       # SessionList（多会话）
+│   ├── settings/       # SettingsPage + ConnectAppCard(配对二维码) + DevicesCard + PhotoSyncCard(仅 App)
+│   ├── onboarding/     # AI 配置向导（仅 web 渲染）
+│   ├── auth/           # LoginCard(登录/设密) / RescanCard(重扫码) / ServerNotReadyCard
+│   └── PullToRefresh   # 全局下拉刷新（触屏手势）
+└── lib/
+    ├── api/            # client(基座+鉴权头+401 拦截) chat files config sessions devices auth
+    ├── native/         # Capacitor 插件桥：server-config / photo-sync
+    └── store(zustand)  events(事件总线)  format
+```
+
+**演进要点**（相对迁移当天）：
+- 认证体系：登录/设密页、扫码配对、401 全局拦截、原生端"重扫码"模式
+- 原生桥：ServerConfig / PhotoSync 插件（服务器地址、设备令牌、同步进度事件）
+- 事件总线扩展：`agent-drive:refresh`（下拉刷新全局联动）+ 既有 files-changed/toast
+- AI 配置界面 web-only；App 内仅显示提示
+- Capacitor 7（frontend/android）打包 web 资源，插件注册须在 super.onCreate 之前
+
+---
+
+## 历史分析存档（2026-08-14 迁移时）
+
+> 技术栈（当时）：Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + zustand + vitest
 > 部署：`output: 'export'` 静态导出 out/，由 backend（FastAPI）单服务托管
 > 演进：2026-08-14 从 React18+Vite 迁移，架构分析清单问题 ①-④ 已随迁移清零
 

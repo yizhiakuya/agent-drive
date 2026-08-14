@@ -1,7 +1,8 @@
 # 🏗️ Agent Drive 架构设计 v2.0
 
-> 更新于 2026-08-14：前端迁移 Next.js 16；ingest/embeddings/scheduler 落地；
-> 应用层与接口层合并（个人项目体量，API 直连 Container 编排，services/ 拆分暂缓）。
+> 更新于 2026-08-14：前端迁移 Next.js 16；ingest/embeddings/scheduler 落地；应用层与接口层合并；
+> 同日新增：全站认证（auth/：密码+会话+设备令牌+扫码配对）、设备注册表（devices/）、上传去重索引（storage/upload_index.py）、
+> Capacitor 安卓原生壳（frontend/android）。认证设计见 docs/security.md。
 
 ## 一、架构分层（严格单向依赖）
 
@@ -17,8 +18,10 @@
 ├─────────────────────────────────────────────────┤
 │  Domain 领域层                                    │
 │  agent/ (loop · tools · memory · prompt)         │
+│  auth/ (密码·令牌·配对码) · devices/ (注册表)      │
 │  llm/  (providers · manager)                     │
-│  storage/ (local · s3) · ingest/ (pipeline)      │
+│  storage/ (local · s3 · upload_index)             │
+│  ingest/ (pipeline)                               │
 │  职责: 核心业务逻辑，不依赖 HTTP/框架               │
 ├─────────────────────────────────────────────────┤
 │  Infrastructure 基础设施层                        │
@@ -40,6 +43,9 @@
 | `agent/` | Agent 决策循环、工具、记忆 | HTTP、存储细节 |
 | `llm/` | LLM 协议适配 | 业务逻辑 |
 | `storage/` | 文件持久化（接口+实现） | 决策逻辑 |
+| `auth/` | 密码（PBKDF2）、会话令牌（HMAC）、设备令牌、配对码（扫码即授权）、限速 | HTTP 细节（由 api 层承载） |
+| `devices/` | 设备登记/心跳（JSON 持久化） | 认证逻辑 |
+| `storage/upload_index.py` | 上传去重索引（秒传：md5→路径） | 业务决策 |
 | `ingest/` | 摄入管线（M2 已落地：文本/PDF/OCR 提取 + 全文/语义搜索） | ✅ |
 
 ## 三、关键设计决策
@@ -105,8 +111,9 @@ backend/
 │   │   ├── config.py  logging.py  errors.py  container.py
 │   ├── api/
 │   │   ├── v1/              # 版本化路由
-│   │   │   ├── router.py  chat.py  config.py  files.py  sessions.py
-│   │   └── deps.py          # 依赖获取
+│   │   │   ├── router.py  auth.py  chat.py  config.py  files.py
+│   │   │   ├── sessions.py  automation.py  devices.py
+│   │   └── deps.py          # 依赖获取 + get_owner 统一鉴权
 │   ├── schemas/             # Pydantic 模型
 │   │   ├── chat.py  config.py  files.py  sessions.py
 │   ├── agent/               # 领域：Agent（单一职责拆分）
@@ -122,16 +129,20 @@ backend/
 │   │   ├── scheduler.py        # M3: 规则自动执行(每天 03:30)
 │   │   └── tools/  files.py  system.py  analytics.py
 │   │               plan.py  memory.py  registry.py
+│   ├── auth/               # 认证（纯标准库，零新依赖）
+│   │   └── store.py          #   密码/会话令牌/设备令牌/配对码/限速
+│   ├── devices/             # 设备注册表 registry.py
 │   ├── llm/
 │   │   ├── base.py  manager.py  embeddings.py
 │   │   └── providers/  openai_compat.py  responses.py  anthropic.py
-│   ├── storage/  base.py  local.py
+│   ├── storage/  base.py  local.py  upload_index.py（秒传去重）
 │   └── ingest/  pipeline.py    # M2: 提取(文本/PDF/OCR)+索引+向量(Jina 云)
 ├── tests/
 │   ├── conftest.py
 │   ├── unit/  test_agent test_critic test_reliability test_retry
 │   │          test_compress test_write_tools test_memory
-│   │          test_bugfixes test_ingest_m2（共 9 套）
+│   │          test_bugfixes test_ingest_m2 test_auth
+│   │          test_devices test_upload_index（共 12 套）
 │   └── integration/  test_api.py
 ├── scripts/  mock_llm.py  benchmark_real.py
 ├── system/  agent-config.json（gitignored, agent 自管理）
@@ -146,14 +157,19 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4）
 │   │   ├── chat/  ChatPanel.tsx  ToolStep.tsx  ContextBar.tsx  PlanCard.tsx
 │   │   ├── files/  FilePage.tsx  FilePanel.tsx
 │   │   ├── sessions/  SessionList.tsx
-│   │   ├── settings/  SettingsPage.tsx
-│   │   ├── onboarding/  Onboarding.tsx
+│   │   ├── settings/  SettingsPage.tsx  ConnectAppCard.tsx
+│   │   │            DevicesCard.tsx  PhotoSyncCard.tsx
+│   │   ├── onboarding/  Onboarding.tsx（仅 web 渲染）
+│   │   ├── auth/  LoginCard.tsx  RescanCard.tsx  ServerNotReadyCard.tsx
+│   │   ├── PullToRefresh.tsx（全局下拉刷新）
 │   │   └── ToastStack.tsx
 │   ├── lib/  store.ts(zustand)  events.ts(事件总线常量)
-│   │         format.ts(工具函数)  api/(client/chat/files/config/sessions)
+│   │         format.ts(工具函数)  api/(client/chat/files/config/sessions/devices/auth)
+│   │         native/(server-config photo-sync 插件桥)
 │   └── （vitest 测试与源码同目录）
 ├── out/  next build 静态导出（backend 托管）
-└── next.config.ts(output:'export')  vitest.config.ts
+├── android/  Capacitor 7 原生壳（扫码配对/相册同步/设备令牌，见 docs/android.md）
+└── next.config.ts(output:'export')  vitest.config.ts  capacitor.config.ts
 ```
 
 部署形态：systemd 单服务（uvicorn 托管 backend + 静态 out/）；docker compose 备用。
@@ -172,5 +188,8 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4）
 | 流式输出 | ✅ 已落地 | SSE /chat/stream + 前端 chatStream |
 | 向量库迁移 | 待规模需求 | db/(pgvector, compose 已备) |
 | 音视频转写 | 未做（资源评估后） | ingest 加 whisper 解析器 |
-| 认证/多用户 | 未做（个人项目） | api/deps + core/auth + owner 维度 |
+| **认证（单用户）** | ✅ 已落地 | auth/store.py（纯标准库 PBKDF2/HMAC）+ api/v1/auth.py + deps.get_owner 统一鉴权（Cookie/Bearer/?token=）；扫码配对免密，详见 docs/security.md |
+| 多用户 | 未做（个人项目） | 若需要：auth 层扩展 user 维度 |
+| **安卓原生壳** | ✅ 已落地 | frontend/android（Capacitor 7）：扫码配对、相册自动同步（WorkManager+秒传去重+断点续传+进度可视）、设备心跳、下拉刷新，详见 docs/android.md |
+| **上传去重（秒传）** | ✅ 已落地 | storage/upload_index.py + /files/upload 的 md5/noclobber 表单字段 |
 | S3 存储 | 未做 | storage/s3.py 实现 base 协议 |
