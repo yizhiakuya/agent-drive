@@ -63,6 +63,21 @@ export default function ChatPanel() {
   const [autoReport, setAutoReport] = useState<{ date: string; text: string } | null>(null);
   const [reportDismissed, setReportDismissed] = useState(false);
 
+  function markReportRead(date: string) {
+    try {
+      localStorage.setItem("agent-drive-report-read", date);
+    } catch { /* 忽略 */ }
+    setReportDismissed(true);
+  }
+
+  function isReportRead(date: string): boolean {
+    try {
+      return localStorage.getItem("agent-drive-report-read") === date;
+    } catch {
+      return false;
+    }
+  }
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -104,7 +119,7 @@ export default function ChatPanel() {
         const r = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || "/api/v1"}/automation/latest`);
         if (r.ok) {
           const d = await r.json() as { report?: { date: string; text: string } | null };
-          if (d.report) setAutoReport(d.report);
+          if (d.report && !isReportRead(d.report.date)) setAutoReport(d.report);
         }
       } catch { /* 忽略 */ }
     })();
@@ -280,11 +295,11 @@ export default function ChatPanel() {
           <div className="border border-accent/40 bg-accent-soft/40 rounded-xl p-4 text-sm animate-slide-in">
             <div className="flex justify-between items-start gap-2">
               <b>🌙 昨夜自动化报告（{autoReport.date}）</b>
-              <button className="text-muted text-xs cursor-pointer hover:text-text" onClick={() => setReportDismissed(true)}>✕</button>
+              <button className="text-muted text-xs cursor-pointer hover:text-text" onClick={() => markReportRead(autoReport.date)}>✕</button>
             </div>
             <div className="markdown-body mt-1 max-h-56 overflow-auto">{autoReport.text}</div>
             <button className="mt-2 bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer hover:opacity-85"
-                    onClick={() => send("详细说说昨晚的自动化执行结果")}>
+                    onClick={() => { markReportRead(autoReport.date); send("详细说说昨晚的自动化执行结果"); }}>
               让 Agent 总结一下
             </button>
           </div>
