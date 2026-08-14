@@ -75,6 +75,41 @@ def test_auth_flow(tmp_path: Path):
         assert c.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
 
 
+def test_pairing_flow(tmp_path: Path):
+    """扫码配对流：web 登录 → 生成配对码 → App 无凭据兑换 → Bearer 可用。"""
+    settings = Settings(
+        app_env="test",
+        backend_dir=tmp_path,
+        system_dir=Path("system"),
+        data_dir=Path("data"),
+    )
+    container = Container(settings)
+    app = create_app(container)
+    with TestClient(app) as c:
+        c.post("/api/v1/auth/setup", json={"password": "password-abc-123"})
+        # 未登录（无 cookie）不能生成配对码
+        with TestClient(app) as anon:
+            assert anon.post("/api/v1/auth/pairing").status_code == 401
+        # 登录后生成
+        info = c.post("/api/v1/auth/pairing").json()
+        assert info["expires_in"] == 300
+        # 新客户端（无任何凭据）兑换
+        with TestClient(app) as phone:
+            r = phone.post("/api/v1/auth/pair-exchange", json={
+                "code": info["code"], "device_id": "phone-1", "name": "Xiaomi 14",
+            })
+            assert r.status_code == 200
+            tok = r.json()["token"]
+            # Bearer 全通
+            assert phone.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+            # 重放 → 已被使用
+            r2 = phone.post("/api/v1/auth/pair-exchange", json={
+                "code": info["code"], "device_id": "phone-2",
+            })
+            assert r2.status_code == 400
+            assert "已被使用" in r2.json()["detail"]
+
+
 def test_root_status(client):
     c, _ = client
     r = c.get("/")

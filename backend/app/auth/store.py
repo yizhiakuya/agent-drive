@@ -12,7 +12,9 @@ system/auth.json 结构：
 - 密码：PBKDF2-SHA256 60 万次迭代 + 随机盐，只存哈希
 - 会话令牌：HMAC-SHA256 签名（无状态，30 天有效），web 走 HttpOnly Cookie
 - 设备令牌：随机 43 字符（只存 SHA-256 哈希），App 后台同步/媒体预览用，可按设备吊销
-- 登录/设密限速：每 IP 每分钟 5 次
+- 配对码（扫码即授权）：已登录 web 生成 → 二维码携带 → App 兑换设备令牌。
+  一次性、5 分钟有效、最多 3 个未使用；只存 SHA-256 哈希
+- 登录/设密限速：每 IP 每分钟 5 次；配对码兑换限速：每 IP 每分钟 10 次
 """
 from __future__ import annotations
 
@@ -31,6 +33,8 @@ SESSION_TTL_SECONDS = 30 * 86400  # 30 天
 SESSION_COOKIE = "agentdrive_session"
 RATE_LIMIT = 5
 RATE_WINDOW = 60.0
+PAIRING_TTL_SECONDS = 300  # 配对码 5 分钟有效
+PAIRING_MAX_OUTSTANDING = 3  # 最多 3 个未使用配对码
 
 
 def hash_password(password: str, salt: str | None = None, iterations: int = PBKDF2_ITERATIONS) -> str:
@@ -59,7 +63,7 @@ class AuthStore:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                self._data = {"device_tokens": {}, **data}
+                self._data = {"device_tokens": {}, "pairings": {}, **data}
         except (json.JSONDecodeError, OSError):
             pass  # 坏文件：按未初始化处理，不阻塞启动
 
@@ -166,7 +170,67 @@ class AuthStore:
     def _hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    # ---- 限速（登录/设密，内存级） ----
+    # ---- 配对码（扫码即授权） ----
+    def issue_pairing(self, ttl: int = PAIRING_TTL_SECONDS) -> dict[str, Any]:
+        """已登录 web 生成配对码（二维码携带），返回 {code, expires_in}。"""
+        self._prune_pairings()
+        code = secrets.token_urlsafe(24)
+        with self._lock:
+            self._data.setdefault("pairings", {})[self._hash_token(code)] = {
+                "created_at": time.time(),
+                "expires_at": time.time() + ttl,
+                "used_at": None,
+                "device_id": None,
+            }
+            self._save()
+        return {"code": code, "expires_in": ttl}
+
+    def exchange_pairing(self, code: str, device_id: str, name: str = "") -> str:
+        """App 扫码兑换：一次性、限时、重扫吊销旧令牌。返回设备令牌。
+
+        失败抛 ValueError（消息面向 App 展示）：
+        - "配对码无效或已过期"
+        - "配对码已被使用"
+        """
+        self._prune_pairings()
+        key = self._hash_token(code)
+        with self._lock:
+            entry = self._data.get("pairings", {}).get(key)
+            if entry is None:
+                raise ValueError("配对码无效或已过期")
+            if entry.get("used_at") is not None:
+                raise ValueError("配对码已被使用")
+            if entry.get("expires_at", 0) < time.time():
+                raise ValueError("配对码无效或已过期")
+            entry["used_at"] = time.time()
+            entry["device_id"] = device_id
+            # 重扫 = 换新令牌并吊销该设备旧令牌（一设备一有效令牌）
+            tokens = self._data.get("device_tokens", {})
+            stale = [k for k, v in tokens.items() if v.get("device_id") == device_id]
+            for k in stale:
+                del tokens[k]
+            self._save()
+        return self.issue_device_token(device_id, name)
+
+    def _prune_pairings(self) -> None:
+        """清理过期配对码；未使用数量超限时丢弃最旧的。
+
+        已使用的码保留到过期：让"二次扫码"能命中并报"已被使用"（失窃信号）。
+        """
+        now = time.time()
+        with self._lock:
+            pairings = self._data.get("pairings", {})
+            fresh = {k: v for k, v in pairings.items() if v.get("expires_at", 0) >= now}
+            unused = {k: v for k, v in fresh.items() if v.get("used_at") is None}
+            if len(unused) > PAIRING_MAX_OUTSTANDING:
+                keep = sorted(unused.items(), key=lambda kv: kv[1].get("created_at", 0), reverse=True)
+                drop = {k for k, _ in keep[PAIRING_MAX_OUTSTANDING:]}
+                fresh = {k: v for k, v in fresh.items() if k not in drop}
+            if len(fresh) != len(pairings):
+                self._data["pairings"] = fresh
+                self._save()
+
+    # ---- 限速（登录/设密/兑换，内存级） ----
     def check_rate(self, key: str, limit: int = RATE_LIMIT, window: float = RATE_WINDOW) -> bool:
         """返回 True 表示放行，False 表示超限。"""
         now = time.time()

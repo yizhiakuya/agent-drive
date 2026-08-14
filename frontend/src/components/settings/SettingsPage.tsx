@@ -25,7 +25,7 @@ export default function SettingsPage() {
       }
       setDeviceToken(null);
     } catch { /* 忽略 */ }
-    setAuthMode("login");
+    setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
   }
 
   async function load() {

@@ -2,7 +2,7 @@
 import { create } from "zustand";
 
 type Tab = "chat" | "files" | "settings";
-export type AuthMode = "loading" | "setup" | "login" | "ready";
+export type AuthMode = "loading" | "setup" | "login" | "ready" | "rescan"; // rescan=原生 App 待扫码授权
 
 interface AppState {
   configured: boolean;

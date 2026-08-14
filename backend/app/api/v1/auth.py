@@ -19,6 +19,12 @@ class DeviceTokenBody(BaseModel):
     name: str = ""
 
 
+class PairExchangeBody(BaseModel):
+    code: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=128)
+    name: str = ""
+
+
 def _set_session_cookie(response: Response, token: str, secure: bool) -> None:
     response.set_cookie(
         SESSION_COOKIE, token,
@@ -92,3 +98,26 @@ async def issue_device_token(payload: DeviceTokenBody, container=Depends(get_con
 @router.get("/me")
 async def me(_=Depends(get_owner)):
     return {"authed": True}
+
+
+@router.post("/pairing")
+async def issue_pairing(container=Depends(get_container), _=Depends(get_owner)):
+    """已登录 web 生成配对码（二维码携带，5 分钟一次性）。"""
+    info = container.auth.issue_pairing()
+    container.audit.record("auth.pairing_issue")
+    return info
+
+
+@router.post("/pair-exchange")
+async def pair_exchange(payload: PairExchangeBody, request: Request,
+                        container=Depends(get_container)):
+    """App 扫码兑换：配对码 → 长期设备令牌（免密码）。"""
+    if not container.auth.check_rate("pair:" + _client_ip(request), limit=10):
+        raise HTTPException(429, "尝试过于频繁，请稍后再试")
+    try:
+        token = container.auth.exchange_pairing(payload.code, payload.device_id, payload.name)
+    except ValueError as e:
+        container.audit.record("auth.pair_exchange_failed", "ip=" + _client_ip(request) + " reason=" + str(e))
+        raise HTTPException(400, str(e))
+    container.audit.record("auth.pair_exchange", "device=" + payload.device_id)
+    return {"token": token, "device_id": payload.device_id}

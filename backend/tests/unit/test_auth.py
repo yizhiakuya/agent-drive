@@ -59,3 +59,47 @@ def test_rate_limit(tmp_path):
         assert auth.check_rate("1.2.3.4") is True
     assert auth.check_rate("1.2.3.4") is False  # 第 6 次超限
     assert auth.check_rate("5.6.7.8") is True  # 其他 IP 不受影响
+
+
+def test_pairing_exchange_and_single_use(tmp_path):
+    auth = AuthStore(tmp_path / "auth.json")
+    info = auth.issue_pairing()
+    assert info["expires_in"] == 300
+    # 兑换成功 → 设备令牌可用
+    tok = auth.exchange_pairing(info["code"], "dev-1", name="Xiaomi")
+    assert auth.verify_device_token(tok) is True
+    # 二次兑换 → 已被使用
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="已被使用"):
+        auth.exchange_pairing(info["code"], "dev-2")
+
+
+def test_pairing_expired_and_invalid(tmp_path):
+    auth = AuthStore(tmp_path / "auth.json")
+    expired = auth.issue_pairing(ttl=-1)  # 立即过期
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="无效或已过期"):
+        auth.exchange_pairing(expired["code"], "dev-1")
+    with _pytest.raises(ValueError, match="无效或已过期"):
+        auth.exchange_pairing("bogus-code-123", "dev-1")
+
+
+def test_pairing_repair_revokes_old_token(tmp_path):
+    auth = AuthStore(tmp_path / "auth.json")
+    old = auth.issue_device_token("dev-1", name="old")
+    info = auth.issue_pairing()
+    new = auth.exchange_pairing(info["code"], "dev-1", name="new")
+    assert auth.verify_device_token(new) is True
+    assert auth.verify_device_token(old) is False  # 旧令牌已吊销
+
+
+def test_pairing_max_outstanding(tmp_path):
+    auth = AuthStore(tmp_path / "auth.json")
+    codes = [auth.issue_pairing()["code"] for _ in range(4)]
+    # 第 4 个生成时最旧的第 1 个已被清理
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="无效或已过期"):
+        auth.exchange_pairing(codes[0], "dev-1")
+    # 后 3 个仍有效
+    for c in codes[1:]:
+        auth.exchange_pairing(c, "dev-1")  # 不抛错即有效

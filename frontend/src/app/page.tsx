@@ -9,7 +9,8 @@ import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
 import { getStatus, getConfig } from "@/lib/api/config";
 import LoginCard from "@/components/auth/LoginCard";
-import { V1, ApiError, authHeaders, ensureBase } from "@/lib/api/client";
+import RescanCard from "@/components/auth/RescanCard";
+import { V1, ApiError, authHeaders, ensureBase, getDeviceToken } from "@/lib/api/client";
 import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
@@ -47,8 +48,9 @@ export default function Home() {
   const setModelName = useAppStore((s) => s.setModelName);
 
   useEffect(() => {
-    // 会话过期（任意 API 返回 401）→ 回登录页
-    const onUnauthorized = () => setAuthMode("login");
+    // 会话过期（任意 API 返回 401）→ web 回登录页；原生 App 回重扫码页（令牌被吊销）
+    const onUnauthorized = () =>
+      setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
     window.addEventListener("agent-drive:unauthorized", onUnauthorized);
     return () => window.removeEventListener("agent-drive:unauthorized", onUnauthorized);
   }, [setAuthMode]);
@@ -79,23 +81,37 @@ export default function Home() {
   async function boot() {
     try {
       await ensureBase(); // 原生 App：从扫码配置解析服务器地址与设备令牌
-      if (Capacitor.isNativePlatform()) {
+      const native = Capacitor.isNativePlatform();
+      if (native) {
         const { server } = await ServerConfig.getServer();
         if (!server) {
           window.dispatchEvent(new CustomEvent("agent-drive:toast", {
-            detail: { kind: "error", text: "未连接服务器：请返回设置 → 连接手机 App 重新扫码" },
+            detail: { kind: "error", text: "未连接服务器：请扫码连接" },
           }));
+          setAuthMode("rescan");
+          return;
         }
       }
-      // 认证门：未设密码 → 设密页；未登录 → 登录页；已认证 → 进入主流程
+      // 认证门：web=设密/登录页；App=扫码授权（无令牌即重扫码）
       const ares = await fetch(`${V1}/auth/status`, { credentials: "include", headers: authHeaders() });
       if (!ares.ok) {
-        setAuthMode("login");
+        setAuthMode(native ? "rescan" : "login");
         return;
       }
       const a = await ares.json() as { initialized: boolean };
       if (!a.initialized) {
-        setAuthMode("setup");
+        if (native) {
+          window.dispatchEvent(new CustomEvent("agent-drive:toast", {
+            detail: { kind: "error", text: "请先在网页端设置密码，再扫码连接" },
+          }));
+          setAuthMode("rescan");
+        } else {
+          setAuthMode("setup");
+        }
+        return;
+      }
+      if (native && !getDeviceToken()) {
+        setAuthMode("rescan"); // 扫码即授权，无需密码
         return;
       }
       setAuthMode("ready");
@@ -110,19 +126,21 @@ export default function Home() {
         }
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) {
-          setAuthMode("login");
+          setAuthMode(native ? "rescan" : "login");
           return;
         }
         setConfigured(false); // 网络/服务错误：进入 onboarding 便于重试
       }
     } catch {
-      setAuthMode("login");
+      setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
     } finally {
       setLoading(false);
     }
   }
 
   if (loading) return <SkeletonScreen />;
+  if (authMode === "rescan")
+    return <><RescanCard onPasswordFallback={() => setAuthMode("login")} /><ToastStack /></>;
   if (authMode === "setup") return <><LoginCard mode="setup" onDone={boot} /><ToastStack /></>;
   if (authMode === "login") return <><LoginCard mode="login" onDone={boot} /><ToastStack /></>;
   if (!configured) return <><Onboarding /><ToastStack /></>;

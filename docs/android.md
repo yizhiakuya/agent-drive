@@ -26,7 +26,7 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
                        扫码配置的服务器地址（默认 https://home.rainaki.top:13311）
 ```
 
-**首启流程**：App 打开 → 原生扫码页 → 扫网页「设置 → 连接手机 App」的二维码（agentdrive://connect?server=...）→ 存入 SharedPreferences → 加载本地 web 资源，前端经插件读取服务器地址发起 API 调用。
+**首启流程（扫码即授权，免密码）**：App 打开 → 原生扫码页 → 扫网页「设置 → 连接手机 App」的二维码（agentdrive://connect?server=...&pair=一次性配对码）→ 原生层兑换设备令牌存入 SharedPreferences → 加载本地 web 资源。配对码一次性、5 分钟有效；重扫自动吊销旧令牌。无二维码时可用密码登录作逃生口。
 
 **相册自动同步**：PhotoSyncWorker（WorkManager 周期任务，App 关闭/重启都运行）扫描 MediaStore 新增照片 → multipart 上传 /files/upload（按日期归档到 相册同步/YYYY-MM-DD/）→ 完成通知。约束：电池非低电量 + 网络（可选仅 Wi-Fi），频率 1/6/12/24 小时。
 

@@ -1,28 +1,63 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Capacitor } from "@capacitor/core";
+import { getPairing } from "@/lib/api/auth";
 import { ServerConfig, currentServer } from "@/lib/native/server-config";
 
-/** 连接手机 App：web 端展示二维码（agentdrive://connect?server=...），原生端显示当前连接并可重扫。 */
+/**
+ * 连接手机 App：web 端展示带一次性授权码的二维码（扫码即授权，免密码）；
+ * 原生端显示当前连接并可重扫。
+ */
 export default function ConnectAppCard() {
   const [qr, setQr] = useState<string | null>(null);
   const [server, setServer] = useState("");
   const [native, setNative] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [left, setLeft] = useState(0); // 二维码剩余秒数
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setNative(Capacitor.isNativePlatform());
-    (async () => {
-      const s = await currentServer();
-      setServer(s);
-      if (s) {
-        const content = `agentdrive://connect?server=${encodeURIComponent(s)}`;
-        setQr(await QRCode.toDataURL(content, { margin: 1, width: 220 }));
-      }
-    })();
+    currentServer().then(setServer);
+    if (!Capacitor.isNativePlatform()) refresh();
+    return () => { if (timer.current) clearInterval(timer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function refresh() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const info = await getPairing();
+      const origin = window.location.origin;
+      const content = `agentdrive://connect?server=${encodeURIComponent(origin)}&pair=${info.code}`;
+      setQr(await QRCode.toDataURL(content, { margin: 1, width: 260 }));
+      setLeft(info.expires_in);
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 倒计时 + 到期自动换新码
+  useEffect(() => {
+    if (timer.current) clearInterval(timer.current);
+    if (left <= 0 || native) return;
+    timer.current = setInterval(() => {
+      setLeft((s) => {
+        if (s <= 1) {
+          refresh();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => { if (timer.current) clearInterval(timer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left, native]);
 
   async function rescan() {
     setBusy(true);
@@ -52,17 +87,26 @@ export default function ConnectAppCard() {
       ) : (
         <div className="flex flex-col items-center gap-2">
           <p className="text-muted text-xs text-center">
-            手机 App 首次打开时扫码即可连到本服务器：
+            手机 App 打开后扫此码即可连接并授权（免输入密码）：
             <br />服务器地址 <span className="font-mono text-text">{server}</span>
           </p>
           {qr
-            ? <img src={qr} alt="扫码连接服务器" className="w-44 h-44 rounded-lg border border-border" />
+            ? <>
+                <img src={qr} alt="扫码连接服务器" className="w-52 h-52 rounded-lg border border-border" />
+                <div className="flex items-center gap-2">
+                  <span className="text-muted text-xs">{left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} 后过期` : "已过期"}</span>
+                  <button className="text-accent text-xs cursor-pointer" onClick={refresh} disabled={busy}>
+                    {busy ? "生成中…" : "刷新二维码"}
+                  </button>
+                </div>
+              </>
             : <p className="text-muted text-xs">生成中…</p>}
           <a href="/app/agent-drive.apk" download
              className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer">
             📲 下载安卓 App（APK）
           </a>
-          <p className="text-muted text-[10px]">装好后打开 App 扫码连接；App 内重新扫码：设置 → 连接手机 App → 重新扫码连接</p>
+          <p className="text-muted text-[10px]">扫码即授权（一次性 5 分钟）；App 内重扫：设置 → 连接手机 App</p>
+          {msg && <p className="text-danger text-xs">{msg}</p>}
         </div>
       )}
     </div>
