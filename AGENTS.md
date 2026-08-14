@@ -3,6 +3,16 @@
 > 给本仓库的编码 Agent 与维护者：这是一份"项目级 skill"。修改代码前先读本文件；
 > 改动完成后按「修改检查单」自查，保持文档一致。
 
+## 0. 铁律：文档与 skill 实时同步
+
+**任何代码/行为/流程变更，必须与代码同一次提交内更新：**
+
+1. 相关文档：README、docs/architecture、docs/android、docs/security（按改动范围选择，原则是"文档与实现永不脱节"）
+2. 本文件（AGENTS.md）：新增的坑位、变更的流程、新的约定——即时记录，而不是事后补
+3. 历史快照类文档（quality-report/review-*）除外，它们按日期存档不随实现更新
+
+违反此条 = 提交不合格。禁止"先改代码，文档下次再说"。
+
 ## 1. 项目定位与文档地图
 
 Agent-first 私人网盘：FastAPI 后端 + Next.js 16 前端（静态导出）+ Capacitor 7 安卓原生壳。
@@ -70,7 +80,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - [ ] 后端改动 → 对应 unit/integration 测试；前端改动 → `npm run build` + `npm test`；原生改动 → APK 构建验证
 - [ ] 全量门禁：backend unit + integration + vitest 全绿再提交
 - [ ] 版本号 +1（涉及 App 行为/资源变更时）
-- [ ] 同步文档：README / docs/architecture / docs/android / docs/security 相应小节
+- [ ] 同步文档 + 本 skill：README / docs/* 相应小节 / AGENTS.md（铁律 §0，同一次提交内完成）
 - [ ] 提交并推送 → 服务器 git pull（+ 需要时 restart）→ 前端 tar 部署 / APK 发布
 
 ## 7. 环境事实
