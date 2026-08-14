@@ -28,6 +28,11 @@ export default function FilePanel() {
 
   useEffect(() => { load(""); }, [load]);
 
+  // 移动端默认折叠（窄屏时收起文件面板，聚焦对话）
+  useEffect(() => {
+    if (window.innerWidth < 900) setCollapsed(true);
+  }, []);
+
   useEffect(() => {
     function onFilesChanged() {
       load(pathRef.current);
@@ -39,8 +44,14 @@ export default function FilePanel() {
   async function onUpload(e) {
     const file = e.target.files?.[0];
     if (file) {
-      await uploadFile(file, path);
-      load(path);
+      try {
+        await uploadFile(file, path);
+        window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "ok", text: `已上传 ${file.name}` } }));
+        load(path);
+      } catch (err) {
+        window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "error", text: `上传失败: ${err}` } }));
+      }
+      e.target.value = "";
     }
   }
 
@@ -96,7 +107,12 @@ export default function FilePanel() {
         )}
       </div>
       <div className="fp-list">
-        {items.length === 0 && <div className="muted small">（空目录）</div>}
+        {items.length === 0 && (
+          <div className="fp-empty">
+            <span className="fp-empty-icon">📂</span>
+            目录为空
+          </div>
+        )}
         {items.map((it) => (
           <div
             key={it.path}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ToolStep, ContextBar, PlanCard, fmtTokens, fmtSize } from "./ChatPanel.jsx";
+import { ToolStep, ContextBar, PlanCard, fmtTokens, fmtSize, fmtToolArgs } from "./ChatPanel.jsx";
 
 describe("fmtTokens/fmtSize 工具函数", () => {
   it("token 格式化", () => {
@@ -65,5 +65,20 @@ describe("ToolStep 工具步骤", () => {
     fireEvent.click(screen.getByText("list_files"));
     expect(screen.getByText(/a\.txt/)).toBeInTheDocument();
     expect(screen.getAllByText("文件").length).toBeGreaterThan(0);
+  });
+});
+
+describe("fmtToolArgs 工具参数人类可读", () => {
+  it("危险/文件操作转换为自然语言", () => {
+    expect(fmtToolArgs("delete_file", { path: "a.txt" })).toBe("删除 a.txt");
+    expect(fmtToolArgs("copy_file", { src: "a", dst: "b" })).toBe("复制 a → b");
+    expect(fmtToolArgs("move_file", { src: "a", dst_dir: "dir" })).toBe("移动 a → dir/");
+    expect(fmtToolArgs("write_file", { path: "notes/x.md" })).toBe("写入 notes/x.md");
+    expect(fmtToolArgs("list_files", {})).toBe("列出根目录");
+    expect(fmtToolArgs("semantic_search", { query: "预算" })).toBe('语义搜索 "预算"');
+    expect(fmtToolArgs("read_skill", { path: "weekly-report" })).toBe("加载技能 weekly-report");
+  });
+  it("未知工具回退 JSON", () => {
+    expect(fmtToolArgs("unknown_tool", { x: 1 })).toBe('{"x":1}');
   });
 });

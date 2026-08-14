@@ -14,6 +14,8 @@ export default function FilePage() {
   const [previewText, setPreviewText] = useState("");
   const fileRef = useRef(null);
   const pathRef = useRef("");
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   const load = useCallback(async (p) => {
     try {
@@ -58,25 +60,50 @@ export default function FilePage() {
     load(crumbs.slice(0, i + 1).join("/"));
   }
 
+  async function doUpload(file) {
+    if (!file) return;
+    setUploading(true);
+    try {
+      await uploadFile(file, path);
+      window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "ok", text: `已上传 ${file.name}` } }));
+      load(path);
+    } catch (e) {
+      window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "error", text: `上传失败: ${e}` } }));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function onUpload(e) {
     const file = e.target.files?.[0];
-    if (file) {
-      await uploadFile(file, path);
-      load(path);
-    }
+    if (file) { await doUpload(file); e.target.value = ""; }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) doUpload(file);
   }
 
   const rawUrl = selected ? `/api/v1/files/raw?path=${encodeURIComponent(selected)}` : null;
 
   return (
-    <section className="file-page">
+    <section
+      className={`file-page ${dragOver ? "drag-over" : ""}`}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
+    >
       <div className="fp-main">
         <div className="fp-head">
           <b>📁 文件</b>
           <span className="fp-head-actions">
             <button className="btn small" onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")}
                     disabled={!path} title="返回上级">⬆ 上级</button>
-            <button className="btn small" onClick={() => fileRef.current?.click()}>⬆ 上传</button>
+            <button className="btn small" onClick={() => fileRef.current?.click()} disabled={uploading}>
+              {uploading ? <><span className="spinner" /> 上传中</> : "⬆ 上传"}
+            </button>
             <button className="btn small" onClick={() => load(path)} title="刷新">🔄</button>
           </span>
           <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
@@ -99,7 +126,12 @@ export default function FilePage() {
             </thead>
             <tbody>
               {items.length === 0 && (
-                <tr><td colSpan={3} className="muted small" style={{padding:16}}>（空目录）</td></tr>
+                <tr><td colSpan={3} style={{padding:32}}>
+                  <div className="fp-empty">
+                    <span className="fp-empty-icon">{dragOver ? "📥" : "📂"}</span>
+                    {dragOver ? "松开鼠标上传文件" : "目录为空 — 拖文件到这里，或点「上传」"}
+                  </div>
+                </td></tr>
               )}
               {items.map((it) => (
                 <tr key={it.path}

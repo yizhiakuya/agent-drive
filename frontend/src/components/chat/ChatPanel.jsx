@@ -45,11 +45,42 @@ const TOOL_ICONS = {
 };
 const STEP_STATUS = { running: ["🔄", "执行中"], done: ["✅", "完成"], error: ["❌", "失败"] };
 
+/** 工具参数人类可读化（"删除 a.txt" 而非 {"path":"a.txt"}） */
+export function fmtToolArgs(tool, args) {
+  const a = args || {};
+  const p = a.path || a.src || a.query || a.name || "";
+  switch (tool) {
+    case "delete_file": return `删除 ${p}`;
+    case "read_file": case "read_document": return `读取 ${p}`;
+    case "write_file": return `写入 ${p}`;
+    case "append_file": return `追加 ${p}`;
+    case "copy_file": return `复制 ${a.src} → ${a.dst}`;
+    case "move_file": return `移动 ${a.src} → ${a.dst_dir}/`;
+    case "rename_file": return `重命名 ${a.src} → ${a.dst}`;
+    case "create_folder": return `新建文件夹 ${p}`;
+    case "list_files": return p ? `列出 ${p || "/"}` : "列出根目录";
+    case "search_files": return `搜索 ${p}`;
+    case "search_content": return `内容搜索 "${a.query || p}"`;
+    case "semantic_search": return `语义搜索 "${a.query || p}"`;
+    case "set_plan": return "制定执行计划";
+    case "update_plan": return "更新执行计划";
+    case "remember": return `记住 "${String(a.content || a.text || "").slice(0, 20)}…"`;
+    case "memory_search": case "memory_get": return `记忆检索 ${p}`;
+    case "read_skill": return `加载技能 ${p}`;
+    case "get_storage_info": return "查看存储用量";
+    case "get_system_status": return "查看系统状态";
+    case "view_audit_log": return "查看审计日志";
+    case "analyze_failures": return "分析失败记录";
+    case "run_automation_now": return "执行自动化规则";
+    default: return JSON.stringify(a);
+  }
+}
+
 export function ToolStep({ step }) {
   const [open, setOpen] = useState(false);
   const [statusIcon, statusText] = STEP_STATUS[step.status] || ["•", ""];
   const icon = TOOL_ICONS[step.tool] || "🔧";
-  const argsBrief = JSON.stringify(step.arguments || {});
+  const argsBrief = fmtToolArgs(step.tool, step.arguments);
   return (
     <div className={`tool-step ${step.status}`}>
       <div className="tool-step-head" onClick={() => setOpen(!open)}>
@@ -103,9 +134,7 @@ export function PlanCard({ plan }) {
 }
 
 export default function ChatPanel({ sessionId, onSessionCreated }) {
-  const [messages, setMessages] = useState([
-    { type: "assistant", content: "你好！我是你的文件管家 🦋 我可以让你搜索文件、整理资料、配置系统……例如：\n\n- \"看看网盘里有什么文件\"\n- \"帮我建一个叫 项目 的文件夹\"\n- \"把 LLM 换成 DeepSeek\"\n- \"以后下载的文件自动归档\"" },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(null);
@@ -115,6 +144,41 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   const bottomRef = useRef(null);
   const sidRef = useRef(sessionId); // 已接受会话 id（区分"会话创建"与"用户切换"）
   const abortRef = useRef(null);    // 在途流请求的取消控制器（防串消息）
+  const [showJump, setShowJump] = useState(false); // 距底较远时显示"回到底部"
+  const listRef = useRef(null);
+  const taRef = useRef(null);
+
+  function greet() {
+    const h = new Date().getHours();
+    if (h < 6) return "夜深了 🌙";
+    if (h < 12) return "早上好 ☀️";
+    if (h < 18) return "下午好 🌤️";
+    return "晚上好 🌆";
+  }
+
+  const QUICK_ACTIONS = [
+    { icon: "📂", label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
+    { icon: "🔍", label: "按内容找文件", msg: "帮我按内容搜索文件（用语义搜索）" },
+    { icon: "📁", label: "整理文件", msg: "帮我整理一下网盘里的文件" },
+    { icon: "📝", label: "写一份周报", msg: "根据最近的会话写一份周报" },
+  ];
+
+  function onScroll() {
+    const el = listRef.current;
+    if (!el) return;
+    setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight > 200);
+  }
+
+  function jumpBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function autoGrow() {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+  }
 
   // 切换会话时清空当前对话（M1 简化：历史从会话加载在 M2 完善）
   useEffect(() => {
@@ -170,7 +234,10 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
   async function send(message, confirmations = []) {
     const msg = message ?? input.trim();
     if (!msg || busy) return;
-    if (!message) setInput("");
+    if (!message) {
+      setInput("");
+      if (taRef.current) taRef.current.style.height = "auto";
+    }
     // 只传窗口内历史（最近 30 条），后端按 token 预算再截断
     const history = messages
       .filter((m) => (m.type === "user" || m.type === "assistant"))
@@ -305,14 +372,30 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
 
   return (
     <section className="chat-panel">
-      <div className="messages">
+      <div className="messages" ref={listRef} onScroll={onScroll}>
+        {messages.length === 0 && !busy && (
+          <div className="welcome">
+            <div className="welcome-logo">🦋</div>
+            <div className="welcome-title">{greet()}，我是你的文件管家</div>
+            <div className="welcome-sub">用对话管理你的网盘：搜索、整理、理解、自动化</div>
+            <div className="welcome-actions">
+              {QUICK_ACTIONS.map((a) => (
+                <button key={a.label} className="quick-action" onClick={() => send(a.msg)}>
+                  <span className="qa-icon">{a.icon}</span>
+                  <span>{a.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {messages.map((m, i) => {
           if (m.type === "tool_step") return <ToolStep key={i} step={m} />;
           const isThinking = busy && m.type === "assistant" && m.content === "" && i === messages.length - 1;
           return (
-            <div key={i} className={`msg-row ${m.type}`}>
+            <div key={i} className={`msg-row ${m.type}`} style={{ animation: "slide-in 0.2s ease" }}>
               <div className={`bubble ${isThinking ? "typing" : ""}`}>
-                {isThinking ? "Agent 思考中…" : m.type === "assistant" ? (
+                {isThinking ? (messages.some((x) => x.type === "tool_step" && x.status === "running")
+                  ? "正在执行操作…" : "Agent 思考中…") : m.type === "assistant" ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                 ) : (
                   m.content
@@ -343,19 +426,27 @@ export default function ChatPanel({ sessionId, onSessionCreated }) {
       {contextUsage && <ContextBar usage={contextUsage} />}
 
       <div className="input-bar">
-        <input
+        <textarea
+          ref={taRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="和你的 Agent 对话，管理网盘…"
-          disabled={busy}
+          rows={1}
+          onChange={(e) => { setInput(e.target.value); autoGrow(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+          }}
+          placeholder="和你的 Agent 对话，管理网盘…（Enter 发送 / Shift+Enter 换行）"
         />
         {busy ? (
           <button className="btn-stop" onClick={stop}>⏹ 停止</button>
         ) : (
-          <button onClick={() => send()} disabled={!input.trim()}>发送</button>
+          <button onClick={() => send()} disabled={!input.trim()}>
+            {input.trim() ? "发送" : "✈"}
+          </button>
         )}
       </div>
+      {showJump && (
+        <button className="jump-bottom" onClick={jumpBottom} title="回到底部">↓ 最新</button>
+      )}
     </section>
   );
 }
