@@ -14,6 +14,10 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Capacitor 要求：插件必须在 super.onCreate() 之前注册，否则 web 端调用拿不到原生实现
+        registerPlugin(ServerConfigPlugin.class);
+        registerPlugin(PhotoSyncPlugin.class);
+
         super.onCreate(savedInstanceState);
 
         // 首启：没有服务器地址 → 原生扫码页（扫码保存后跳回这里）
@@ -24,9 +28,6 @@ public class MainActivity extends BridgeActivity {
             finish();
             return;
         }
-
-        registerPlugin(ServerConfigPlugin.class);
-        registerPlugin(PhotoSyncPlugin.class);
 
         // 同步已启用时确保后台周期任务在册（App 更新/重启后仍有效）
         PhotoSyncWorker.ensureChannel(getApplicationContext());

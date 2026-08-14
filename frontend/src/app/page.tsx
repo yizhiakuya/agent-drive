@@ -9,6 +9,8 @@ import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
 import { getStatus, getConfig } from "@/lib/api/config";
 import { ensureBase } from "@/lib/api/client";
+import { Capacitor } from "@capacitor/core";
+import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
 
 function SkeletonScreen() {
@@ -51,6 +53,14 @@ export default function Home() {
     (async () => {
       try {
         await ensureBase(); // 原生 App：从扫码配置解析服务器地址
+        if (Capacitor.isNativePlatform()) {
+          const { server } = await ServerConfig.getServer();
+          if (!server) {
+            window.dispatchEvent(new CustomEvent("agent-drive:toast", {
+              detail: { kind: "error", text: "未连接服务器：请返回设置 → 连接手机 App 重新扫码" },
+            }));
+          }
+        }
         const status = await getStatus() as { configured: boolean };
         setConfigured(status.configured);
         if (status.configured) {
