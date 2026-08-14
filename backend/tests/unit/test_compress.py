@@ -4,6 +4,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+try:  # Windows 控制台 GBK：强制 UTF-8 输出，避免 ✅/中文打印崩溃
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from app.agent.context import (
     compress_history,
@@ -115,5 +120,6 @@ async def main():
     print("✅ 通过")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 print("\n🎉 上下文管理测试全部通过！")

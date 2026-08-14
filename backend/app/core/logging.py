@@ -75,7 +75,7 @@ class AuditLogger:
 
     def record(self, event: str, result: Any = None) -> None:
         self._rotate()
-        with open(self.path, "a") as f:
+        with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(
                 {
                     "ts": time.time(),
@@ -88,7 +88,7 @@ class AuditLogger:
     def tail(self, limit: int = 20) -> str:
         if not self.path.exists():
             return "(无审计记录)"
-        lines = self.path.read_text().splitlines()[-limit:]
+        lines = self.path.read_text(encoding="utf-8").splitlines()[-limit:]
         return "\n".join(lines)
 
     def failures(self, recent: int = 50) -> list[dict[str, Any]]:
@@ -96,7 +96,7 @@ class AuditLogger:
         failures = []
         if not self.path.exists():
             return failures
-        for line in self.path.read_text().splitlines()[-recent:]:
+        for line in self.path.read_text(encoding="utf-8").splitlines()[-recent:]:
             try:
                 ev = json.loads(line)
                 text = json.dumps(ev, ensure_ascii=False)

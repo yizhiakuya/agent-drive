@@ -1,25 +1,52 @@
 """本地文件系统存储实现（Storage 协议）。
 
-路径安全：resolve() 防穿越；写操作幂等。M2 增加 s3.py 实现同协议。"""
+路径安全：resolve() 防穿越 + 组件级拒绝符号链接；写操作原子（tmp + replace）。
+可选挂载 UploadIndex：所有内容变更自动失效秒传索引条目。"""
 from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 
 class LocalStorage:
     def __init__(self, root: Path | str):
-        self.root = Path(root)
+        self.root = Path(root).resolve()  # 规范化根路径（防根路径含符号链接绕过）
         self.root.mkdir(parents=True, exist_ok=True)
+        self.index: Any | None = None  # UploadIndex 可选挂载（container 组装后注入）
+
+    def attach_index(self, index: Any) -> None:
+        """挂载秒传索引：此后所有内容变更自动失效对应条目。"""
+        self.index = index
+
+    def _index_forget(self, rel_path: str) -> None:
+        """内容将被改变/移走：失效其秒传条目（索引失败不阻塞主流程）。"""
+        if self.index is not None:
+            try:
+                self.index.forget_path(rel_path)
+            except Exception:
+                pass
 
     # ---------- 路径安全 ----------
     def resolve(self, rel_path: str) -> Path:
-        """把相对路径安全解析为绝对路径，防止路径穿越。"""
-        p = (self.root / rel_path).resolve()
+        """把相对路径安全解析为绝对路径，防穿越 + 拒绝符号链接。
+
+        业务从不产生符号链接：任何出现在数据树内的链接（指向 system/、
+        网盘外等）一律拒绝，堵死 symlink 逃逸读取敏感文件。
+        """
+        raw = self.root / rel_path
+        # 组件级检查（在 resolve 之前：resolve 会跟随链接抹掉证据）
+        node = raw
+        while node != self.root:
+            if node.is_symlink():
+                raise PermissionError(f"路径越界(符号链接): {rel_path}")
+            node = node.parent
+        p = raw.resolve()
         if not p.is_relative_to(self.root):
             raise PermissionError(f"路径越界: {rel_path}")
         return p
@@ -58,17 +85,43 @@ class LocalStorage:
             text = f"(二进制文件，无法以文本读取: {p.name})"
         return text[:max_chars]
 
-    def save_bytes(self, rel_path: str, data: bytes) -> dict[str, Any]:
+    def save_bytes(self, rel_path: str, data: bytes, exclusive: bool = False) -> dict[str, Any]:
+        """原子写入。exclusive=True 时目标已存在则抛 FileExistsError（防同名竞态）。
+
+        - 覆盖写：先失效旧内容的秒传索引（否则旧 md5 会命中新文件，内容错位）
+        - tmp + os.replace 原子替换；exclusive 用 os.link 原子不覆盖
+        """
         p = self.resolve(rel_path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(data)
+        if exclusive and p.exists():
+            raise FileExistsError(rel_path)
+        existed = p.exists()
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        tmp.write_bytes(data)
+        try:
+            if exclusive:
+                try:
+                    os.link(tmp, p)  # 原子创建，目标存在则 EEXIST（不覆盖）
+                except FileExistsError:
+                    raise FileExistsError(rel_path) from None
+                finally:
+                    tmp.unlink(missing_ok=True)
+            else:
+                os.replace(tmp, p)  # 原子替换
+        finally:
+            tmp.unlink(missing_ok=True)
+        if existed and not exclusive:
+            self._index_forget(rel_path)
         return {"path": p.relative_to(self.root).as_posix(), "size": len(data)}
 
     def mkdir(self, rel_path: str) -> None:
         self.resolve(rel_path).mkdir(parents=True, exist_ok=True)
 
     def rename(self, src: str, dst: str) -> None:
+        # POSIX rename 会覆盖 dst：两侧索引都失效（src 移走，dst 旧内容被替换）
         self.resolve(src).rename(self.resolve(dst))
+        self._index_forget(src)
+        self._index_forget(dst)
 
     def move(self, src: str, dst_dir: str, overwrite: bool = False) -> None:
         p = self.resolve(src)
@@ -76,6 +129,8 @@ class LocalStorage:
         if target.exists() and not overwrite:
             raise FileExistsError(f"目标已存在: {target.relative_to(self.root).as_posix()}（需 overwrite=true）")
         shutil.move(str(p), str(target))
+        self._index_forget(src)
+        self._index_forget(target.relative_to(self.root).as_posix())
 
     def delete(self, rel_path: str) -> None:
         p = self.resolve(rel_path)
@@ -83,6 +138,7 @@ class LocalStorage:
             shutil.rmtree(p)
         else:
             p.unlink()
+        self._index_forget(rel_path)
 
     def exists(self, rel_path: str) -> bool:
         return self.resolve(rel_path).exists()
@@ -105,6 +161,7 @@ class LocalStorage:
             # 同名已存在：加时间戳后缀
             dest = self.trash_root / f"{rel_path}.{int(time.time())}"
         shutil.move(str(p), str(dest))
+        self._index_forget(rel_path)  # 内容移入回收站：秒传条目失效
         # 记录元信息
         meta_path = self.trash_root / f"{rel_path}.meta.json"
         meta = {
@@ -115,7 +172,7 @@ class LocalStorage:
             "is_dir": dest.is_dir(),
         }
         meta_path.parent.mkdir(parents=True, exist_ok=True)
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False))
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         return meta
 
     def list_trash(self) -> list[dict[str, Any]]:
@@ -125,7 +182,7 @@ class LocalStorage:
         items = []
         for meta_path in self.trash_root.rglob("*.meta.json"):
             try:
-                items.append(json.loads(meta_path.read_text()))
+                items.append(json.loads(meta_path.read_text(encoding="utf-8")))
             except Exception:
                 continue
         items.sort(key=lambda m: m.get("deleted_at", 0), reverse=True)
@@ -160,7 +217,7 @@ class LocalStorage:
             metas = list(self.trash_root.rglob("*.meta.json"))
             for meta_path in metas:
                 try:
-                    m = json.loads(meta_path.read_text())
+                    m = json.loads(meta_path.read_text(encoding="utf-8"))
                     tp = self.trash_root / m["trash_path"]
                     if tp.exists():
                         if tp.is_dir():
@@ -188,11 +245,14 @@ class LocalStorage:
 
     # ---------- 写操作（AI 中心：Agent 能创建内容） ----------
     def write_text(self, rel_path: str, content: str) -> dict[str, Any]:
-        """创建或覆盖文本文件。"""
+        """创建或覆盖文本文件。newline="\n"：跨平台一致（Windows 不转 CRLF）。"""
         p = self.resolve(rel_path)
         existed = p.exists()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+        if existed:
+            self._index_forget(rel_path)  # 内容已变：旧 md5 失效
         return {
             "path": p.relative_to(self.root).as_posix(),
             "size": len(content.encode("utf-8")),
@@ -205,8 +265,9 @@ class LocalStorage:
         p = self.resolve(rel_path)
         existed = p.exists()
         p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a", encoding="utf-8") as f:
+        with open(p, "a", encoding="utf-8", newline="\n") as f:
             f.write(content)
+        self._index_forget(rel_path)  # 内容已变：旧 md5 失效
         return {
             "path": p.relative_to(self.root).as_posix(),
             "size": p.stat().st_size,
@@ -229,6 +290,8 @@ class LocalStorage:
         else:
             d_p.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(s_p, d_p)
+        if d_p.exists() and overwrite:
+            self._index_forget(dst)  # 目标旧内容被覆盖：失效其秒传条目
         return {
             "src": src,
             "dst": d_p.relative_to(self.root).as_posix(),

@@ -51,7 +51,7 @@ class LLMManager:
         if not self.config_path.exists():
             return None
         try:
-            data = json.loads(self.config_path.read_text())
+            data = json.loads(self.config_path.read_text(encoding="utf-8"))
             return LLMConfig(**data)
         except Exception:
             return None
@@ -59,7 +59,7 @@ class LLMManager:
     def save(self, cfg: LLMConfig) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(
-            json.dumps(cfg.model_dump(), indent=2, ensure_ascii=False)
+            json.dumps(cfg.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
     def is_configured(self) -> bool:

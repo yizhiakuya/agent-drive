@@ -47,7 +47,7 @@ def register_analytics_tools(reg: ToolRegistry, llm_provider: Callable[[], LLMPr
         if audit_log_path is not None and hasattr(audit_log_path, "failures"):
             failures = audit_log_path.failures(recent)
         elif audit_log_path is not None and hasattr(audit_log_path, "exists") and audit_log_path.exists():
-            for line in audit_log_path.read_text().splitlines()[-recent:]:
+            for line in audit_log_path.read_text(encoding="utf-8").splitlines()[-recent:]:
                 try:
                     ev = json.loads(line)
                     ev_text = json.dumps(ev, ensure_ascii=False)

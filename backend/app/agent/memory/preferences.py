@@ -15,6 +15,20 @@ from pathlib import Path
 from typing import Any
 
 
+def _read_tolerant(p: Path) -> str:
+    """读取用户可编辑的记忆文件：UTF-8 优先，兼容历史 GBK（Windows）编码。
+
+    用户可能用任意编辑器改动这些文件，读取必须容错，绝不能因编码崩溃整个应用。
+    """
+    raw = p.read_bytes()
+    for enc in ("utf-8", "gbk", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 class MemoryStore:
     def __init__(self, path: Path | str, *, migrate_from: Path | str | None = None):
         """path: 工作空间目录（网盘内 Agent/ 目录）。
@@ -45,7 +59,7 @@ class MemoryStore:
         old_json = old_dir / "memory.json"
         if old_json.exists():
             try:
-                self._data.update(json.loads(old_json.read_text()))
+                self._data.update(json.loads(_read_tolerant(old_json)))
                 had_json = True
             except Exception:
                 pass
@@ -55,16 +69,16 @@ class MemoryStore:
             old_f = old_dir / name
             if not old_f.exists():
                 continue
-            old_text = old_f.read_text()
+            old_text = _read_tolerant(old_f)
             target = self.dir / name
             if target.exists():
-                cur = target.read_text()
+                cur = _read_tolerant(target)
                 if len(cur.strip()) > 120:  # 目标已有实质内容 → 合并
-                    target.write_text(cur + "\n\n<!-- 迁移自旧记忆 -->\n" + old_text)
+                    target.write_text(cur + "\n\n<!-- 迁移自旧记忆 -->\n" + old_text, encoding="utf-8")
                 else:  # 目标还是初始模板 → 替换
-                    target.write_text(old_text)
+                    target.write_text(old_text, encoding="utf-8")
             else:
-                target.write_text(old_text)
+                target.write_text(old_text, encoding="utf-8")
         # 兼容旧笔记目录名（v2 用 "memory"，v3 起用 "notes"）
         for old_notes in (old_dir / "notes", old_dir / "memory"):
             if not old_notes.is_dir():
@@ -74,7 +88,7 @@ class MemoryStore:
                 if not target.exists():
                     try:
                         target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_text(f.read_text())
+                        target.write_text(_read_tolerant(f), encoding="utf-8")
                     except OSError:
                         pass
             if old_notes.name == "memory":
@@ -101,7 +115,7 @@ class MemoryStore:
         if not self.user_md.exists():
             self._write_user_md()
         if not self.memory_md.exists():
-            self.memory_md.write_text("# 长期记忆\n\n(Agent 用 remember 工具记录持久事实与决策)\n")
+            self.memory_md.write_text("# 长期记忆\n\n(Agent 用 remember 工具记录持久事实与决策)\n", encoding="utf-8")
         if not self.agent_md.exists():
             self.agent_md.write_text(
                 "# Agent 角色定义\n\n"
@@ -110,7 +124,8 @@ class MemoryStore:
                 "- 管理用户的所有文件：理解、组织、关联、创建\n"
                 "- 管理自己的配置与记忆\n"
                 "- 用用户偏好的语言沟通\n\n"
-                "> 用户可以编辑本文件自定义 Agent 的角色与职责。\n"
+                "> 用户可以编辑本文件自定义 Agent 的角色与职责。\n",
+                encoding="utf-8",
             )
 
     # ---------- USER.md 读写 ----------
@@ -120,7 +135,7 @@ class MemoryStore:
         current = None
         if not self.user_md.exists():
             return sections
-        for line in self.user_md.read_text().splitlines():
+        for line in _read_tolerant(self.user_md).splitlines():
             m = re.match(r"^## (.+)", line)
             if m:
                 current = m.group(1).strip()
@@ -199,7 +214,7 @@ class MemoryStore:
                 lines.append(f"- {text}{suffix}")
 
         lines.append("")
-        self.user_md.write_text("\n".join(lines))
+        self.user_md.write_text("\n".join(lines), encoding="utf-8")
 
     # ---------- 兼容旧 API ----------
     def set(self, key: str, value: str) -> None:
@@ -237,7 +252,7 @@ class MemoryStore:
         """Agent 记录持久事实/决策（追加到 MEMORY.md，带日期）"""
         today = date.today().isoformat()
         entry = f"\n## {today}\n- {content.strip()}\n"
-        with open(self.memory_md, "a") as f:
+        with open(self.memory_md, "a", encoding="utf-8") as f:
             f.write(entry)
         return {"saved": True, "memory": self.memory_md.name, "entry": content.strip()}
 
@@ -245,7 +260,7 @@ class MemoryStore:
         """Agent 角色定义（AGENT.md，用户可编辑自定义人设）"""
         if not self.agent_md.exists():
             return ""
-        return self.agent_md.read_text()[:max_chars]
+        return _read_tolerant(self.agent_md)[:max_chars]
 
     def memory_text(self, max_chars: int = 3000) -> str:
         """读取 MEMORY.md（修复：从尾部截断，保留最新记忆条目）。
@@ -255,7 +270,7 @@ class MemoryStore:
         """
         if not self.memory_md.exists():
             return ""
-        text = self.memory_md.read_text()
+        text = _read_tolerant(self.memory_md)
         if len(text) <= max_chars:
             return text
         return "...（更早的记忆已省略）...\n" + text[-max_chars:]
@@ -267,7 +282,7 @@ class MemoryStore:
         for f in files:
             if not f.exists():
                 continue
-            for line in f.read_text().splitlines():
+            for line in _read_tolerant(f).splitlines():
                 if query.lower() in line.lower() and line.strip():
                     results.append({"file": f.name, "line": line.strip()[:200]})
                     if len(results) >= limit:
@@ -279,7 +294,7 @@ class MemoryStore:
         candidates = [self.memory_md] + list(self.notes_dir.glob("*.md"))
         for f in candidates:
             if f.name == name:
-                return f.read_text()[:max_chars]
+                return _read_tolerant(f)[:max_chars]
         return f"(记忆文件不存在: {name})"
 
     # ---------- 每日笔记（工作层） ----------
@@ -288,8 +303,8 @@ class MemoryStore:
         today = date.today().isoformat()
         note = self.notes_dir / f"{today}.md"
         if not note.exists():
-            note.write_text(f"# {today}\n\n")
-        with open(note, "a") as f:
+            note.write_text(f"# {today}\n\n", encoding="utf-8")
+        with open(note, "a", encoding="utf-8") as f:
             f.write(f"- {line}\n")
 
     def yesterday_notes(self) -> list[str]:
@@ -298,14 +313,14 @@ class MemoryStore:
         y = (date.today() - timedelta(days=1)).isoformat()
         note = self.notes_dir / f"{y}.md"
         if note.exists():
-            return note.read_text().splitlines()
+            return _read_tolerant(note).splitlines()
         return []
 
     def last_dream(self) -> str:
         """最近一次 dreaming 巩固日期（独立标记文件，不受 MEMORY.md 干扰）"""
         if self.dream_marker.exists():
-            return self.dream_marker.read_text().strip()
+            return _read_tolerant(self.dream_marker).strip()
         return ""
 
     def mark_dreamed(self, day: str) -> None:
-        self.dream_marker.write_text(day)
+        self.dream_marker.write_text(day, encoding="utf-8")

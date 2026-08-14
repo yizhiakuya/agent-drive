@@ -64,11 +64,19 @@ class UploadIndex:
 
     # ---- 写入 ----
     def record(self, md5: str, path: str, size: int) -> None:
-        """登记新上传；同路径的旧条目先清掉（覆盖场景）。"""
+        """登记新上传；同路径的旧条目先清掉（覆盖场景）。
+
+        同一内容并发上传到两个路径时，只保留最新登记：
+        清理其它路径上指向同一 md5 的条目，避免 by_path 残留歧义。
+        """
         with self._lock:
             old_md5 = self._by_path.get(path)
             if old_md5 and old_md5 != md5:
                 self._by_md5.pop(old_md5, None)
+            for other, other_md5 in list(self._by_path.items()):
+                if other_md5 == md5 and other != path:
+                    self._by_md5.pop(md5, None)
+                    del self._by_path[other]
             self._by_md5[md5] = {"path": path, "size": size, "at": time.time()}
             self._by_path[path] = md5
             self._save()

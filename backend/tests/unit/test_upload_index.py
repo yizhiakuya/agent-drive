@@ -52,3 +52,17 @@ def test_forget_path(tmp_path):
     idx.record("abc123", "a.jpg", 100)
     idx.forget_path("a.jpg")
     assert idx.lookup("abc123") is None
+
+
+def test_record_same_md5_other_path_cleanup(tmp_path):
+    """同一内容并发登记到两个路径：只保留最新，旧路径条目清理。"""
+    st = _FakeStorage()
+    idx = UploadIndex(tmp_path / "index.json", storage=st)
+    idx.record("abc123", "a.jpg", 100)
+    idx.record("abc123", "b.jpg", 100)
+    st.files.add("b.jpg")
+    hit = idx.lookup("abc123")
+    assert hit is not None and hit["path"] == "b.jpg"
+    # 持久化后再读：无旧路径歧义
+    idx2 = UploadIndex(tmp_path / "index.json", storage=st)
+    assert idx2.lookup("abc123")["path"] == "b.jpg"

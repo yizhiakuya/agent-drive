@@ -14,8 +14,8 @@ android {
         applicationId "top.rainaki.agentdrive"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 21
-        versionName "1.0.21"
+        versionCode 22
+        versionName "1.0.22"
         buildFeatures {
             buildConfig true
         }
@@ -67,6 +67,8 @@ dependencies {
     // 原生能力：后台相册同步 + 二维码扫描
     implementation 'androidx.work:work-runtime:2.9.1'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    // 设备令牌/配置加密存储（Keystore 保护的 AES256）
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

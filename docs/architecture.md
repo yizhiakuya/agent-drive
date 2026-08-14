@@ -20,7 +20,7 @@
 │  agent/ (loop · tools · memory · prompt)         │
 │  auth/ (密码·令牌·配对码) · devices/ (注册表)      │
 │  llm/  (providers · manager)                     │
-│  storage/ (local · s3 · upload_index)             │
+│  storage/ (local · upload_index)                 │
 │  ingest/ (pipeline)                               │
 │  职责: 核心业务逻辑，不依赖 HTTP/框架               │
 ├─────────────────────────────────────────────────┤
@@ -88,9 +88,10 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 
 ### 3.6 存储抽象（storage/）
 - `base.py`: Storage 协议（list/read/write/move/delete/stat）
-- `local.py`: 本地文件系统实现（路径安全、幂等）
-- `s3.py`: M2 MinIO 实现（占位）
-- 业务代码只依赖 base，可平滑切换
+- `local.py`: 本地文件系统实现（路径安全：防穿越 + 组件级拒绝符号链接；写入原子：tmp + os.replace，独占写 os.link 防同名竞态）
+- `upload_index.py`: 秒传去重索引（md5→path，双向映射，读写加锁）
+- 索引生命周期自动同步：`container` 组装时 `storage.attach_index()` 反向注入，rename/move/删除/回收站/覆盖写等一切内容变更自动 `forget_path` 失效对应条目——秒传永不会命中已移动/已覆盖的旧路径
+- 业务代码只依赖 base，可平滑切换实现
 
 ### 3.7 Agent 工具注册（agent/tools/）
 - 每个工具 = 独立模块文件（files.py / system.py / analytics.py）
@@ -135,14 +136,15 @@ backend/
 │   ├── llm/
 │   │   ├── base.py  manager.py  embeddings.py
 │   │   └── providers/  openai_compat.py  responses.py  anthropic.py
-│   ├── storage/  base.py  local.py  upload_index.py（秒传去重）
+│   ├── storage/  base.py  local.py（原子写+符号链接拒绝） upload_index.py（秒传去重）
 │   └── ingest/  pipeline.py    # M2: 提取(文本/PDF/OCR)+索引+向量(Jina 云)
 ├── tests/
 │   ├── conftest.py
 │   ├── unit/  test_agent test_critic test_reliability test_retry
 │   │          test_compress test_write_tools test_memory
 │   │          test_bugfixes test_ingest_m2 test_auth
-│   │          test_devices test_upload_index（共 12 套）
+│   │          test_devices test_upload_index test_storage_safety
+│   │          （共 13 套：pytest 收集 5 + 脚本直跑 8）
 │   └── integration/  test_api.py
 ├── scripts/  mock_llm.py  benchmark_real.py
 ├── system/  agent-config.json（gitignored, agent 自管理）
@@ -190,6 +192,6 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4）
 | 音视频转写 | 未做（资源评估后） | ingest 加 whisper 解析器 |
 | **认证（单用户）** | ✅ 已落地 | auth/store.py（纯标准库 PBKDF2/HMAC）+ api/v1/auth.py + deps.get_owner 统一鉴权（Cookie/Bearer/?token=）；扫码配对免密，详见 docs/security.md |
 | 多用户 | 未做（个人项目） | 若需要：auth 层扩展 user 维度 |
-| **安卓原生壳** | ✅ 已落地 | frontend/android（Capacitor 7）：扫码配对、相册自动同步（WorkManager+秒传去重+断点续传+进度可视）、设备心跳、下拉刷新，详见 docs/android.md |
-| **上传去重（秒传）** | ✅ 已落地 | storage/upload_index.py + /files/upload 的 md5/noclobber 表单字段 |
-| S3 存储 | 未做 | storage/s3.py 实现 base 协议 |
+| **安卓原生壳** | ✅ 已落地 | frontend/android（Capacitor 7）：扫码配对、相册自动同步（WorkManager+秒传去重+整秒检查点+进度可视）、设备心跳、下拉刷新，详见 docs/android.md |
+| **上传去重（秒传）** | ✅ 已落地 | storage/upload_index.py + /files/upload 的 md5/noclobber 表单字段；索引随内容变更自动失效（attach_index） |
+| S3 存储 | 未做 | 若做：按 base 协议新增实现 + container 切换 |

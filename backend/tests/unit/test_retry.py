@@ -5,6 +5,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+try:  # Windows 控制台 GBK：强制 UTF-8 输出，避免 ✅/中文打印崩溃
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from app.core.retry import is_retryable_error, with_retry
 

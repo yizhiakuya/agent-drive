@@ -11,13 +11,13 @@ from ..agent.memory.preferences import MemoryStore
 from ..agent.memory.sessions import SessionStore
 from ..agent.onboarding import Onboarding
 from ..agent.skills import SkillsRegistry
-from ..auth.store import AuthStore
-from ..devices.registry import DeviceRegistry
 from ..agent.tools.analytics import register_analytics_tools
 from ..agent.tools.files import register_file_tools
 from ..agent.tools.memory import register_memory_tools
 from ..agent.tools.registry import ToolRegistry
 from ..agent.tools.system import register_system_tools
+from ..auth.store import AuthStore
+from ..devices.registry import DeviceRegistry
 from ..ingest.pipeline import IngestPipeline
 from ..llm.manager import LLMManager
 from ..storage.local import LocalStorage
@@ -41,6 +41,8 @@ class Container:
         self.storage = LocalStorage(self.settings.data_path)
         # 上传去重索引（秒传）：挂 storage 以便校验条目是否过期
         self.upload_index = UploadIndex(self.settings.system_path / "upload-index.json", storage=self.storage)
+        # 反向注入：storage 的内容变更（改名/移动/删除/覆盖）自动失效索引条目
+        self.storage.attach_index(self.upload_index)
         # Agent 工作空间：网盘内的 Agent/ 目录（记忆/角色/笔记都在文件空间，用户可见可编辑）
         agent_ws = self.storage.resolve("Agent")
         agent_ws.mkdir(parents=True, exist_ok=True)

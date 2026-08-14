@@ -27,7 +27,7 @@ class Skill:
     def full_text(self) -> str:
         if self.path is None or not self.path.exists():
             return f"(技能内容缺失: {self.name})"
-        return self.path.read_text()
+        return self.path.read_text(encoding="utf-8")
 
 
 class SkillsRegistry:
@@ -53,7 +53,7 @@ class SkillsRegistry:
     @staticmethod
     def _parse(path: Path) -> Skill | None:
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
             if not m:
                 return None

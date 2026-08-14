@@ -67,7 +67,7 @@ class DeviceRegistry:
         """全部设备，按最近活跃排序。"""
         with self._lock:
             return sorted(
-                list(self._devices.values()),
+                self._devices.values(),
                 key=lambda d: d.get("last_seen", 0),
                 reverse=True,
             )

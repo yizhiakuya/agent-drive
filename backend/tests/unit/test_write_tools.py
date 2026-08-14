@@ -6,6 +6,11 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+try:  # Windows 控制台 GBK：强制 UTF-8 输出，避免 ✅/中文打印崩溃
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from app.agent.tools.files import register_file_tools
 from app.agent.tools.registry import ToolRegistry
@@ -68,5 +73,6 @@ async def main():
     print(f"  ✅ 穿越拦截: {d['error'][:40]}")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 print("\n🎉 写工具测试全部通过！")

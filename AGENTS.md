@@ -30,9 +30,11 @@ Agent-first 私人网盘：FastAPI 后端 + Next.js 16 前端（静态导出）+
 ## 2. 常用命令
 
 ```bash
-# 后端测试（先装依赖：pip install fastapi pydantic pydantic-settings httpx openai anthropic tiktoken uvicorn python-multipart pytest pytest-asyncio pymupdf pytesseract numpy）
-cd backend && python -m pytest tests/unit -q && python -m pytest tests/integration -q
-# 注意：pip install -e 不可用（项目无打包配置），直接装依赖
+# 后端（依赖：pip install -e ".[dev]" —— pyproject 含 build-system，dev 组带 pytest/ruff/mypy）
+cd backend && ruff check app/
+python -m pytest tests/unit -q && python -m pytest tests/integration -q
+# 遗留脚本式单测（pytest 不收集，CI 逐一直跑；bash 写法，Windows 用 foreach 等价）
+for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python tests/unit/$t.py || exit 1; done
 
 # 前端
 cd frontend && npm run build    # TS 类型检查 + 静态导出 out/
@@ -60,9 +62,14 @@ cd frontend/android && gradlew.bat assembleRelease
 - **BridgeActivity.onResume 是 final**：回前台心跳走前端 `visibilitychange` 事件 → 插件 `heartbeat()`
 - **keystore.properties 必须无 BOM**：PowerShell 写 Properties 用 `[System.IO.File]::WriteAllText` + `UTF8Encoding($false)`；反斜杠双写、冒号转义
 - **上传接口约定**：`path` 是查询参数；`md5`（秒传去重）与 `noclobber`（同名自动序号）是表单字段；multipart 文件 part 名为 `file`
-- **MediaStore DATE_ADDED 是秒级**：轮次截断必须落在"完整的一秒"边界，否则同秒照片漏传（SyncEngine 现有实现勿简化）
-- **去重索引**：`system/upload-index.json`（md5→路径）；文件删除后索引自愈；覆盖上传会更新索引
-- **同步检查点**：逐张成功后立即写 `lastSyncAt`；失败不阻塞整批，Worker 按 lastError 退避重试
+- **MediaStore DATE_ADDED 是秒级**：`lastSyncAt` 只推进到「整秒全部成功」的秒；同秒有失败/未取完挂 `pendingSecond+pendingMaxId`（_ID 水位）续传。勿改回严格 `> 检查点` + 单张推进的旧实现——同秒失败张、单秒超 200 张会永久丢失（1.0.22 修复）
+- **去重索引**：`system/upload-index.json`（md5→路径）；内容变更（改名/移动/删除/覆盖）自动失效（`storage.attach_index` 反向注入），lookup 时文件不在则自愈兜底
+- **同步检查点**：整秒完成后才写 `lastSyncAt`（每轮一次）；失败不阻塞整批，Worker 按 lastError 退避重试
+- **noclobber 原子独占**：`save_bytes(..., exclusive=True)` 用 os.link 原子不覆盖 + 端点重试改名；web 覆盖上传走原子 replace
+- **resolve 拒绝符号链接**：组件级检查（业务从不产生 symlink），下载/预览/上传共用
+- **设备令牌加密存储**：EncryptedSharedPreferences(AES256-GCM/SIV，MasterKey 在 Keystore) + `allowBackup=false`；旧明文自动迁移清空；勿改回明文
+- **显式编码**：backend/app 全部 read_text/write_text/open 显式 `encoding="utf-8"`；用户可编辑记忆文件用 `preferences._read_tolerant`（utf-8→gbk→latin-1）容错读；`write_text` 固定 `newline="\n"`（Windows 不转 CRLF）
+- **CI（GitHub Actions）**：backend = ruff + mypy(非阻断) + integration + unit(pytest) + 8 个遗留脚本直跑；frontend = vitest + build。新增测试一律 pytest 风格（自动被收集）
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
 - **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
@@ -77,7 +84,7 @@ cd frontend/android && gradlew.bat assembleRelease
 
 ## 6. 修改检查单
 
-- [ ] 后端改动 → 对应 unit/integration 测试；前端改动 → `npm run build` + `npm test`；原生改动 → APK 构建验证
+- [ ] 后端改动 → `ruff check app/` + 对应 unit/integration 测试；前端改动 → `npm run build` + `npm test`；原生改动 → APK 构建验证
 - [ ] 全量门禁：backend unit + integration + vitest 全绿再提交
 - [ ] 版本号 +1（涉及 App 行为/资源变更时）
 - [ ] 同步文档 + 本 skill：README / docs/* 相应小节 / AGENTS.md（铁律 §0，同一次提交内完成）

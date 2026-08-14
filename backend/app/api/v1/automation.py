@@ -19,7 +19,7 @@ async def latest(container=Depends(get_container)):
         if reports:
             report = {
                 "date": reports[0].stem.replace("自动化报告-", ""),
-                "text": reports[0].read_text()[:2000],
+                "text": reports[0].read_text(encoding="utf-8")[:2000],
             }
     except Exception:
         pass

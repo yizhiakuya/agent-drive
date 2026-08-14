@@ -50,11 +50,19 @@ async def upload(container=Depends(get_container), file: UploadFile = File(...),
         if hit:
             return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}, "indexed": None}
 
-    if noclobber and st.exists(rel):
-        rel = _unique_path(st, rel)
-
     data = await file.read()
-    info = st.save_bytes(rel, data)
+    if noclobber:
+        # 原子独占创建：exists 检查与写入之间不再有竞态窗口
+        for _ in range(20):
+            try:
+                info = st.save_bytes(rel, data, exclusive=True)
+                break
+            except FileExistsError:
+                rel = _unique_path(st, rel)
+        else:
+            raise HTTPException(409, f"同名冲突过多: {rel}")
+    else:
+        info = st.save_bytes(rel, data)
     if md5:
         container.upload_index.record(md5, rel, info["size"])
     # M2a：上传即解析（尽力而为，失败不影响上传）

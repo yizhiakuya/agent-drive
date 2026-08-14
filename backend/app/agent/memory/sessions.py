@@ -30,15 +30,15 @@ class SessionStore:
             "updated_at": time.time(),
             "message_count": 0,
         }
-        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
-        (self.dir / f"{sid}.jsonl").write_text("")
+        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        (self.dir / f"{sid}.jsonl").write_text("", encoding="utf-8")
         return meta
 
     def list(self) -> list[dict[str, Any]]:
         sessions = []
         for f in self.dir.glob("*.meta.json"):
             try:
-                meta = json.loads(f.read_text())
+                meta = json.loads(f.read_text(encoding="utf-8"))
                 sessions.append(meta)
             except Exception:
                 continue
@@ -49,7 +49,7 @@ class SessionStore:
         p = self.dir / f"{sid}.meta.json"
         if not p.exists():
             return None
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
 
     def delete(self, sid: str) -> bool:
         ok = True
@@ -64,19 +64,19 @@ class SessionStore:
     # ---------- 消息追加 ----------
     def append(self, sid: str, entry: dict[str, Any]) -> None:
         p = self.dir / f"{sid}.jsonl"
-        with open(p, "a") as f:
+        with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         meta = self.get(sid)
         if meta:
             meta["message_count"] = meta.get("message_count", 0) + 1
             meta["updated_at"] = time.time()
-            (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+            (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     def messages(self, sid: str, limit: int = 100) -> list[dict[str, Any]]:
         p = self.dir / f"{sid}.jsonl"
         if not p.exists():
             return []
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
         return [json.loads(l) for l in lines[-limit:]]
 
     def update_summary(self, sid: str, summary: str, title: str | None = None) -> None:
@@ -88,7 +88,7 @@ class SessionStore:
         if title:
             meta["title"] = title[:40]
         meta["updated_at"] = time.time()
-        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     def update_meta(self, sid: str, **fields: Any) -> None:
         """更新会话元数据任意字段（如滚动摘要 rolling_summary）。"""
@@ -97,7 +97,7 @@ class SessionStore:
             return
         meta.update(fields)
         meta["updated_at"] = time.time()
-        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+        (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     # ---------- 跨会话记忆 ----------
     def recent_summaries(self, limit: int = 5) -> str:

@@ -69,7 +69,7 @@ class IngestPipeline:
         }
         txt_path, meta_path = self._index_paths(rel_path)
         txt_path.write_text(text, encoding="utf-8")
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False))
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         return meta
 
     # ---------- 各类型解析器 ----------
@@ -98,14 +98,14 @@ class IngestPipeline:
         txt_path = self._index_paths(rel_path)[0]
         if not txt_path.exists():
             return None
-        return txt_path.read_text()[:max_chars]
+        return txt_path.read_text(encoding="utf-8")[:max_chars]
 
     def get_meta(self, rel_path: str) -> dict[str, Any] | None:
         meta_path = self._index_paths(rel_path)[1]
         if not meta_path.exists():
             return None
         try:
-            return json.loads(meta_path.read_text())
+            return json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             return None
 
@@ -115,7 +115,7 @@ class IngestPipeline:
         results = []
         for txt_path in self.index_dir.rglob("*.txt"):
             try:
-                text = txt_path.read_text()
+                text = txt_path.read_text(encoding="utf-8")
             except Exception:
                 continue
             q = query.lower()
@@ -143,7 +143,7 @@ class IngestPipeline:
         by_method: dict[str, int] = {}
         for m in metas:
             try:
-                meta = json.loads(m.read_text())
+                meta = json.loads(m.read_text(encoding="utf-8"))
                 total_chars += meta.get("chars", 0)
                 method = meta.get("method", "unknown")
                 by_method[method] = by_method.get(method, 0) + 1

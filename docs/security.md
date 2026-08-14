@@ -9,9 +9,11 @@
 |------|------|------|
 | 公网任意访客访问 API/界面 | 高 | 全 API 鉴权（Cookie / 设备令牌） |
 | 密码爆破 | 中 | PBKDF2-60 万次 + 登录限速 5 次/分钟/IP |
-| 设备令牌泄露（旧手机/失窃） | 中 | 设备列表可吊销令牌，立即失联 |
+| 设备令牌泄露（旧手机/失窃） | 中 | 设备列表可吊销令牌，立即失联；App 端令牌加密存储（Keystore）+ 禁云备份 |
 | 明文流量 | 低 | 仅 nginx 13311 HTTPS 入口；8000 只绑 127.0.0.1 |
 | 会话 cookie 窃取（XSS） | 低 | HttpOnly + SameSite=Lax + Secure(prod) |
+| 路径穿越 / symlink 逃逸读敏感文件 | 高 | storage.resolve 组件级拒绝符号链接 + 越界 403；上传写越界同样被拦 |
+| 覆盖/并发上传破坏数据 | 中 | save_bytes 原子写（tmp+replace）；noclobber 走 os.link 原子独占创建（无 TOCTOU）；秒传索引随内容变更自动失效 |
 
 ## 二、认证模型（扫码即授权）
 
@@ -51,7 +53,12 @@ App：设备令牌（Bearer）──▶ 全部 API（WebView / 后台 Worker / �
 | 登录限速 | 无 | ✅ 5 次/分钟/IP（内存级） |
 | 审计 | 仅 Agent 操作 | ✅ 登录成功/失败/设密/设备令牌颁发均入 audit.log（含 IP，密码不落日志） |
 
-## 五、运维要点
+## 五、设备侧加固（App）
+
+- **令牌加密存储**：设备令牌/服务器地址/同步设置存 EncryptedSharedPreferences（AES256-GCM + AES256-SIV，MasterKey 由 Android Keystore 硬件级保护），不再明文落盘；旧版明文数据首次启动自动迁移并清空
+- **禁云备份**：`allowBackup=false`——防止 Google 云备份恢复把设备令牌克隆到另一台手机（克隆即可冒充已配对设备）
+
+## 六、运维要点
 
 - **密码文件**：`backend/system/auth.json`（0600 建议），含密码哈希 + 签名密钥 + 设备令牌哈希
   —— 备份该文件即备份全部凭据；**删除该文件 = 重置认证**（重新设密，旧设备令牌全部失效）

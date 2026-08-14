@@ -73,7 +73,7 @@ agent-drive/
 │   │   ├── llm/                 # base/manager/embeddings/providers(3协议)
 │   │   ├── storage/             # base/local（回收站 .trash）+ upload_index（秒传去重）
 │   │   └── ingest/              # pipeline（PDF/OCR 摄入+向量索引）
-│   ├── tests/                   # unit 12 套 + integration pytest
+│   ├── tests/                   # unit 13 套（pytest 收集 5 + 脚本直跑 8）+ integration pytest
 │   ├── scripts/                 # benchmark_real.py / mock_llm.py / backup.sh
 │   └── pyproject.toml           # 依赖唯一真相源
 ├── frontend/                    # Next.js 16 + Tailwind + TS + zustand
@@ -106,11 +106,16 @@ make bench          # 真实 LLM 可靠性基准
 
 ```bash
 cd backend
-python3 test_agent.py              # Agent 核心（工具循环/审计/安全）
-python3 test_critic.py             # Critic 反馈循环（幂等/验证/结构化错误）
-python3 test_reliability.py        # 可靠性四维度（一致性/鲁棒性/可预测性/安全性）
-python3 benchmark_real.py --repeat 3   # 真实 LLM 可靠性基准回归 → benchmark_report.md
-python3 mock_llm.py &              # Mock LLM (端口 9999)
+ruff check app/                              # lint
+python -m pytest tests/unit -q               # pytest 单测（auth/设备/秒传索引/存储安全/ingest）
+python -m pytest tests/integration -q        # API 集成测试
+# 遗留脚本式单测（8 套，逐一直跑；CI 同款）
+for t in test_agent test_critic test_reliability test_retry \
+         test_compress test_write_tools test_memory test_bugfixes; do
+  python tests/unit/$t.py || exit 1
+done
+python scripts/benchmark_real.py --repeat 3  # 真实 LLM 可靠性基准回归 → benchmark_report.md
+python scripts/mock_llm.py &                 # Mock LLM (端口 9999)
 # 然后通过 API 或前端完成 Onboarding + 对话测试
 ```
 

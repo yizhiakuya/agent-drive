@@ -7,6 +7,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+try:  # Windows 控制台 GBK：强制 UTF-8 输出，避免 ✅/中文打印崩溃
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from app.agent.context import build_history, compress_tool_roundtrips
 from app.agent.router import classify
@@ -91,10 +96,10 @@ async def main():
     ws2.mkdir(parents=True)
     store2 = MemoryStore(ws2)
     # 用户手写自定义 section
-    user_md = store2.user_md.read_text() + "\n## 沟通风格\n- 喜欢简洁直接\n"
-    store2.user_md.write_text(user_md)
+    user_md = store2.user_md.read_text(encoding="utf-8") + "\n## 沟通风格\n- 喜欢简洁直接\n"
+    store2.user_md.write_text(user_md, encoding="utf-8")
     store2.set("language", "en")  # Agent 更新偏好
-    saved = store2.user_md.read_text()
+    saved = store2.user_md.read_text(encoding="utf-8")
     assert "沟通风格" in saved and "喜欢简洁直接" in saved, "用户手写内容被销毁！"
     assert "en" in saved
     print("  ✅ set() 后用户手写 section 保留")
@@ -126,7 +131,7 @@ async def main():
     print("修复 7: 审计脱敏")
     audit = AuditLogger(tmp / "audit.log")
     audit.record('[tool:set_llm_provider] {"type": "openai_compat", "api_key": "sk-secret123", "model": "m"}')
-    log = (tmp / "audit.log").read_text()
+    log = (tmp / "audit.log").read_text(encoding="utf-8")
     assert "sk-secret123" not in log, "API key 明文泄露！"
     assert "***" in log
     print("  ✅ api_key 已脱敏为 ***")
