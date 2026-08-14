@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "top.rainaki.agentdrive",
+    "sha256_cert_fingerprints": ["8ef4635c9f505891d0c9251ed229e610c7a5d7799bd7eb73311df1de4fe90a94"]
+  }
+}]
