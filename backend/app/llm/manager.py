@@ -6,6 +6,7 @@ agent 自己可以读写这份配置（通过 system_tools.set_llm_provider）�
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -61,6 +62,10 @@ class LLMManager:
         self.config_path.write_text(
             json.dumps(cfg.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        try:
+            os.chmod(self.config_path, 0o600)  # API Key 明文：仅 owner 可读
+        except OSError:
+            pass
 
     def is_configured(self) -> bool:
         cfg = self.load()

@@ -24,7 +24,7 @@
 
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install -e ".[dev]"            # pyproject 为依赖唯一真相源（dev 组含 pytest/ruff/mypy）
 python -m uvicorn app.main:app --port 8000
 ```
 
@@ -58,7 +58,7 @@ App 与 PWA 均为客户端：AI 配置只在网页端进行（App 内不提供 
 ```
 agent-drive/
 ├── docs/                        # 架构/Agent定义/前端架构/安卓端/质量报告/审查记录
-├── deploy/                      # nginx 部署配置（HTTPS 13311）+ systemd 单元（8000 仅回环）
+├── deploy/                      # nginx 部署配置（HTTPS 13311）+ systemd 单元（8000 仅回环+沙箱加固）+ 每日备份 timer
 ├── backend/
 │   ├── app/
 │   │   ├── main.py              # 入口：create_app() + 托管前端静态(SPA)

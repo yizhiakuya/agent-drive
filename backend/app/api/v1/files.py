@@ -9,6 +9,21 @@ from ..deps import get_container
 router = APIRouter(prefix="/files", tags=["files"])
 
 
+async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
+    """分块读取并限制大小：超限抛 413（不会把超大文件整体载入内存）。"""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(413, f"文件超过大小上限 {max_bytes // (1024 * 1024)}MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.get("")
 async def list_files(container=Depends(get_container), path: str = ""):
     st = container.storage
@@ -50,7 +65,7 @@ async def upload(container=Depends(get_container), file: UploadFile = File(...),
         if hit:
             return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}, "indexed": None}
 
-    data = await file.read()
+    data = await _read_limited(file, container.settings.max_upload_mb * 1024 * 1024)
     if noclobber:
         # 原子独占创建：exists 检查与写入之间不再有竞态窗口
         for _ in range(20):
@@ -94,7 +109,7 @@ async def upload_share(container=Depends(get_container), file: UploadFile = File
     from fastapi.responses import RedirectResponse
 
     st = container.storage
-    data = await file.read()
+    data = await _read_limited(file, container.settings.max_upload_mb * 1024 * 1024)
     # 同名处理：自动加序号
     rel = file.filename or "分享的文件"
     base, ext = (rel.rsplit(".", 1) + [""])[:2] if "." in rel else (rel, "")

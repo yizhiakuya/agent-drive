@@ -47,7 +47,7 @@ def create_app(container: Container | None = None) -> FastAPI:
     # 版本化路由
     app.include_router(api_v1)
 
-    # 单服务部署：frontend/dist 存在时托管 SPA（nginx 部署时 404 直接落 JSON 根信息）
+    # 单服务部署：frontend/out 存在时托管 SPA（静态导出产物）
     if _DIST.exists():
 
         @app.get("/")

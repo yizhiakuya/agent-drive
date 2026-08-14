@@ -41,20 +41,25 @@ class AuditLogger:
     """审计日志：追加 JSONL，只记录 Agent 操作事件。"""
 
     MAX_BYTES = 1_000_000  # 1MB 轮转上限
+    MAX_BACKUPS = 5        # 保留最近 5 份历史（约 6MB）
 
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def _rotate(self) -> None:
-        """超上限时轮转：audit.log → audit.log.1"""
+        """超上限时轮转：audit.log → audit.log.1 → … → audit.log.5（更旧丢弃）。"""
         if not self.path.exists() or self.path.stat().st_size < self.MAX_BYTES:
             return
-        backup = self.path.with_suffix(".log.1")
         try:
-            if backup.exists():
-                backup.unlink()
-            self.path.rename(backup)
+            oldest = self.path.with_suffix(f".log.{self.MAX_BACKUPS}")
+            if oldest.exists():
+                oldest.unlink()
+            for i in range(self.MAX_BACKUPS - 1, 0, -1):
+                src = self.path.with_suffix(f".log.{i}")
+                if src.exists():
+                    src.rename(self.path.with_suffix(f".log.{i + 1}"))
+            self.path.rename(self.path.with_suffix(".log.1"))
         except OSError:
             pass
 

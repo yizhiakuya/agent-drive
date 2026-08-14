@@ -8,9 +8,19 @@ Type=simple
 WorkingDirectory=/root/projects/agent-drive/backend
 # 只绑 127.0.0.1：公网唯一入口是 nginx 13311 HTTPS（安全加固，勿改回 0.0.0.0）
 ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-Restart=always
+Restart=on-failure
 RestartSec=3
+StartLimitBurst=5
+StartLimitIntervalSec=60
+TimeoutStopSec=30
 Environment=PYTHONUNBUFFERED=1
+
+# 纵深防御（仓库在 /root 下，降权 User= 会失去读写权限，保持 root + 能力受限）：
+UMask=077                 # 新建文件默认仅 owner 可读（含上传文件）
+NoNewPrivileges=true      # 禁止提权
+ProtectSystem=full        # /usr /boot /etc 只读
+PrivateTmp=true           # 私有 /tmp
+MemoryMax=1G              # 单用户 + 上传上限 300MB 下的内存护栏
 
 [Install]
 WantedBy=multi-user.target

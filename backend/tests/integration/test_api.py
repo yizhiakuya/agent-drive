@@ -110,11 +110,47 @@ def test_pairing_flow(tmp_path: Path):
             assert "已被使用" in r2.json()["detail"]
 
 
+def test_health_public(tmp_path: Path):
+    """健康检查公开豁免：无任何凭据也返回 200（探活用）。"""
+    settings = Settings(
+        app_env="test",
+        backend_dir=tmp_path,
+        system_dir=Path("system"),
+        data_dir=Path("data"),
+    )
+    container = Container(settings)
+    app = create_app(container)
+    with TestClient(app) as c:
+        r = c.get("/api/v1/health")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+
+def test_upload_too_large_413(tmp_path: Path):
+    """超过后端大小上限 → 413（直连 8000 的滥用兜底）。"""
+    settings = Settings(
+        app_env="test",
+        backend_dir=tmp_path,
+        system_dir=Path("system"),
+        data_dir=Path("data"),
+        max_upload_mb=1,
+    )
+    container = Container(settings)
+    app = create_app(container)
+    with TestClient(app) as c:
+        c.post("/api/v1/auth/setup", json={"password": "password-abc-123"})
+        big = b"x" * (1024 * 1024 + 10)
+        r = c.post("/api/v1/files/upload", files={"file": ("big.bin", big, "application/octet-stream")})
+        assert r.status_code == 413
+        ok = c.post("/api/v1/files/upload", files={"file": ("small.bin", b"hi", "application/octet-stream")})
+        assert ok.status_code == 200
+
+
 def test_root_status(client):
     c, _ = client
     r = c.get("/")
     assert r.status_code == 200
-    # SPA 部署模式（frontend/dist 存在）返回 index.html；否则返回 JSON 根信息
+    # SPA 部署模式（frontend/out 存在）返回 index.html；否则返回 JSON 根信息
     body = r.text
     assert "Agent Drive" in body or "<!doctype html>" in body.lower() or "app" in body.lower()
 

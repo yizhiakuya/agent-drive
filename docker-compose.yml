@@ -1,5 +1,7 @@
-# Agent Drive 服务编排（M2 起使用：PostgreSQL + Redis）
-# M1 单机跑：backend (uvicorn) + frontend (vite dev) 即可
+# Agent Drive 服务编排（预留参考，生产未使用）
+# 生产部署 = systemd 单服务（deploy/agent-drive.service）+ nginx 13311 + frontend/out 静态托管
+# - db/redis：M3 语义索引规模化时的候选；backend 目前【不读取】DATABASE_URL/REDIS_URL
+# - backend/frontend 镜像：历史产物，未随最新架构维护
 services:
   db:
     image: pgvector/pgvector:pg16

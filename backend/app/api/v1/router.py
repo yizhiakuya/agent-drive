@@ -16,6 +16,12 @@ api_v1.include_router(files.router, dependencies=[Depends(get_owner)])
 api_v1.include_router(sessions.router, dependencies=[Depends(get_owner)])
 
 
+@api_v1.get("/health")
+async def health():
+    """健康检查（公开豁免：供监控/探活，不泄露业务信息）。"""
+    return {"ok": True, "service": "agent-drive"}
+
+
 @api_v1.get("/status", dependencies=[Depends(get_owner)])
 async def system_status(container=Depends(get_container)):
     """系统状态（登录后可见：Onboarding 判断是否已配置 LLM）"""

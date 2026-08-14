@@ -26,9 +26,10 @@ async def test(cfg: LLMConfigIn, container=Depends(get_container)):
 
 
 def _mask(key: str) -> str:
+    """只显前缀：绝不回显尾部字符（尾部可能泄露密钥特征）。"""
     if not key:
         return ""
-    return key[:4] + "…" + key[-4:] if len(key) > 10 else "…"
+    return key[:6] + "…" if len(key) > 6 else "…"
 
 
 @router.get("")

@@ -41,7 +41,7 @@ App：设备令牌（Bearer）──▶ 全部 API（WebView / 后台 Worker / �
 | Bearer | `Authorization: Bearer <session|device>` | App 后台 Worker、心跳、跨域 JSON 请求 |
 | 查询参数 | `?token=<device>` | 媒体元素（img/video/audio）无法带 Cookie/Header 的兼容通道 |
 
-公开豁免：`/api/v1/auth/status|setup|login|logout`、静态资源、`/.well-known/assetlinks.json`。
+公开豁免：`/api/v1/health`（探活）、`/api/v1/auth/*`（status/setup/login/logout/pair-exchange）、静态资源、`/.well-known/assetlinks.json`。
 其余全部 `GET/POST/... /api/v1/*` 均需鉴权，401 触发前端回登录页。
 
 ## 四、暴露面加固（服务器）
@@ -50,8 +50,10 @@ App：设备令牌（Bearer）──▶ 全部 API（WebView / 后台 Worker / �
 |----|------|------|
 | 公网入口 | 13311 (nginx HTTPS) + **8000 裸奔** | ✅ 8000 改绑 127.0.0.1（systemd ExecStart --host 127.0.0.1） |
 | 防火墙 | ufw inactive | 暂不启用（家宽 IP 变化风险）；如需要：默认 deny + 放行 22/13311 |
-| 登录限速 | 无 | ✅ 5 次/分钟/IP（内存级） |
-| 审计 | 仅 Agent 操作 | ✅ 登录成功/失败/设密/设备令牌颁发均入 audit.log（含 IP，密码不落日志） |
+| 登录限速 | 无 | ✅ 5 次/分钟/IP（内存级，单 worker 部署 + 过期 key 自动清理） |
+| 上传大小 | 仅 nginx 200m | ✅ 后端兜底 413（max_upload_mb=300MB），防绕过 nginx 直连 8000 打爆内存 |
+| 服务进程 | root 裸跑 | ✅ systemd 沙箱：UMask=077 / NoNewPrivileges / ProtectSystem=full / PrivateTmp / MemoryMax=1G（仓库在 /root 下故保留 root+能力受限） |
+| 审计 | 仅 Agent 操作 | ✅ 登录成功/失败/设密/设备令牌颁发均入 audit.log（含 IP，密码不落日志；1MB 轮转保留 5 份） |
 
 ## 五、设备侧加固（App）
 

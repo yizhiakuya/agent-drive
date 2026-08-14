@@ -230,12 +230,21 @@ class AuthStore:
                 self._data["pairings"] = fresh
                 self._save()
 
-    # ---- 限速（登录/设密/兑换，内存级） ----
+    # ---- 限速（登录/设密/兑换，内存级，单 worker 部署） ----
     def check_rate(self, key: str, limit: int = RATE_LIMIT, window: float = RATE_WINDOW) -> bool:
-        """返回 True 表示放行，False 表示超限。"""
+        """返回 True 表示放行，False 表示超限。
+
+        内存态约束：仅适用于单 worker 部署（deploy/agent-drive.service 即单进程）；
+        同时清理过期 key，防止攻击者伪造 IP 让 _rate 无限增长。
+        """
         now = time.time()
         with self._lock:
+            if len(self._rate) > 1000:  # 兜底：整体清扫过期条目（防伪造 IP 撑爆内存）
+                self._rate = {k: [t for t in v if now - t < window] for k, v in self._rate.items()}
+                self._rate = {k: v for k, v in self._rate.items() if v}
             hits = [t for t in self._rate.get(key, []) if now - t < window]
+            if not hits:
+                self._rate.pop(key, None)  # 过期 key 即时清理
             if len(hits) >= limit:
                 self._rate[key] = hits
                 return False

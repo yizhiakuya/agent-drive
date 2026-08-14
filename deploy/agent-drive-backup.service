@@ -1,0 +1,7 @@
+[Unit]
+Description=Agent Drive 数据备份（data/ + system/ → /root/backups 轮转7天）
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/projects/agent-drive/scripts/backup.sh

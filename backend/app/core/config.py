@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     max_tool_output: int = 2000
     summarize_threshold: int = 12
 
+    # 上传大小上限（MB）：公网闸门是 nginx client_max_body_size 200m；
+    # 后端上限兜底直连 8000 的滥用，超限返回 413
+    max_upload_mb: int = 300
+
     # CORS：显式 origin（credentials 模式不允许 *）
     # - https://localhost：Capacitor App WebView 跨域（Bearer 鉴权）
     # - http://localhost:3000：next dev 直连后端（Cookie 鉴权）

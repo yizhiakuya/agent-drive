@@ -55,6 +55,7 @@ cd frontend/android && gradlew.bat assembleRelease
 4. **发布 APK**：拷贝 app-release.apk → `out/app/agent-drive.apk` → 随前端一起部署。
    下载地址恒定：https://home.rainaki.top:13311/app/agent-drive.apk；
    ⚠️ APK 不要放进 public/（会被 cap sync 嵌套打包进 App 自身资源）
+5. **数据备份**：deploy/agent-drive-backup.{service,timer} 已在服务器安装启用（每日 04:00，/root/backups 轮转 7 份）；改备份策略改 deploy/ + scripts/backup.sh 后需同步到服务器
 
 ## 4. 关键约定与坑位（改动前必读）
 
@@ -70,13 +71,18 @@ cd frontend/android && gradlew.bat assembleRelease
 - **设备令牌加密存储**：EncryptedSharedPreferences(AES256-GCM/SIV，MasterKey 在 Keystore) + `allowBackup=false`；旧明文自动迁移清空；勿改回明文
 - **显式编码**：backend/app 全部 read_text/write_text/open 显式 `encoding="utf-8"`；用户可编辑记忆文件用 `preferences._read_tolerant`（utf-8→gbk→latin-1）容错读；`write_text` 固定 `newline="\n"`（Windows 不转 CRLF）
 - **CI（GitHub Actions）**：backend = ruff + mypy(非阻断) + integration + unit(pytest) + 8 个遗留脚本直跑；frontend = vitest + build。新增测试一律 pytest 风格（自动被收集）
+- **上传大小上限**：`max_upload_mb=300`（后端 413；公网闸门仍是 nginx 200m）——直连 8000 的滥用兜底
+- **健康检查**：`/api/v1/health` 公开豁免（探活用，不泄露业务信息）
+- **审计日志轮转**：1MB 轮转保留 5 份历史（logging.MAX_BACKUPS），勿改回只留 1 份
+- **限速内存态**：仅适用单 worker 部署（现部署即单进程）；check_rate 已做过期 key 清理（>1000 触发全量清扫）
+- **API Key 掩码只显前缀**（绝不回显尾部）；agent-config.json 写入 chmod 0600
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
 - **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
 
 ## 5. 安全红线（勿破坏）
 
-- 除 `auth/status|setup|login|logout|pair-exchange` 外，**全部 /api/v1 走 get_owner 鉴权**（Cookie / Bearer session|device / 媒体 ?token= 三通道）
+- 除 `/api/v1/health` 与 `auth/status|setup|login|logout|pair-exchange` 外，**全部 /api/v1 走 get_owner 鉴权**（Cookie / Bearer session|device / 媒体 ?token= 三通道）
 - 密码 PBKDF2 只存哈希；设备令牌/配对码服务端只存 SHA-256；配对码一次性 5 分钟
 - `system/auth.json` 删除 = 重置认证；8000 端口必须只绑 127.0.0.1（见 deploy/agent-drive.service）
 - 密钥不进 git：*.keystore、keystore.properties、keystore 密码（仓库外 D:\ds\agent-drive-keystore\）

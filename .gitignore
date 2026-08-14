@@ -16,7 +16,7 @@ backend/.env
 # 工具
 *.log
 .DS_Store
-backend/scripts/system/
+*.tar
 
 # 覆盖率产物
 .coverage

@@ -93,6 +93,23 @@ def test_pairing_repair_revokes_old_token(tmp_path):
     assert auth.verify_device_token(old) is False  # 旧令牌已吊销
 
 
+def test_rate_keys_pruned(tmp_path):
+    """限速 key 生命周期：过期时间戳不累积；海量过期 key 被整体清扫。"""
+    import time
+
+    auth = AuthStore(tmp_path / "auth.json")
+    auth._rate["old-ip"] = [time.time() - 120]  # 已过窗口
+    assert auth.check_rate("old-ip") is True
+    assert len(auth._rate["old-ip"]) == 1  # 过期时间戳被丢弃，只记新命中
+    # 攻击者伪造大量 IP 场景：过期 key 不无限增长（1000 阈值触发清扫）
+    for i in range(1001):
+        auth._rate[f"stale-{i}"] = [time.time() - 120]
+    auth._rate["active-ip"] = [time.time()]
+    assert auth.check_rate("new-ip") is True
+    assert len(auth._rate) <= 3  # 只剩 active-ip + new-ip（+old-ip 重入）
+    assert "active-ip" in auth._rate
+
+
 def test_pairing_max_outstanding(tmp_path):
     auth = AuthStore(tmp_path / "auth.json")
     codes = [auth.issue_pairing()["code"] for _ in range(4)]
