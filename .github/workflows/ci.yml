@@ -33,7 +33,7 @@ jobs:
       - name: Integration tests (pytest)
         run: python -m pytest tests/integration -q
 
-      - name: Unit tests (pytest: auth/devices/upload-index/storage/ingest)
+      - name: "Unit tests (pytest: auth/devices/upload-index/storage/ingest)"
         run: python -m pytest tests/unit -q
 
       - name: Unit test suites (legacy scripts)
