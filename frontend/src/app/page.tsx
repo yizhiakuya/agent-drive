@@ -10,6 +10,7 @@ import ToastStack from "@/components/ToastStack";
 import { getStatus, getConfig } from "@/lib/api/config";
 import LoginCard from "@/components/auth/LoginCard";
 import RescanCard from "@/components/auth/RescanCard";
+import ServerNotReadyCard from "@/components/auth/ServerNotReadyCard";
 import { V1, ApiError, authHeaders, ensureBase, getDeviceToken } from "@/lib/api/client";
 import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
@@ -143,7 +144,12 @@ export default function Home() {
     return <><RescanCard onPasswordFallback={() => setAuthMode("login")} /><ToastStack /></>;
   if (authMode === "setup") return <><LoginCard mode="setup" onDone={boot} /><ToastStack /></>;
   if (authMode === "login") return <><LoginCard mode="login" onDone={boot} /><ToastStack /></>;
-  if (!configured) return <><Onboarding /><ToastStack /></>;
+  // AI 未配置：web 端走 Onboarding 向导；原生 App 只提示到网页配置（App 不含 AI 设置界面）
+  if (!configured)
+    return <>
+      {Capacitor.isNativePlatform() ? <ServerNotReadyCard onRetry={boot} /> : <Onboarding />}
+      <ToastStack />
+    </>;
 
   const NAV = [
     { key: "chat", label: "💬 对话" },

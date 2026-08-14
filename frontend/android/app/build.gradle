@@ -14,8 +14,8 @@ android {
         applicationId "top.rainaki.agentdrive"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 15
-        versionName "1.0.15"
+        versionCode 16
+        versionName "1.0.16"
         buildFeatures {
             buildConfig true
         }

@@ -16,6 +16,7 @@ export default function SettingsPage() {
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
   const [saving, setSaving] = useState<"llm" | "emb" | null>(null);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
+  const isNative = Capacitor.isNativePlatform();
 
   async function logout() {
     try {
@@ -78,6 +79,7 @@ export default function SettingsPage() {
       <h2 className="text-lg font-bold mb-3">⚙️ 设置</h2>
       {msg && <div className={`px-3 py-2.5 rounded-lg mb-3 text-sm ${msg.kind === "ok" ? "bg-success-soft text-success border border-success/30" : "bg-danger-soft text-danger border border-danger/30"}`}>{msg.text}</div>}
 
+      {!isNative && (<>
       <div className="bg-panel border border-border rounded-xl p-4 mb-4">
         <h3 className="font-bold text-sm mb-1">🧠 LLM 模型</h3>
         <p className="text-muted text-xs mb-3">Agent 的大脑。支持 OpenAI 兼容 / OpenAI Responses / Anthropic 三协议。</p>
@@ -104,6 +106,14 @@ export default function SettingsPage() {
           {saving === "emb" ? "测试中…" : "保存并测试"}
         </button>
       </div>
+      </>)}
+
+      {isNative && (
+        <div className="bg-panel border border-border rounded-xl p-4 mb-4">
+          <h3 className="font-bold text-sm mb-1">🧠 AI 配置</h3>
+          <p className="text-muted text-xs">AI 模型与向量化在网页端管理，App 内不提供设置入口。</p>
+        </div>
+      )}
 
       <ConnectAppCard />
       <DevicesCard />
