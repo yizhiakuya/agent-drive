@@ -52,3 +52,49 @@ describe("产品体验闭环", () => {
     expect(panel.classList.contains("collapsed")).toBe(true);
   });
 });
+
+describe("FilePanel 导航与预览", () => {
+  it("点击文件显示预览面板（fetch info + 下载链接）", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ path: "合同.txt", size: 75, modified: 1750000000, preview_kind: "text", snippet: "房屋租赁合同内容", indexed: null }),
+    }));
+    const { listFiles } = await import("../../api/files.js");
+    listFiles.mockResolvedValueOnce({
+      path: "",
+      items: [
+        { name: "资料", path: "资料", is_dir: true, size: 0, mtime: 1750000000 },
+        { name: "合同.txt", path: "合同.txt", is_dir: false, size: 75, mtime: 1750000000 },
+      ],
+      disk: { used: 1, total: 100, free: 99 },
+    });
+    render(<FilePanel />);
+    await act(async () => {});
+    fireEvent.click(screen.getByText("合同.txt"));
+    await act(async () => {});
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/api/v1/files/info?path="));
+    expect(screen.getByText("房屋租赁合同内容")).toBeInTheDocument();
+    expect(screen.getByTitle("关闭预览")).toBeInTheDocument();
+  });
+
+  it("双击目录进入 + 面包屑显示路径", async () => {
+    const { listFiles } = await import("../../api/files.js");
+    listFiles
+      .mockResolvedValueOnce({
+        path: "",
+        items: [{ name: "资料", path: "资料", is_dir: true, size: 0, mtime: 0 }],
+        disk: null,
+      })
+      .mockResolvedValueOnce({
+        path: "资料",
+        items: [],
+        disk: null,
+      });
+    render(<FilePanel />);
+    await act(async () => {});
+    fireEvent.doubleClick(screen.getByText("资料"));
+    await act(async () => {});
+    expect(screen.getByText("资料")).toBeInTheDocument(); // 面包屑
+    expect(screen.getByTitle("返回上级")).toBeInTheDocument();
+  });
+});

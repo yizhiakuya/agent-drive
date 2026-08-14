@@ -238,9 +238,16 @@ class AgentLoop:
         confirmed = confirmations or []
         mode, tool_groups = classify(user_message) if tool_groups is None else ("task", tool_groups)
         if mode == "chat" and not confirmed:
-            async for ev in self._chat_path(user_message, history, session_id):
-                yield ev
-            return
+            # 会话存在 pending 确认时，即使消息是闲聊类（如口头"确认"），
+            # 也走任务路径 → 口头确认拦截（重新签发签名确认，绝不口头执行）
+            has_pending = False
+            if self.sessions is not None and session_id:
+                meta = self.sessions.get(session_id)
+                has_pending = bool(meta and meta.get("pending_confirmation"))
+            if not has_pending:
+                async for ev in self._chat_path(user_message, history, session_id):
+                    yield ev
+                return
         async for ev in self._task_path(user_message, history, confirmed, session_id, tool_groups):
             yield ev
 
@@ -308,6 +315,26 @@ class AgentLoop:
 
         # 会话确认状态（防伪造/防重放）
         stored_pending, consumed_nonces, prev_trace = self._load_confirm_state(sid)
+
+        # 口头确认（无签名）→ 重新签发签名确认，引导用户点按钮（绝不口头执行）
+        if stored_pending is not None and not confirmed:
+            verbal = ("确认" in user_message or "好的" in user_message or "可以" in user_message
+                      or "同意" in user_message or "做吧" in user_message or "执行" in user_message
+                      or user_message.strip().lower() in ("ok", "yes", "go"))
+            if verbal:
+                from .confirm import issue_confirmation
+                new_pending = issue_confirmation(stored_pending["tool"], stored_pending["arguments"])
+                if self.sessions is not None and sid:
+                    self.sessions.update_meta(sid, pending_confirmation=new_pending)
+                self.audit(f"[pending-verbally-confirmed:{stored_pending['tool']}] 口头确认无签名，重新签发")
+                yield ("done", {
+                    "session_id": sid,
+                    "tool_trace": [],
+                    "pending_confirmation": new_pending,
+                    "steps": 0,
+                    "latency_ms": int((time.time() - started) * 1000),
+                })
+                return
 
         tool_trace: list[dict[str, Any]] = []
 

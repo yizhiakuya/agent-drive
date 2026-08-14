@@ -257,3 +257,21 @@ body { background: var(--bg); color: var(--text); font-family: "PingFang SC", "M
   .fp-preview { width: 100%; min-width: 0; border-left: none; border-top: 1px solid var(--border); max-height: 45vh; }
   .settings-page { padding: 14px; }
 }
+
+
+/* ============ 打磨：文件面板导航与预览 ============ */
+.fp-crumbs.small { font-size: 12px; padding: 2px 0; flex-wrap: wrap; }
+.crumb.up { font-weight: 600; margin-left: 4px; }
+.fp-mini-preview { border-top: 1px solid var(--border, #e5e7eb); max-height: 38%; display: flex; flex-direction: column; overflow: hidden; }
+.fp-mini-preview-body { overflow: auto; flex: 1; }
+.fp-mini-preview .pv-head { padding: 6px 8px; }
+.fp-mini-preview .pv-text { font-size: 12px; padding: 8px; }
+.fp-mini-preview .pv-pdf { height: 220px; }
+.fp-mini-preview .pv-img { max-height: 220px; }
+.pv-markdown { padding: 10px 12px; font-size: 13px; line-height: 1.6; }
+.pv-markdown h1, .pv-markdown h2, .pv-markdown h3 { margin: 0.4em 0; }
+.pv-markdown code { background: var(--bg, #f3f4f6); padding: 1px 5px; border-radius: 4px; }
+.pv-markdown pre { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 6px; overflow: auto; }
+.pv-markdown pre code { background: none; padding: 0; }
+.pv-markdown table { border-collapse: collapse; }
+.pv-markdown td, .pv-markdown th { border: 1px solid var(--border, #e5e7eb); padding: 4px 8px; }

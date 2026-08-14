@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { listFiles, uploadFile } from "../../api/files.js";
 import { fmtSize } from "../chat/ChatPanel.jsx";
 
@@ -138,7 +140,11 @@ export default function FilePage() {
             <div className="pv-body">
               {info?.preview_kind === "image" && <img src={rawUrl} alt={selected} className="pv-img" />}
               {info?.preview_kind === "pdf" && <iframe src={rawUrl} title={selected} className="pv-pdf" />}
-              {info?.preview_kind === "text" && <pre className="pv-text">{previewText}</pre>}
+              {info?.preview_kind === "text" && selected.toLowerCase().endsWith(".md") ? (
+                <div className="pv-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{previewText}</ReactMarkdown></div>
+              ) : (
+                <pre className="pv-text">{previewText}</pre>
+              )}
               {info?.preview_kind === "binary" && (
                 <div className="muted small" style={{padding:16}}>二进制文件不支持预览，可下载后查看</div>
               )}

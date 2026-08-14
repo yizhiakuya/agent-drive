@@ -52,10 +52,10 @@ export default function SettingsPage() {
     } catch (e) { setMsg({ kind: "error", text: String(e) }); }
   }
 
-  const field = (label, value, onChange, placeholder, type = "text") => (
+  const field = (label, value, onChange, placeholder, type = "text", step = undefined) => (
     <label className="set-field">
       <span>{label}</span>
-      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      <input type={type} value={value} placeholder={placeholder} step={step} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 
@@ -70,8 +70,8 @@ export default function SettingsPage() {
         {field("协议", llmForm.type, (v) => setLlmForm((f) => ({ ...f, type: v })), "openai_compat")}
         {field("接口地址", llmForm.base_url, (v) => setLlmForm((f) => ({ ...f, base_url: v })), "https://...")}
         {field("模型", llmForm.model, (v) => setLlmForm((f) => ({ ...f, model: v })), "如 deepseek-v4-flash")}
-        {field("API Key", llmForm.api_key, (v) => setLlmForm((f) => ({ ...f, api_key: v })), cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-...")}
-        {field("温度", llmForm.temperature, (v) => setLlmForm((f) => ({ ...f, temperature: Number(v) })), "0.3", "number")}
+        {field("API Key", llmForm.api_key, (v) => setLlmForm((f) => ({ ...f, api_key: v })), cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-...", "password")}
+        {field("温度", llmForm.temperature, (v) => setLlmForm((f) => ({ ...f, temperature: Number(v) })), "0.3", "number", "0.1")}
         <button className="btn" onClick={saveLlm}>保存并测试连接</button>
       </div>
 
@@ -81,7 +81,7 @@ export default function SettingsPage() {
         {field("Provider", embForm.provider, (v) => setEmbForm((f) => ({ ...f, provider: v })), "jina")}
         {field("接口地址", embForm.base_url, (v) => setEmbForm((f) => ({ ...f, base_url: v })), "https://api.jina.ai/v1")}
         {field("模型", embForm.model, (v) => setEmbForm((f) => ({ ...f, model: v })), "jina-embeddings-v3")}
-        {field("API Key", embForm.api_key, (v) => setEmbForm((f) => ({ ...f, api_key: v })), cfg?.embeddings?.api_key_masked ? `当前: ${cfg.embeddings.api_key_masked}（留空不变）` : "jina_...")}
+        {field("API Key", embForm.api_key, (v) => setEmbForm((f) => ({ ...f, api_key: v })), cfg?.embeddings?.api_key_masked ? `当前: ${cfg.embeddings.api_key_masked}（留空不变）` : "jina_...", "password")}
         <button className="btn" onClick={saveEmb}>保存并测试</button>
       </div>
 
