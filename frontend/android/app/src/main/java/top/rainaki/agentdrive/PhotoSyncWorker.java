@@ -47,6 +47,8 @@ public class PhotoSyncWorker extends Worker {
                     .setSmallIcon(R.drawable.ic_notification)
                     .setContentTitle("相册同步完成")
                     .setContentText("新上传 " + n + " 张照片到网盘")
+                    .setProgress(0, 0, false)
+                    .setOngoing(false)
                     .setAutoCancel(true)
                     .build());
         } catch (SecurityException ignored) {

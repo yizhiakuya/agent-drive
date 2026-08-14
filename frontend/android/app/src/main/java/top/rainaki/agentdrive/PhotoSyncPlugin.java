@@ -23,7 +23,21 @@ import java.util.List;
 @CapacitorPlugin(name = "PhotoSync")
 public class PhotoSyncPlugin extends Plugin {
 
+    private static PhotoSyncPlugin instance;
     private static PluginCall pendingPermissionCall;
+
+    @Override
+    public void load() {
+        instance = this;
+    }
+
+    /** 供 SyncEngine 广播进度（WebView 打开时 JS 实时收到） */
+    public static void emitProgress(JSObject data) {
+        PhotoSyncPlugin p = instance;
+        if (p != null) {
+            p.notifyListeners("syncProgress", data);
+        }
+    }
 
     static void onPermissionResult(boolean granted) {
         if (pendingPermissionCall != null) {
@@ -122,6 +136,12 @@ public class PhotoSyncPlugin extends Plugin {
         ret.put("lastSyncAt", last == 0 ? JSONObject.NULL : last);
         ret.put("lastSyncedCount", ServerConfigStore.getLastCount(ctx));
         ret.put("lastError", ServerConfigStore.getLastError(ctx));
+        // 实时进度（与 syncProgress 事件同构）
+        ret.put("running", SyncEngine.running);
+        ret.put("phase", SyncEngine.phase);
+        ret.put("currentFile", SyncEngine.currentFile);
+        ret.put("uploaded", SyncEngine.uploaded);
+        ret.put("total", SyncEngine.total);
         return ret;
     }
 }

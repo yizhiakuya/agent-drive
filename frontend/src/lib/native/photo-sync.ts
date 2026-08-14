@@ -10,6 +10,20 @@ export interface PhotoSyncStatus {
   lastSyncAt: number | null;
   lastSyncedCount: number;
   lastError: string | null;
+  // 实时进度（与 syncProgress 事件同构）
+  running: boolean;
+  phase: string; // scanning / uploading / done / idle
+  currentFile: string;
+  uploaded: number;
+  total: number;
+}
+
+export interface SyncProgress {
+  running: boolean;
+  phase: string;
+  currentFile: string;
+  uploaded: number;
+  total: number;
 }
 
 export interface PhotoSyncOptions {
@@ -24,6 +38,11 @@ export interface PhotoSyncPlugin {
   configure(options: PhotoSyncOptions): Promise<PhotoSyncStatus>;
   syncNow(): Promise<{ started: boolean }>;
   requestPermissions(): Promise<{ granted: boolean }>;
+  /** 同步进度实时事件（原生逐张广播） */
+  addListener(
+    eventName: "syncProgress",
+    listener: (data: SyncProgress) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
 }
 
 export const PhotoSync = registerPlugin<PhotoSyncPlugin>("PhotoSync");

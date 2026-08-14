@@ -7,6 +7,9 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.provider.MediaStore;
 
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -35,7 +38,24 @@ public final class SyncEngine {
 
     private static final int MAX_PER_RUN = 200;
 
+    // 进度状态（Worker 与插件同进程，插件 getStatus 直接读；JS 经事件实时收）
+    public static volatile boolean running = false;
+    public static volatile String phase = "idle";
+    public static volatile String currentFile = "";
+    public static volatile int uploaded = 0;
+    public static volatile int total = 0;
+
     private SyncEngine() {
+    }
+
+    /** 广播进度：JS 监听 syncProgress 事件（WebView 打开时） */
+    public static void emitProgress() {
+        PhotoSyncPlugin.emitProgress(new com.getcapacitor.JSObject()
+                .put("running", running)
+                .put("phase", phase)
+                .put("currentFile", currentFile)
+                .put("uploaded", uploaded)
+                .put("total", total));
     }
 
     /** @return 本次成功上传张数；失败数写入 lastError（Worker 据此退避重试） */
@@ -63,9 +83,26 @@ public final class SyncEngine {
         String selection = MediaStore.Images.Media.DATE_ADDED + " > ?";
         String[] args = {String.valueOf(lastSync)};
 
+        // 先统计待传总数（进度条用）
+        running = true;
+        phase = "scanning";
+        currentFile = "";
+        uploaded = 0;
+        total = 0;
+        emitProgress();
+        try (Cursor cc = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                new String[]{"COUNT(*)"}, selection, args, null)) {
+            if (cc != null && cc.moveToFirst()) {
+                total = Math.min(cc.getInt(0), MAX_PER_RUN);
+            }
+        }
+        phase = total == 0 ? "done" : "uploading";
+        emitProgress();
+
         Cursor c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, selection, args,
                 MediaStore.Images.Media.DATE_ADDED + " ASC");
         if (c == null) {
+            running = false;
             throw new IOException("无法读取相册");
         }
 
@@ -90,6 +127,10 @@ public final class SyncEngine {
                         maxTs = Math.max(maxTs, ts);
                         count++;
                         ServerConfigStore.setLastSyncAt(ctx, maxTs); // 逐张检查点
+                        uploaded = count;
+                        currentFile = name;
+                        emitProgress();          // JS 实时进度
+                        notifyProgress(ctx);      // 通知栏进度（节流）
                     }
                 } catch (Exception e) {
                     failures++; // 单张失败不阻塞整批
@@ -104,7 +145,34 @@ public final class SyncEngine {
         } else {
             ServerConfigStore.setLastError(ctx, null);
         }
+        running = false;
+        phase = "done";
+        emitProgress();
         return count;
+    }
+
+    /** 通知栏进度（节流：最多每秒更新一次，避免刷屏） */
+    private static long lastNotifyAt = 0;
+
+    private static void notifyProgress(Context ctx) {
+        long now = System.currentTimeMillis();
+        if (now - lastNotifyAt < 1000 && uploaded < total) {
+            return;
+        }
+        lastNotifyAt = now;
+        try {
+            PhotoSyncWorker.ensureChannel(ctx);
+            NotificationManagerCompat.from(ctx).notify(1, new NotificationCompat.Builder(ctx, "photo_sync")
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle("相册同步中")
+                    .setContentText(uploaded + " / " + total + (currentFile.isEmpty() ? "" : " · " + currentFile))
+                    .setProgress(total, uploaded, total == 0)
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .build());
+        } catch (SecurityException ignored) {
+            // 无通知权限时静默
+        }
     }
 
     /** 单张：MediaStore → 缓存临时文件（顺带算 MD5）→ multipart 上传 → 清理临时文件。 */
