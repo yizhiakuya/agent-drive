@@ -3,8 +3,10 @@
 路径安全：resolve() 防穿越；写操作幂等。M2 增加 s3.py 实现同协议。"""
 from __future__ import annotations
 
+import json
 import mimetypes
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +31,8 @@ class LocalStorage:
             raise NotADirectoryError(rel_path)
         items = []
         for p in sorted(d.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
-            if p.name == ".index":
-                continue  # 隐藏索引目录
+            if p.name in (".index", ".trash"):
+                continue  # 隐藏索引/回收站目录
             rel = p.relative_to(self.root).as_posix()
             items.append({
                 "name": p.name,
@@ -84,6 +86,105 @@ class LocalStorage:
 
     def exists(self, rel_path: str) -> bool:
         return self.resolve(rel_path).exists()
+
+    # ---------- 回收站（误删保护） ----------
+    TRASH_DIR = ".trash"
+
+    @property
+    def trash_root(self) -> Path:
+        return self.root / self.TRASH_DIR
+
+    def move_to_trash(self, rel_path: str) -> dict[str, Any]:
+        """移到回收站（保留原路径结构，记录删除时间）"""
+        p = self.resolve(rel_path)
+        if not p.exists():
+            raise FileNotFoundError(rel_path)
+        dest = self.trash_root / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            # 同名已存在：加时间戳后缀
+            dest = self.trash_root / f"{rel_path}.{int(time.time())}"
+        shutil.move(str(p), str(dest))
+        # 记录元信息
+        meta_path = self.trash_root / f"{rel_path}.meta.json"
+        meta = {
+            "path": rel_path,
+            "trash_path": dest.relative_to(self.trash_root).as_posix(),
+            "deleted_at": time.time(),
+            "size": dest.stat().st_size if dest.is_file() else 0,
+            "is_dir": dest.is_dir(),
+        }
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False))
+        return meta
+
+    def list_trash(self) -> list[dict[str, Any]]:
+        """回收站列表（按删除时间倒序）"""
+        if not self.trash_root.exists():
+            return []
+        items = []
+        for meta_path in self.trash_root.rglob("*.meta.json"):
+            try:
+                items.append(json.loads(meta_path.read_text()))
+            except Exception:
+                continue
+        items.sort(key=lambda m: m.get("deleted_at", 0), reverse=True)
+        return items
+
+    def restore_from_trash(self, rel_path: str) -> dict[str, Any]:
+        """从回收站恢复（目标已存在时报错）"""
+        trash_path = self.trash_root / rel_path
+        if not trash_path.exists():
+            raise FileNotFoundError(f"回收站中不存在: {rel_path}")
+        original = self.root / rel_path
+        if original.exists():
+            raise FileExistsError(f"原位置已有文件: {rel_path}")
+        original.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(trash_path), str(original))
+        (self.trash_root / f"{rel_path}.meta.json").unlink(missing_ok=True)
+        return {"restored": rel_path}
+
+    def purge_trash(self, rel_path: str | None = None) -> dict[str, Any]:
+        """彻底删除。rel_path=None 清空整个回收站。"""
+        removed = 0
+        if rel_path is not None:
+            trash_path = self.trash_root / rel_path
+            if trash_path.exists():
+                if trash_path.is_dir():
+                    shutil.rmtree(trash_path)
+                else:
+                    trash_path.unlink()
+                removed = 1
+            (self.trash_root / f"{rel_path}.meta.json").unlink(missing_ok=True)
+        else:
+            metas = list(self.trash_root.rglob("*.meta.json"))
+            for meta_path in metas:
+                try:
+                    m = json.loads(meta_path.read_text())
+                    tp = self.trash_root / m["trash_path"]
+                    if tp.exists():
+                        if tp.is_dir():
+                            shutil.rmtree(tp)
+                        else:
+                            tp.unlink()
+                        removed += 1
+                except Exception:
+                    pass
+                meta_path.unlink(missing_ok=True)
+        return {"removed": removed}
+
+    def cleanup_trash(self, days: int = 30) -> int:
+        """清理超过 N 天的回收站条目（scheduler 每日调用）。"""
+        cutoff = time.time() - days * 86400
+        removed = 0
+        for m in self.list_trash():
+            if m.get("deleted_at", 0) < cutoff:
+                try:
+                    self.purge_trash(m["path"])
+                    removed += 1
+                except Exception:
+                    pass
+        return removed
 
     # ---------- 写操作（AI 中心：Agent 能创建内容） ----------
     def write_text(self, rel_path: str, content: str) -> dict[str, Any]:

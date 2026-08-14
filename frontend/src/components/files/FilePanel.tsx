@@ -122,6 +122,10 @@ export default function FilePanel() {
               )}
               <div className="flex-1 overflow-auto">
                 {selected.info?.preview_kind === "image" && <img src={fileRawUrl(selected.path)} alt="" className="max-w-full mx-auto" />}
+                {selected.info?.preview_kind === "video" && <video src={fileRawUrl(selected.path)} controls className="w-full max-h-56" />}
+                {selected.info?.preview_kind === "audio" && (
+                  <div className="p-3"><audio src={fileRawUrl(selected.path)} controls className="w-full" /></div>
+                )}
                 {selected.info?.preview_kind === "pdf" && <iframe src={fileRawUrl(selected.path)} title="pdf" className="w-full h-56" />}
                 {selected.info?.preview_kind === "text" && isMarkdown ? (
                   <div className="markdown-body px-3 py-2 text-xs"><ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.text}</ReactMarkdown></div>

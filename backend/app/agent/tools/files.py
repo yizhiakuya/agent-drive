@@ -202,6 +202,67 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -
         group="files",
     )
 
+    # ============ ♻️ 回收站 ============
+    async def list_trash() -> list[dict[str, Any]]:
+        """回收站列表"""
+        return storage.list_trash()
+
+    reg.register(
+        ToolSpec(
+            "list_trash",
+            "查看回收站（已删除文件，30 天内可恢复）",
+            {},
+            doc=(
+                "用途：查看回收站中的文件（path 为原路径、deleted_at 删除时间）。\n"
+                "参数：无。\n"
+                "输出：[{path, trash_path, deleted_at, size, is_dir}] 按删除时间倒序。"
+            ),
+        ),
+        list_trash,
+        group="files",
+    )
+
+    async def restore_file(path: str) -> dict[str, Any]:
+        """从回收站恢复（path 为原路径，list_trash 可查）"""
+        return storage.restore_from_trash(path)
+
+    reg.register(
+        ToolSpec(
+            "restore_file",
+            "从回收站恢复文件到原位置",
+            {"type": "object", "properties": {"path": {"type": "string", "description": "原路径（用 list_trash 查询）"}}, "required": ["path"]},
+            doc=(
+                "用途：把回收站中的文件恢复到原位置。\n"
+                "参数：path（必填）原路径。\n"
+                "输出：{restored: path}。\n"
+                "错误：原位置已有文件/回收站不存在返回 {ok:false, error}。"
+            ),
+        ),
+        restore_file,
+        level="yellow",
+        group="files",
+    )
+
+    async def empty_trash() -> dict[str, Any]:
+        """清空回收站（彻底删除，不可恢复）"""
+        return storage.purge_trash()
+
+    reg.register(
+        ToolSpec(
+            "empty_trash",
+            "清空回收站（彻底删除全部，不可恢复）",
+            {},
+            doc=(
+                "用途：彻底删除回收站中的所有文件。⚠️ 不可恢复。\n"
+                "参数：无。\n"
+                "输出：{removed: N}。"
+            ),
+        ),
+        empty_trash,
+        level="red",
+        group="files",
+    )
+
     # ============ 🟢 M2 内容检索 ============
     async def search_content(query: str, limit: int = 10) -> list[dict[str, Any]]:
         """全文搜索文件内容（M2a）"""
@@ -501,8 +562,8 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -
     )
 
     async def delete_file(path: str) -> dict[str, Any]:
-        storage.delete(path)
-        return {"deleted": path}
+        storage.move_to_trash(path)
+        return {"deleted": path, "trash": True, "restorable": "30 天内可用 restore_file 恢复"}
 
     def _validate_deleted(args: dict, result: Any) -> str | None:
         p = args.get("path", "")
@@ -513,13 +574,14 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None) -
     reg.register(
         ToolSpec(
             "delete_file",
-            "永久删除文件或文件夹（高危操作，需用户确认）",
+            "删除文件或文件夹（移入回收站，30 天内可恢复）",
             {"type": "object", "properties": {"path": {"type": "string", "description": "要删除的文件/目录相对路径"}}, "required": ["path"]},
             doc=(
-                "用途：永久删除文件或文件夹。⚠️ 不可恢复，执行前必须向用户确认。\n"
+                "用途：删除文件或文件夹——移入回收站（30 天内可用 restore_file 恢复），不再永久删除。\n"
                 "参数：path（必填）。\n"
-                "输出：{deleted: path}。\n"
-                "错误：路径不存在返回 {ok:false, error}。"
+                "输出：{deleted, trash, restorable}。\n"
+                "错误：路径不存在返回 {ok:false, error}。\n"
+                "彻底删除：用户明确要求清空回收站时用 empty_trash。"
             ),
         ),
         delete_file,

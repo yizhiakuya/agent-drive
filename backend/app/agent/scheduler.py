@@ -48,6 +48,13 @@ class AutomationScheduler:
 
     async def run_once(self) -> dict[str, Any]:
         """执行一轮规则自动执行（定时/手动共用）。"""
+        # 回收站清理（30 天前彻底删除）
+        try:
+            cleaned = self.container.storage.cleanup_trash(days=30)
+            if cleaned:
+                logger.info("回收站清理: %s 项", cleaned)
+        except Exception:
+            pass
         rules = self.container.memory.rules()
         if not rules:
             return {"ok": True, "skipped": "无自动化规则", "rules": 0}

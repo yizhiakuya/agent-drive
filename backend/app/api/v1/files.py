@@ -62,6 +62,8 @@ async def mkdir(container=Depends(get_container), path: str = ""):
 TEXT_PREVIEW_SUFFIXES = (".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml",
                          ".yml", ".toml", ".csv", ".html", ".css", ".xml", ".log", ".sh", ".ini", ".conf")
 IMAGE_PREVIEW_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+VIDEO_PREVIEW_SUFFIXES = (".mp4", ".webm", ".ogg", ".mov", ".m4v")
+AUDIO_PREVIEW_SUFFIXES = (".mp3", ".wav", ".ogg", ".m4a", ".flac")
 PDF_SUFFIX = ".pdf"
 
 
@@ -77,6 +79,8 @@ async def raw(container=Depends(get_container), path: str = ""):
         media_type = {
             ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
             ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+            ".mp4": "video/mp4", ".webm": "video/webm", ".ogg": "video/ogg", ".mov": "video/quicktime", ".m4v": "video/mp4",
+            ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".flac": "audio/flac",
         }.get(suffix, "application/octet-stream")
         return FileResponse(p_, media_type=media_type)
     except PermissionError:
@@ -110,6 +114,8 @@ async def info(container=Depends(get_container), path: str = ""):
             "size": stat.st_size,
             "modified": stat.st_mtime,
             "preview_kind": "image" if suffix in IMAGE_PREVIEW_SUFFIXES
+                           else "video" if suffix in VIDEO_PREVIEW_SUFFIXES
+                           else "audio" if suffix in AUDIO_PREVIEW_SUFFIXES
                            else "pdf" if suffix == PDF_SUFFIX
                            else "text" if suffix in TEXT_PREVIEW_SUFFIXES or suffix == "" else "binary",
             "snippet": snippet,
@@ -119,5 +125,66 @@ async def info(container=Depends(get_container), path: str = ""):
         raise HTTPException(403, "路径越界")
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+# ---- 文件操作（文件页人工入口） ----
+
+@router.post("/rename")
+async def rename(container=Depends(get_container), src: str = "", dst: str = ""):
+    try:
+        container.storage.rename(src, dst)
+        return {"renamed": f"{src} → {dst}"}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/move")
+async def move(container=Depends(get_container), src: str = "", dst_dir: str = "", overwrite: bool = False):
+    try:
+        container.storage.move(src, dst_dir, overwrite=overwrite)
+        return {"moved": f"{src} → {dst_dir}/"}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/copy")
+async def copy(container=Depends(get_container), src: str = "", dst: str = "", overwrite: bool = False):
+    try:
+        container.storage.copy(src, dst, overwrite=overwrite)
+        return {"copied": f"{src} → {dst}"}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/delete")
+async def delete(container=Depends(get_container), path: str = ""):
+    """删除（移入回收站）"""
+    try:
+        return container.storage.move_to_trash(path)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+# ---- 回收站 ----
+
+@router.get("/trash")
+async def trash_list(container=Depends(get_container)):
+    return {"items": container.storage.list_trash()}
+
+
+@router.post("/trash/restore")
+async def trash_restore(container=Depends(get_container), path: str = ""):
+    try:
+        return container.storage.restore_from_trash(path)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/trash/empty")
+async def trash_empty(container=Depends(get_container)):
+    try:
+        return container.storage.purge_trash()
     except Exception as e:
         raise HTTPException(400, str(e))
