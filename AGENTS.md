@@ -92,6 +92,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **SPA 静态文件边界**：main.py `_resolve_dist_path` 拒绝 `..` 路径段，并要求 resolve 后仍在 `frontend/out` 内；越界返回 JSON 404，勿改回 `_DIST / full_path` 直接读取
 - **extract 不进请求路径**：上传只持久化并入队；`index.file` handler 用 `asyncio.to_thread(ingest.extract)` 跑 PDF/OCR，勿改回上传端点同步摄入
 - **生产代理边界**：API/Worker 都读 `/etc/agent-drive/proxy.env` 的 HTTP(S) proxy；systemd 用 `UnsetEnvironment=ALL_PROXY all_proxy` 阻止 SOCKS 继承。Jina 在服务器直连会超时，勿移除
+- **systemd unit 语法**：`StartLimitIntervalSec/StartLimitBurst` 放 `[Unit]`；systemd 不支持指令值后的行尾注释（会把注释当值并忽略安全项）。unit 变更部署前必须跑 `systemd-analyze verify`，Agent Drive unit 不得出现 warning
 - **前端 GET 去重**：client.ts 对 GET 做 in-flight 合并 + 15s TTL 缓存；非 GET 自动清缓存（勿移除：改文件后列表会陈旧）
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`

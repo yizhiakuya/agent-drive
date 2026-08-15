@@ -55,7 +55,7 @@ App：设备令牌（Bearer）──▶ 全部 API（WebView / 后台 Worker / �
 | 登录限速 | 无 | ✅ 5 次/分钟/IP（内存级，单 API 进程部署 + 过期 key 自动清理） |
 | 上传大小 | 仅 nginx 200m | ✅ 后端兜底 413（max_upload_mb=300MB），防绕过 nginx 直连 8000 打爆内存 |
 | SPA 静态回退 | 用户路径直接拼接构建目录 | ✅ 拒绝 `..` 路径段，并对 resolve 后的路径做 frontend/out 目录边界校验，防止读取运行时配置与凭据 |
-| 服务进程 | root 裸跑 | ✅ API 与任务 Worker 分离，均启用 UMask=077 / NoNewPrivileges / ProtectSystem=full / PrivateTmp / MemoryMax=1G（仓库在 /root 下故保留 root+能力受限） |
+| 服务进程 | root 裸跑 | ✅ API 与任务 Worker 分离，均启用 UMask=077 / NoNewPrivileges / ProtectSystem=full / PrivateTmp / MemoryMax=1G（仓库在 /root 下故保留 root+能力受限）；unit 发布前经 `systemd-analyze verify` 校验 |
 | 外部 API 代理 | 继承 shell/SOCKS 环境 | ✅ 两个 service 只读取 `/etc/agent-drive/proxy.env` 的 HTTP(S) 代理，并用 `UnsetEnvironment` 清除 `ALL_PROXY/all_proxy` |
 | 审计 | 仅 Agent 操作 | ✅ 登录成功/失败/设密/设备令牌颁发均入 audit.log（含 IP，密码不落日志；1MB 轮转保留 5 份） |
 

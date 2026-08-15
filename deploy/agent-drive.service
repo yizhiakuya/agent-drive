@@ -2,6 +2,8 @@
 Description=Agent Drive API and frontend SPA
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,8 +12,6 @@ WorkingDirectory=/root/projects/agent-drive/backend
 ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 RestartSec=3
-StartLimitBurst=5
-StartLimitIntervalSec=60
 TimeoutStopSec=30
 Environment=PYTHONUNBUFFERED=1
 Environment=AGENT_DRIVE_APP_ENV=prod
@@ -21,11 +21,16 @@ EnvironmentFile=/etc/agent-drive/proxy.env
 UnsetEnvironment=ALL_PROXY all_proxy
 
 # 纵深防御（仓库在 /root 下，降权 User= 会失去读写权限，保持 root + 能力受限）：
-UMask=077                 # 新建文件默认仅 owner 可读（含上传文件）
-NoNewPrivileges=true      # 禁止提权
-ProtectSystem=full        # /usr /boot /etc 只读
-PrivateTmp=true           # 私有 /tmp
-MemoryMax=1G              # 单用户 + 上传上限 300MB 下的内存护栏
+# 新建文件默认仅 owner 可读（含上传文件）。systemd 不支持指令值后的行尾注释。
+UMask=077
+# 禁止提权。
+NoNewPrivileges=true
+# /usr、/boot、/etc 只读。
+ProtectSystem=full
+# 使用独立 /tmp。
+PrivateTmp=true
+# 单用户部署和 300MB 上传上限下的内存护栏。
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target
