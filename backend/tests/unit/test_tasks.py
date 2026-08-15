@@ -203,6 +203,12 @@ def test_runner_executes_registered_handler(tmp_path: Path):
     assert finished.result == {"echo": "ok"}
 
 
+def test_runner_wait_handles_asyncio_timeout(tmp_path: Path):
+    store = JobStore(tmp_path / "tasks.sqlite3")
+    runner = JobRunner(store, JobRegistry(), worker_id="test-worker", lease_seconds=10)
+    asyncio.run(runner._wait(0.001))
+
+
 class FakeEmbedder:
     base_url = "https://embedding.invalid/v1"
     model = "fake-v1"

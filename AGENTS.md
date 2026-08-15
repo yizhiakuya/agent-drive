@@ -67,6 +67,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **去重索引**：`system/upload-index.json`（md5→路径）；内容变更（改名/移动/删除/覆盖）自动失效（`storage.attach_index` 反向注入），lookup 时文件不在则自愈兜底
 - **持久任务库**：`system/tasks.sqlite3`（SQLite WAL + 0600）是唯一任务状态源；生产 API 必须 `AGENT_DRIVE_TASK_WORKER_ENABLED=false`，由独立 `agent-drive-worker.service` 执行；开发环境才允许 API 内嵌 Worker
 - **任务状态机**：只经 `JobStore` 做 queued/running/retry_wait/cancelling/terminal 迁移；领取使用租约+心跳，租约过期必须遵守 max_attempts；停机 release 遇到 cancel_requested 必须落为 cancelled，勿留下不可领取的 queued 任务
+- **Python 3.10 Worker 兼容**：`asyncio.wait_for` 的空闲超时必须捕获 `asyncio.TimeoutError`（同时兼容内置 `TimeoutError`），否则生产 Worker 每轮空闲轮询都会误报异常
 - **任务去重与进度**：活跃 dedupe_key 由 SQLite 部分唯一索引保证；相同进度不重复写事件；无游标 SSE 从事件尾部订阅，勿回放全库。终态历史每日保留至少最近 2000 条并清理 30 天前旧记录；子任务仍保留时不得先删父任务
 - **索引任务链**：文件写/移动/删除先同步失效旧全文与向量，再由 `storage.attach_change_listener` 入队 `index.file`；全量重建是 `index.rebuild` 父任务 + index lane 子任务，禁止在上传请求或 Agent 工具内串行跑 OCR/embedding
 - **任务中心口径**：列表/状态计数只算顶层任务，子任务汇总进父任务；`vector_stats` 是全盘扫描，任务总览必须保留 15 秒缓存，文件变更或 embedding 指纹变化时在本进程失效

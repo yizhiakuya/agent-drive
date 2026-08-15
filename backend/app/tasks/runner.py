@@ -77,7 +77,9 @@ class JobRunner:
     async def _wait(self, seconds: float) -> None:
         try:
             await asyncio.wait_for(self._stop.wait(), timeout=seconds)
-        except TimeoutError:
+        # Python 3.10 exposes asyncio.TimeoutError separately from the built-in
+        # exception; support both so idle lanes do not log a false failure.
+        except (TimeoutError, asyncio.TimeoutError):
             pass
 
     async def _lane_loop(self, lane: str) -> None:

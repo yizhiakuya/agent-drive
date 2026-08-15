@@ -117,7 +117,7 @@ API / 文件写入 / 定时计划
 ```
 
 - **状态机**：`queued → running → succeeded|failed|cancelled`，瞬态错误进入 `retry_wait`；运行中取消先到 `cancelling`，由处理器协作检查
-- **可靠领取**：`BEGIN IMMEDIATE` 串行化 claim；Worker 持续刷新任务租约和自身在线心跳。进程崩溃后租约过期自动恢复，达到 `max_attempts` 则失败，不会无限循环
+- **可靠领取**：`BEGIN IMMEDIATE` 串行化 claim；Worker 持续刷新任务租约和自身在线心跳，空闲等待兼容 Python 3.10 的 `asyncio.TimeoutError`。进程崩溃后租约过期自动恢复，达到 `max_attempts` 则失败，不会无限循环
 - **去重**：活跃任务的 `dedupe_key` 使用 SQLite 部分唯一索引；索引键包含路径、源版本和 embedding 指纹，同一版本只执行一次
 - **lane**：`index`、`orchestration`、`maintenance`、`automation` 独立并发；批量重建是 orchestration 父任务，拆成 `index.file` 子任务，避免父任务占住索引执行位
 - **总览与覆盖率**：列表和状态计数只展示顶层任务，批量子任务汇总到父任务进度，避免重复计数；索引覆盖率需要扫描文件树，API 缓存 15 秒以限制大网盘上的刷新开销
