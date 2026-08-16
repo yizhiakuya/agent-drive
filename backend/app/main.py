@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from .api.v1.router import api_v1
 from .core.container import Container
 from .core.errors import AppError
+from .core.logging import AccessLogMiddleware
 
 # 前端构建产物（单服务部署：backend 同时托管 SPA）
 _DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "out"
@@ -59,6 +60,10 @@ def create_app(container: Container | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 访问日志中间件放最外层（最后一个 add_middleware = 最先执行）：
+    # 真实 IP + 请求 ID + 状态码 + 耗时，统一走 root 日志出口
+    app.add_middleware(AccessLogMiddleware)
 
     # 依赖注入：Container 挂到 app.state
     app.state.container = container

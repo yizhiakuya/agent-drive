@@ -13,7 +13,7 @@ from ..core.retry import is_retryable_error
 from .registry import JobCancelled, JobContext, JobRegistry, PermanentJobError, RetryableJobError
 from .store import JobStore
 
-logger = logging.getLogger("agent-drive.tasks")
+logger = logging.getLogger("agent_drive.tasks")
 
 
 class JobRunner:

@@ -9,7 +9,9 @@ StartLimitBurst=5
 Type=simple
 WorkingDirectory=/root/projects/agent-drive/backend
 # 只绑 127.0.0.1：公网唯一入口是 nginx 13311 HTTPS（安全加固，勿改回 0.0.0.0）
-ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+# --no-access-log：HTTP 访问日志由 app 内 AccessLogMiddleware 结构化输出（真实 IP/请求 ID），
+# uvicorn 自带 access log 只显示 127.0.0.1 且格式与 JSON 应用日志混杂
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30

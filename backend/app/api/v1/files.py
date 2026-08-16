@@ -37,7 +37,7 @@ def _record_index(container, md5: str, path: str, size: int, revision: str | Non
     try:
         container.upload_index.record(md5, path, size, revision=revision)
     except Exception:
-        logging.getLogger(__name__).warning(
+        logging.getLogger("agent_drive.api.files").warning(
             "文件已发布但去重索引登记失败: %s", path, exc_info=True,
         )
 

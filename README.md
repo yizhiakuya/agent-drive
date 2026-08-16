@@ -105,6 +105,20 @@ make test           # 全部测试（pytest + 脚本套件）
 make bench          # 真实 LLM 可靠性基准
 ```
 
+## 📋 日志查询（服务器上）
+
+```bash
+cd /root/projects/agent-drive
+./scripts/logs.sh api              # API 进程日志（最近 100 条，JSON 自动美化）
+./scripts/logs.sh worker ERROR     # Worker 最近的 ERROR
+./scripts/logs.sh api -m 关键词 -n 200   # 按关键词过滤
+./scripts/logs.sh api -f           # 实时跟踪
+./scripts/logs.sh audit -n 30      # 审计日志尾部
+```
+
+日志体系见 docs/architecture.md §3.3：统一 JSON 出口（prod）+ 请求 ID 关联 +
+结构化访问日志；审计日志 flock 多进程安全 + 自动脱敏。
+
 ## 📐 Agent 定义规范（v1.0）
 
 详见 [`docs/agent-definition.md`](docs/agent-definition.md)：

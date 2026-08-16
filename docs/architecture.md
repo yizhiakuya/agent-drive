@@ -68,9 +68,27 @@ agent_service = container.agent_factory()
 - 环境变量统一前缀 `AGENT_DRIVE_`，例如 `AGENT_DRIVE_APP_ENV=dev|test|prod`
 
 ### 3.3 日志系统（core/logging.py）
-- 统一 logger，结构化 JSON 输出（prod）/ 可读输出（dev）
-- 三流分离：app 日志 · 审计日志（audit）· 会话记录（sessions）
-- 审计日志追加模式，含 ts/event/result
+
+**统一出口**：`setup_logging()`（Container 初始化时调用，幂等）在 root 挂唯一 handler，
+所有 logger（agent_drive.*、uvicorn.*、第三方库）共用同一出口：
+- prod：单行 JSON `{ts, level, logger, at, msg, rid, data, exc}`（含异常堆栈）；
+dev/test：可读文本（含 rid）
+- uvicorn 在 import 前已配置私有 handler，setup_logging 会清掉它们统一走 root；
+`uvicorn.access` 同时断开传播（本机 uvicorn 用 hasHandlers() 判断是否自记访问日志，
+会沿父链看到 root handler 而恒为 True），HTTP 访问日志唯一来源是
+`AccessLogMiddleware`（最外层纯 ASGI 中间件）：真实 IP（X-Real-IP）/请求 ID/状态码/
+耗时；health 探活只记 DEBUG
+- query string 不进日志（设备令牌走 `?token=` 参数，防泄入日志）
+
+**日志命名约定**：业务 logger 一律 `logging.getLogger("agent_drive.<子系统>")`
+（如 agent_drive.tasks / agent_drive.api.files / agent_drive.http）；结构化字段走
+`extra={"data": {...}}`；文本按敏感键名（api_key/password/token/…）自动脱敏
+
+**审计日志**（system/audit.log）：JSONL 追加（ts/event/result），只记 auth 与 Agent
+操作事件；flock 多进程安全（API + Worker 并发写）+ fsync；1MB 轮转保留 5 份
+
+**查询**：服务器上 `scripts/logs.sh api|worker|audit`（journalctl + 内置过滤器，
+支持 -l 级别/-m 关键词/-f 跟踪）
 
 ### 3.4 异常体系（core/errors.py）
 ```

@@ -89,7 +89,19 @@ cd frontend/android && gradlew.bat assembleRelease
 - **Vitest ESM 配置**：使用 `vitest.config.mts` + `import.meta.url` 解析别名；勿改回含 ESM 语法的 `.ts`/CommonJS 加载方式（未来 Vite native config loader 不支持）
 - **上传大小上限**：`max_upload_mb=300`（后端 413；公网闸门仍是 nginx 200m）——直连 8000 的滥用兜底
 - **健康检查**：`/api/v1/health` 公开豁免（探活用，不泄露业务信息）
-- **审计日志轮转**：1MB 轮转保留 5 份历史（logging.MAX_BACKUPS），勿改回只留 1 份
+- **日志统一出口**：setup_logging 在 root 挂唯一 handler（prod 单行 JSON、dev 可读文本），所有 logger 共用；
+业务 logger 一律 agent_drive.<子系统> 命名（勿用 agent-drive 连字符树或裸 __name__）；
+结构化字段走 extra={"data": {...}}；敏感值按键名/key=value 自动脱敏。
+uvicorn 私有 handler 会被 setup_logging 清掉；uvicorn.access 必须 propagate=False——
+本机 uvicorn 的 h11 协议用 hasHandlers() 判断是否自己记访问日志（沿父链看到 root handler
+恒为 True，--no-access-log 对它无效），断开传播后访问日志唯一来源是 main.py 最外层
+AccessLogMiddleware（X-Real-IP/请求 ID/状态/耗时），
+health 只记 DEBUG，query string 不进日志（设备令牌 ?token= 防泄漏）。
+改日志体系必跑 tests/unit/test_logging.py + tests/integration/test_logging_api.py
+- **审计日志轮转**：1MB 轮转保留 5 份历史（logging.MAX_BACKUPS），勿改回只留 1 份；
+追加与轮转在 flock 锁内（API+Worker 多进程安全）+ fsync，Windows 无 fcntl 退化为无锁
+- **日志查询**：服务器用 scripts/logs.sh api|worker|audit [-n N] [-l 级别] [-m 关键词] [-f]
+（journalctl + 内置 JSON 过滤器，无 jq 依赖）
 - **限速内存态**：仅适用单 API 进程部署（独立任务 Worker 不承载 HTTP）；check_rate 已做过期 key 清理（>1000 触发全量清扫）
 - **API Key 掩码只显前缀**（绝不回显尾部）；agent-config.json 写入 chmod 0600
 - **认证配置失败关闭**：已有 `system/auth.json` 损坏、编码错误、非 JSON 对象、嵌套设备/配对/撤销字段畸形或不可读时必须抛 `AuthStoreLoadError` 拒绝启动并保留原文件；勿静默当作未初始化。正常保存用 0600 安全临时文件 + fsync + 原子 replace；同一路径的 AuthStore 必须共享进程锁，POSIX 再叠加 sidecar flock，每次事务 reload-before-mutate，勿退回实例私有锁

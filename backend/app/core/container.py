@@ -36,6 +36,12 @@ class Container:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
         self.logger = setup_logging(self.settings.app_env)
+        self.logger.info(
+            "container init: env=%s data=%s system=%s",
+            self.settings.app_env,
+            self.settings.data_path,
+            self.settings.system_path,
+        )
 
         # ---- 基础设施 ----
         self.audit = AuditLogger(self.settings.system_path / "audit.log")

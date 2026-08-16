@@ -9,7 +9,7 @@ from typing import Any
 from .models import JobRecord
 from .store import JobStore
 
-logger = logging.getLogger("agent-drive.tasks.service")
+logger = logging.getLogger("agent_drive.tasks.service")
 _INDEX_STATS_TTL_SECONDS = 15.0
 
 
