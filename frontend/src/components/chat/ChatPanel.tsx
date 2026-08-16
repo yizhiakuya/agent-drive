@@ -2,43 +2,19 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { chatStream } from "@/lib/api/chat";
 import { api } from "@/lib/api/client";
-import { getSession, summarizeSession } from "@/lib/api/sessions";
-import { EV, emitFilesChanged } from "@/lib/events";
+import { getSession } from "@/lib/api/sessions";
+import { EV } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToolStep } from "./ToolStep";
 import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
+import { useChatStream, chatTextDelta } from "./useChatStream";
+import type { Message, PendingConfirmation } from "./useChatStream";
 
-interface Message {
-  type: "user" | "assistant" | "tool_step" | "system";
-  content: string;
-  tool?: string;
-  arguments?: Record<string, unknown>;
-  status?: "running" | "done" | "error";
-  output?: string;
-  parsed?: Record<string, unknown> | unknown[];
-}
-
-interface PendingConfirmation {
-  tool: string;
-  arguments: Record<string, unknown>;
-  nonce: string;
-  ts: number;
-  signature: string;
-  message?: string;
-}
-
-const FILES_TOOLS = ["list_files", "search_files", "read_file", "write_file", "append_file",
-  "copy_file", "create_folder", "rename_file", "move_file", "delete_file", "get_storage_info",
-  "read_document", "search_content", "semantic_search", "index_stats"];
-
-export function chatTextDelta(data: Record<string, unknown>): string {
-  return typeof data.text === "string" ? data.text : "";
-}
+export { chatTextDelta };
 
 const QUICK_ACTIONS = [
   { icon: "📂", label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
@@ -89,8 +65,6 @@ export default function ChatPanel() {
   const listRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const sidRef = useRef<string | null>(sessionId);
-  const abortRef = useRef<AbortController | null>(null);
-  const streamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function loadSession(sid: string) {
     try {
@@ -120,6 +94,32 @@ export default function ChatPanel() {
     }
   }
 
+  const { send, stop, abortStream } = useChatStream({
+    messages,
+    sessionIdRef: sidRef,
+    setMessages,
+    setBusy,
+    setPending,
+    setPlan,
+    setContextUsage,
+    setSessionId,
+    bumpSessions,
+    onFinish() {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    },
+  });
+
+  // 封装发送：无显式消息时清空输入框并复位高度（原 send() 的内联行为）。
+  async function handleSend(message?: string, confirmations: Record<string, unknown>[] = []) {
+    const msg = message ?? input.trim();
+    if (!msg || busy) return;
+    if (!message) {
+      setInput("");
+      if (taRef.current) taRef.current.style.height = "auto";
+    }
+    await send(msg, confirmations);
+  }
+
   // 主动汇报：空会话时拉取最近一次自动化报告
   useEffect(() => {
     (async () => {
@@ -144,11 +144,7 @@ export default function ChatPanel() {
 
   useEffect(() => {
     if (sessionId !== sidRef.current) {
-      if (abortRef.current) {
-        abortRef.current.abort();
-        abortRef.current = null;
-      }
-      setBusy(false);
+      abortStream();
       sidRef.current = sessionId;
       setPending(null);
       if (sessionId) {
@@ -159,7 +155,7 @@ export default function ChatPanel() {
         setContextUsage(null);
       }
     }
-  }, [sessionId]);
+  }, [sessionId, abortStream]);
 
   function onScroll() {
     const el = listRef.current;
@@ -178,111 +174,6 @@ export default function ChatPanel() {
     ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
   }
 
-  async function send(message?: string, confirmations: Record<string, unknown>[] = []) {
-    const msg = message ?? input.trim();
-    if (!msg || busy) return;
-    if (!message) {
-      setInput("");
-      if (taRef.current) taRef.current.style.height = "auto";
-    }
-    const history = messages
-      .filter((m) => m.type === "user" || m.type === "assistant")
-      .map((m) => ({ role: m.type, content: m.content }))
-      .slice(-80);
-    setMessages((m) => [...m, { type: "user", content: msg }]);
-    setBusy(true);
-    setPending(null);
-    setPlan([]);
-    setContextUsage(null);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const sendSid = sidRef.current;
-
-    let replyRef = "";
-    setMessages((m) => [...m, { type: "assistant", content: "" }]);
-    // 流式节流：token 高频到达时每 80ms 批量刷一帧 UI（长回复不再逐 token 全量重渲染）
-    const applyReply = () => {
-      setMessages((m) => {
-        const copy = [...m];
-        if (copy.length && copy[copy.length - 1].type === "tool_step") {
-          copy.push({ type: "assistant", content: "" });
-        }
-        copy[copy.length - 1] = { type: "assistant", content: replyRef };
-        return copy;
-      });
-    };
-
-    try {
-      const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
-        if (event === "text") {
-          const delta = chatTextDelta(data);
-          if (!delta) return;
-          replyRef += delta;
-          if (!streamTimerRef.current) {
-            streamTimerRef.current = setTimeout(() => {
-              streamTimerRef.current = null;
-              applyReply();
-            }, 80);
-          }
-        } else if (event === "tool_start") {
-          setMessages((m) => [...m, { type: "tool_step", status: "running", content: "", ...(data as object) } as Message]);
-        } else if (event === "tool_trace") {
-          const d = data as { tool: string; output: string; parsed?: Record<string, unknown> };
-          if (FILES_TOOLS.includes(d.tool)) emitFilesChanged();
-          setMessages((m) => {
-            const copy = [...m];
-            const failed = d.parsed && d.parsed.ok === false;
-            for (let i = copy.length - 1; i >= 0; i--) {
-              const node = copy[i];
-              if (node.type === "tool_step" && node.tool === d.tool && node.status === "running") {
-                copy[i] = { ...node, status: failed ? "error" : "done", output: d.output, parsed: d.parsed };
-                break;
-              }
-            }
-            return copy;
-          });
-          if ((d.tool === "set_plan" || d.tool === "update_plan") && d.parsed?.plan) {
-            setPlan(d.parsed.plan as PlanStep[]);
-          }
-        }
-      }, controller.signal);
-
-      // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
-      if (streamTimerRef.current) {
-        clearTimeout(streamTimerRef.current);
-        streamTimerRef.current = null;
-        applyReply();
-      }
-      if (sendSid !== sidRef.current) return;
-      const rPlan = (r?.plan ?? []) as PlanStep[];
-      if (rPlan.length) setPlan(rPlan);
-      if (r?.context_usage) setContextUsage(r.context_usage as { used: number; total: number; percent: number });
-      if (r?.session_id) {
-        const sid = r.session_id as string;
-        sidRef.current = sid;
-        setSessionId(sid);
-        bumpSessions();
-      }
-      if (r?.truncated) {
-        setMessages((m) => [...m, { type: "system", content: "⚠️ 任务达到最大步数，可能未完成，回复「继续」可接着做" }]);
-      }
-      if (r?.pending_confirmation) setPending(r.pending_confirmation as PendingConfirmation);
-      if (r?.needs_summary && r?.session_id) {
-        summarizeSession(r.session_id as string).catch(() => {});
-      }
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-    } catch (e) {
-      if ((e as Error).name === "AbortError") return;
-      setMessages((m) => {
-        const copy = [...m];
-        copy[copy.length - 1] = { type: "assistant", content: `⚠️ 出错了：${(e as Error).message}` };
-        return copy;
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function confirmYes() {
     if (!pending) return;
     const confirmed = [{
@@ -294,29 +185,12 @@ export default function ChatPanel() {
     }];
     setMessages((m) => [...m, { type: "user", content: `✅ 我确认执行：${pending.tool}` }]);
     setPending(null);
-    send(`请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`, confirmed);
+    handleSend(`请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`, confirmed);
   }
 
   function confirmNo() {
     setMessages((m) => [...m, { type: "assistant", content: "好的，已取消该高风险操作 ✅" }]);
     setPending(null);
-  }
-
-  function stop() {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    setBusy(false);
-    setMessages((m) => {
-      const copy = [...m];
-      if (copy.length && copy[copy.length - 1].type === "assistant" && copy[copy.length - 1].content === "") {
-        copy[copy.length - 1] = { type: "system", content: "⏹️ 已停止本次任务" };
-      } else {
-        copy.push({ type: "system", content: "⏹️ 已停止本次任务" });
-      }
-      return copy;
-    });
   }
 
   const hasRunningTool = messages.some((x) => x.type === "tool_step" && x.status === "running");
@@ -332,7 +206,7 @@ export default function ChatPanel() {
             </div>
             <div className="markdown-body mt-1 max-h-56 overflow-auto">{autoReport.text}</div>
             <Button size="sm" className="mt-2"
-                    onClick={() => { markReportRead(autoReport.date); send("详细说说昨晚的自动化执行结果"); }}>
+                    onClick={() => { markReportRead(autoReport.date); handleSend("详细说说昨晚的自动化执行结果"); }}>
               让 Agent 总结一下
             </Button>
           </div>
@@ -344,7 +218,7 @@ export default function ChatPanel() {
             <div className="text-muted text-sm mb-3">用对话管理你的网盘：搜索、整理、理解、自动化</div>
             <div className="flex flex-wrap gap-2.5 justify-center max-w-md">
               {QUICK_ACTIONS.map((a) => (
-                <Button key={a.label} variant="outline" onClick={() => send(a.msg)}
+                <Button key={a.label} variant="outline" onClick={() => handleSend(a.msg)}
                         className="h-auto rounded-xl px-4 py-2.5 text-sm shadow-sm hover:border-accent hover:text-accent hover:-translate-y-0.5 transition-all">
                   <span className="text-base">{a.icon}</span>
                   <span>{a.label}</span>
@@ -405,7 +279,7 @@ export default function ChatPanel() {
           rows={1}
           onChange={(e) => { setInput(e.target.value); autoGrow(); }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
           }}
           placeholder="和你的 Agent 对话…"
           className="flex-1 bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none resize-none text-sm leading-relaxed max-h-40 focus:border-accent focus:bg-panel focus:ring-2 focus:ring-accent-soft"
@@ -413,7 +287,7 @@ export default function ChatPanel() {
         {busy ? (
           <Button variant="destructive" onClick={stop}>⏹ 停止</Button>
         ) : (
-          <Button onClick={() => send()} disabled={!input.trim()}>
+          <Button onClick={() => handleSend()} disabled={!input.trim()}>
             {input.trim() ? "发送" : "✈"}
           </Button>
         )}

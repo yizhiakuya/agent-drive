@@ -1,0 +1,144 @@
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// 需要被测组件：mock 掉组件依赖的网络层，只保留纯组件行为。
+import ChatPanel from "./ChatPanel";
+
+const chatStream = vi.fn();
+vi.mock("@/lib/api/chat", () => ({
+  chatStream: (...args: unknown[]) => chatStream(...args),
+}));
+
+const api = vi.fn(async (path: string, options?: RequestInit) => { void path; void options; return { report: null }; });
+vi.mock("@/lib/api/client", () => ({
+  api: (...args: [string, RequestInit?]) => api(...args),
+}));
+
+const getSession = vi.fn(async (sid: string) => { void sid; return { messages: [] }; });
+const summarizeSession = vi.fn(async (sid: string) => { void sid; return {}; });
+vi.mock("@/lib/api/sessions", () => ({
+  getSession: (...args: [string]) => getSession(...args),
+  summarizeSession: (...args: [string]) => summarizeSession(...args),
+}));
+
+async function typeAndSend(text: string) {
+  const ta = screen.getByPlaceholderText("和你的 Agent 对话…");
+  fireEvent.change(ta, { target: { value: text } });
+  fireEvent.keyDown(ta, { key: "Enter" });
+  await act(async () => {});
+}
+
+describe("ChatPanel 主流程", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // jsdom 未实现 scrollIntoView，组件在发送/结束时调用它。
+    Element.prototype.scrollIntoView = vi.fn();
+    // 默认无报告，避免 automation/latest 拉取干扰断言。
+    api.mockResolvedValue({ report: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("发送后用户消息上屏", async () => {
+    chatStream.mockImplementation(() => new Promise(() => {}));
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("帮我找文件");
+    expect(screen.getByText("帮我找文件")).toBeInTheDocument();
+    expect(chatStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("text 事件累积为助手消息", async () => {
+    chatStream.mockResolvedValue(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("你好");
+    // 流已结束：节流定时器也会在收尾时 flush，直接推进宏任务即可。
+    expect(screen.getByText("你好")).toBeInTheDocument();
+  });
+
+  it("text 事件受 80ms 节流：定时器冲刷前不逐 token 更新", async () => {
+    vi.useFakeTimers();
+    try {
+      chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+        onEvent("text", { text: "你" });
+        onEvent("text", { text: "好" });
+        return new Promise(() => {}); // 挂起，不复位定时器
+      });
+      render(<ChatPanel />);
+      await act(async () => {});
+      await typeAndSend("hello");
+      // 两个 token 到达后，80ms 定时器尚未触发，助手内容应仍为空。
+      expect(screen.queryByText("你好")).not.toBeInTheDocument();
+      // 推进 80ms：定时器触发，累积内容一次性上屏。
+      await act(async () => { vi.advanceTimersByTime(80); });
+      expect(screen.getByText("你好")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tool_start / tool_trace 生成工具步骤", async () => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("tool_start", { tool: "list_files", arguments: {} });
+      onEvent("tool_trace", { tool: "list_files", output: "[]", parsed: [{ name: "a.txt", is_dir: false, size: 1 }] });
+      return Promise.resolve(null);
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("看看有什么文件");
+    // tool_start 挂起 running 步骤，tool_trace 将其置为 done。
+    expect(screen.getByText("list_files")).toBeInTheDocument();
+    // ToolStep 完成态徽标：✅ + 完成（内含空白，用正则匹配文字节点）
+    expect(screen.getByText(/完成/)).toBeInTheDocument();
+  });
+
+  it("done 返回 pending_confirmation 时弹确认框", async () => {
+    chatStream.mockResolvedValue({
+      pending_confirmation: {
+        tool: "delete_file",
+        arguments: { path: "a.txt" },
+        nonce: "n1",
+        ts: 1,
+        signature: "sig",
+      },
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("删除 a.txt");
+    await waitFor(() => {
+      expect(screen.getByText("⚠️ 高风险操作确认")).toBeInTheDocument();
+    });
+    expect(screen.getByText("delete_file")).toBeInTheDocument();
+  });
+
+  it("流错误显示错误文案", async () => {
+    chatStream.mockRejectedValue(new Error("后端连接失败"));
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("测试错误");
+    await waitFor(() => {
+      expect(screen.getByText(/出错了：后端连接失败/)).toBeInTheDocument();
+    });
+  });
+
+  it("停止按钮中止流（AbortController）", async () => {
+    const abortSpy = vi.spyOn(AbortController.prototype, "abort");
+    chatStream.mockImplementation((_msg, _h, _s, _c, _onEvent: unknown, signal: AbortSignal) => {
+      // 只监听 signal，不立即结束，模拟长任务。
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("长时间任务");
+    const stopBtn = await screen.findByText("⏹ 停止");
+    fireEvent.click(stopBtn);
+    await act(async () => {});
+    expect(abortSpy).toHaveBeenCalled();
+    expect(screen.getByText("⏹️ 已停止本次任务")).toBeInTheDocument();
+  });
+});

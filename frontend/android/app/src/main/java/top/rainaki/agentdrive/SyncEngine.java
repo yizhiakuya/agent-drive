@@ -61,6 +61,53 @@ public final class SyncEngine {
         return code == 400 || code == 413 || code == 415 || code == 416 || code == 422;
     }
 
+    /** 单次请求（上传/预检）HTTP 状态码的同步结果类别（纯函数输出）。 */
+    enum SyncResult {
+        /** 请求成功：上传任意 2xx 记为成功；dedupe 预检仅 200 视为命中。 */
+        SUCCESS,
+        /** dedupe 预检 404：服务端未命中，继续走上传，不算失败。 */
+        MISS,
+        /** 401/403/≥500：连接级失败（鉴权失效/服务端故障），整批中止。 */
+        ABORT,
+        /** 永久 4xx（400/413/415/416/422）：跳过该张并推进连续水位。 */
+        SKIP,
+        /** 其余 4xx（404/405/408/409/429 等）：可能瞬时，冻结水位下轮重试。 */
+        RETRY
+    }
+
+    /**
+     * 纯函数：把整型 HTTP 状态码归为同步结果类别。
+     * <p>
+     * {@code upload=true}（上传路径）：任意 2xx = 成功，404 归为可重试的 RETRY；
+     * {@code upload=false}（dedupe 预检）：仅 200 视为命中，404 视为 MISS（未命中继续上传），
+     * 其余 2xx（201/204 等）仍归 RETRY。
+     * 与 dedupeHit/uploadFile 原内联分类逐分支等价。
+     */
+    static SyncResult classifySyncStatus(int code, boolean upload) {
+        if (code >= 200 && code < 300) {
+            return (upload || code == 200) ? SyncResult.SUCCESS : SyncResult.RETRY;
+        }
+        if (code == 404) {
+            return upload ? SyncResult.RETRY : SyncResult.MISS;
+        }
+        if (code == 401 || code == 403 || code >= 500) {
+            return SyncResult.ABORT;
+        }
+        if (isPermanentClientError(code)) {
+            return SyncResult.SKIP;
+        }
+        return SyncResult.RETRY; // 其余 4xx（405/408/409/429 等）
+    }
+
+    /**
+     * 纯函数：同秒续传的查询选择串——先扫 pending 秒 _ID 水位之后的剩余张，再扫更晚的秒。
+     */
+    static String buildResumeSelection() {
+        return MediaStore.Images.Media.DATE_ADDED + " > ? OR ("
+                + MediaStore.Images.Media.DATE_ADDED + " = ? AND "
+                + MediaStore.Images.Media._ID + " > ?)";
+    }
+
     // 进度状态（Worker 与插件同进程，插件 getStatus 直接读；JS 经事件实时收）
     public static volatile boolean running = false;
     public static volatile String phase = "idle";
@@ -243,9 +290,7 @@ public final class SyncEngine {
         String[] args;
         if (pendingSecond >= 0) {
             // 未完成秒续传：先扫该秒 _ID 水位之后的剩余张，再扫更晚的秒
-            selection = MediaStore.Images.Media.DATE_ADDED + " > ? OR ("
-                    + MediaStore.Images.Media.DATE_ADDED + " = ? AND "
-                    + MediaStore.Images.Media._ID + " > ?)";
+            selection = buildResumeSelection();
             args = new String[]{String.valueOf(pendingSecond), String.valueOf(pendingSecond),
                     String.valueOf(pendingMaxId)};
         } else {
@@ -508,18 +553,19 @@ public final class SyncEngine {
             } catch (IOException e) {
                 throw new AbortBatchException("秒传预检网络失败", e);
             }
-            if (code == 200) {
-                drainQuietly(conn.getInputStream());
-                return true;
+            switch (classifySyncStatus(code, false)) {
+                case SUCCESS:
+                    drainQuietly(conn.getInputStream());
+                    return true;
+                case MISS:
+                    return false;
+                case ABORT:
+                    throw new AbortBatchException("秒传预检失败 HTTP " + code, null);
+                case SKIP:
+                    throw new PermanentSkipException("秒传预检被服务端拒绝 HTTP " + code);
+                default:
+                    throw new IOException("秒传预检失败 HTTP " + code); // 其他 4xx 冻结水位，下轮重试
             }
-            if (code == 404) return false;
-            if (code == 401 || code == 403 || code >= 500) {
-                throw new AbortBatchException("秒传预检失败 HTTP " + code, null);
-            }
-            if (isPermanentClientError(code)) {
-                throw new PermanentSkipException("秒传预检被服务端拒绝 HTTP " + code);
-            }
-            throw new IOException("秒传预检失败 HTTP " + code); // 其他 4xx 冻结水位，下轮重试
         } finally {
             conn.disconnect();
         }
@@ -567,13 +613,14 @@ public final class SyncEngine {
             drainQuietly(conn.getErrorStream());
         }
         conn.disconnect();
-        if (code == 401 || code == 403 || code >= 500) {
+        SyncResult result = classifySyncStatus(code, true);
+        if (result == SyncResult.ABORT) {
             throw new AbortBatchException("服务器拒绝/异常 HTTP " + code, null); // 令牌失效或服务端故障：整批中止
         }
-        if (isPermanentClientError(code)) {
+        if (result == SyncResult.SKIP) {
             throw new PermanentSkipException("上传被服务端拒绝 HTTP " + code); // 永久 4xx：跳过并推进水位
         }
-        if (code < 200 || code >= 300) {
+        if (result == SyncResult.RETRY) {
             throw new IOException("上传失败 HTTP " + code); // 其他 4xx：冻结水位，下轮重试
         }
     }

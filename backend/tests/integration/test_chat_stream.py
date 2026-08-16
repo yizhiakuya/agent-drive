@@ -51,3 +51,26 @@ def test_chat_stream_text_events_are_json_objects(client) -> None:
     assert 'data: "你好"' not in body
     assert 'data: "世界"' not in body
     assert "event: done" in body
+
+
+class _ExplodingAgent:
+    async def run_stream(self, message, history, confirmations, session_id):
+        yield ("text", "部分输出")
+        raise RuntimeError("模拟 LLM 崩溃")
+
+
+def test_chat_stream_error_event_branch(client) -> None:
+    """run_stream 抛异常时，SSE 应推送 event: error，data 为 JSON 对象，含 error 字段。"""
+    # 替换容器 build_agent 返回会抛异常的 agent
+    client.app.state.container.build_agent = lambda: _ExplodingAgent()
+    r = client.post(
+        "/api/v1/chat/stream",
+        json={"message": "hi", "history": [], "confirmations": [], "session_id": None},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    body = r.text
+    assert "event: error" in body
+    # data 仍是 JSON 对象（线上契约），且含 error 字段
+    assert "模拟 LLM 崩溃" in body
+    assert 'data: {"error":' in body  # 错误也必须是对象包裹，不是裸字符串

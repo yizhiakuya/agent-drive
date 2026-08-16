@@ -93,7 +93,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **限速内存态**：仅适用单 API 进程部署（独立任务 Worker 不承载 HTTP）；check_rate 已做过期 key 清理（>1000 触发全量清扫）
 - **API Key 掩码只显前缀**（绝不回显尾部）；agent-config.json 写入 chmod 0600
 - **认证配置失败关闭**：已有 `system/auth.json` 损坏、编码错误、非 JSON 对象、嵌套设备/配对/撤销字段畸形或不可读时必须抛 `AuthStoreLoadError` 拒绝启动并保留原文件；勿静默当作未初始化。正常保存用 0600 安全临时文件 + fsync + 原子 replace；同一路径的 AuthStore 必须共享进程锁，POSIX 再叠加 sidecar flock，每次事务 reload-before-mutate，勿退回实例私有锁
-- **同步断网中止**：SyncEngine 连接失败/401/403/5xx 抛 AbortBatchException 整批中止（勿改回 200 张串行超时）；永久 4xx（400/413/415/416/422）按“跳过”推进连续水位、不设 lastError 不触发重试，其余 4xx 视为可能瞬时并冻结水位下轮重试；中止时当前秒组同样挂 pending 续传。响应实体必须先 drain 再 disconnect，保持连接可复用
+- **同步断网中止**：SyncEngine 连接失败/401/403/5xx 抛 AbortBatchException 整批中止（勿改回 200 张串行超时）；永久 4xx（400/413/415/416/422）按“跳过”推进连续水位、不设 lastError 不触发重试，其余 4xx 视为可能瞬时并冻结水位下轮重试；中止时当前秒组同样挂 pending 续传。响应实体必须先 drain 再 disconnect，保持连接可复用。**4xx 分类集中在纯函数 `classifySyncStatus(code, upload)`、同秒续传 SQL 在 `buildResumeSelection()`——改分类/SQL 必同步补 SyncEngineTest 分支断言（注意 dedupe 仅 200 命中、upload 404 归可重试两处差异）
 - **同步配置与观察者**：PhotoSync.configure 的 enabled/wifiOnly/interval/folder 必须一次加密 prefs commit；多个调用放入专用单线程执行器，从写入到 WorkManager Operation 入库结果全程串行，绝不能在桥接/UI 线程 `Future.get()`。调度失败保留已提交的期望状态、明确 reject，由下次启动 `ensureScheduled` 幂等收敛；禁止伪回滚未知 WorkManager 副作用。挂起的权限回调在 Activity 销毁或新请求到来时必须 reject/替换，不能留旧 PluginCall 解析。ContentObserver 保持 1 秒防抖，字段持有且 Activity 销毁时注销/清 callback，避免重建泄漏和重复快速同步
 - **通知权限非致命**：相册权限判定只看 READ_MEDIA_IMAGES/READ_EXTERNAL_STORAGE（通知被拒不算失败）
 - **错误语义化**：files.py 用 `_friendly()` 映射 404/409/403，裸 OSError（磁盘/IO 故障）映射 500 重试（透传 HTTPException），勿改回 `except Exception → 400`；Android 把永久 4xx 当可跳过照片，服务端瞬时故障绝不能落进 4xx
@@ -106,7 +106,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **原生登出语义**：先清 EncryptedSharedPreferences 再清进程令牌；安全存储清理失败必须停留并报错。离线/5xx 本地退出后只提示“服务端吊销状态未知”，401/403 视为凭据已不可用，勿误报旧令牌仍有效
 - **chat SSE 解析**：chatStream 必须处理 LF/CRLF/CR、换行跨 chunk、UTF-8 码点跨 chunk、多行 data 和无终止空行的尾事件；401 与普通 API/上传共用 `EV.unauthorized`，错误保留后端 detail。**线上契约：每个 SSE data 必须是 JSON 对象**（前端解析器拒绝裸字符串）——text 事件形状 `{"text": str}`，后端 chat.py 负责把 run_stream 的裸字符串 payload 包成对象（集成测试钉死契约，勿改回裸字符串）
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
-- **前端复用单元**：全站 UI 规范见 `docs/frontend-design.md`（控件清单/排版/反馈/反模式清单）；新控件一律用 `components/ui/`（shadcn，radix 底座），**禁止内联自造复刻**——一个值只允许一个控件（选择+手输并存用 Combobox，禁止 select+input 并列）。业务复用单元：文件预览 `FilePreview`、时间格式化 `fmtTime`、原生重扫 `useRescan`、协议/预设枚举 `lib/llm-options.ts`（新增协议需同步 backend `ProviderType`）
+- **前端复用单元**：全站 UI 规范见 `docs/frontend-design.md`（控件清单/排版/反馈/反模式清单）；新控件一律用 `components/ui/`（shadcn，radix 底座），**禁止内联自造复刻**——一个值只允许一个控件（选择+手输并存用 Combobox，禁止 select+input 并列）。业务复用单元：文件预览 `FilePreview`、时间格式化 `fmtTime`、原生重扫 `useRescan`、协议/预设枚举 `lib/llm-options.ts`（新增协议需同步 backend `ProviderType`）、聊天流式发送 `useChatStream`（80ms 节流/事件映射都在 hook 里，ChatPanel 勿内联重建）
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
 - **移动端文件工具栏**：`<640px` 保持 3×2、44px 高触控网格；`<360px` 顶栏只视觉隐藏 Agent Drive 文字（保留无障碍文本），320/407px 必须无横向滚动
 - **Next viewport**：Next.js 16 在 `layout.tsx` 用独立 `export const viewport: Viewport`；勿放回 `metadata.viewport`（构建会警告并可能被忽略）
