@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .base import LLMProvider
 from .providers.anthropic import AnthropicProvider
@@ -39,8 +39,8 @@ class LLMConfig(BaseModel):
     base_url: str
     api_key: str = ""
     model: str
-    temperature: float = Field(default=0.3, ge=0, le=2)
     embeddings: EmbeddingConfig | None = None  # 可选：语义搜索向量化配置
+    # 注：不存 temperature——模型请求不带温度参数（按各服务商默认），设置页亦无此输入
 
 
 class LLMManager:

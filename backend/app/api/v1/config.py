@@ -20,7 +20,23 @@ async def status(container=Depends(get_container)):
 
 @router.post("")
 async def configure(cfg: LLMConfigIn, container=Depends(get_container)):
-    return await container.onboarding.configure(cfg.type, cfg.base_url, cfg.api_key, cfg.model)
+    """保存 LLM 配置。api_key 留空沿用已存 key（仅当 type/base_url 与已存一致）。"""
+    key = cfg.api_key
+    if not key:
+        stored = container.llm.load()
+        if (
+            stored
+            and stored.api_key
+            and stored.type == cfg.type
+            and stored.base_url.rstrip("/") == cfg.base_url.rstrip("/")
+        ):
+            key = stored.api_key
+        if not key:
+            return {
+                "ok": False,
+                "error": "API Key 为空：修改协议/接口地址后请重新填写（未改则留空沿用已保存的 Key）",
+            }
+    return await container.onboarding.configure(cfg.type, cfg.base_url, key, cfg.model)
 
 
 @router.post("/test")
@@ -84,7 +100,6 @@ async def get_config(container=Depends(get_container)):
             "type": cfg.type,
             "base_url": cfg.base_url,
             "model": cfg.model,
-            "temperature": cfg.temperature,
             "api_key_masked": _mask(cfg.api_key),
         }
         if cfg.embeddings is not None:

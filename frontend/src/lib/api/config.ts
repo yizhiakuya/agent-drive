@@ -4,7 +4,7 @@ import { api, LLMConfigPayload } from "./client";
 export const getStatus = () => api("/status");
 export const getConfig = () => api<{
   configured: boolean;
-  llm?: { type: string; base_url: string; model: string; temperature: number; api_key_masked: string };
+  llm?: { type: string; base_url: string; model: string; api_key_masked: string };
   embeddings?: { provider: string; base_url: string; model: string; api_key_masked: string } | null;
   preferences?: Record<string, string>;
 }>("/config");

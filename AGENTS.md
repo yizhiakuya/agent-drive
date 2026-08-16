@@ -105,7 +105,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **原生登出语义**：先清 EncryptedSharedPreferences 再清进程令牌；安全存储清理失败必须停留并报错。离线/5xx 本地退出后只提示“服务端吊销状态未知”，401/403 视为凭据已不可用，勿误报旧令牌仍有效
 - **chat SSE 解析**：chatStream 必须处理 LF/CRLF/CR、换行跨 chunk、UTF-8 码点跨 chunk、多行 data 和无终止空行的尾事件；401 与普通 API/上传共用 `EV.unauthorized`，错误保留后端 detail
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
-- **前端复用单元**：文件预览六分支统一用 `FilePreview`（variant=panel/page），时间格式化统一用 `lib/format.fmtTime`（勿再内联 toLocaleString），原生重扫统一用 `lib/native/useRescan`（勿各自维护 busy/msg）；新增同类重复先查这些单元
+- **前端复用单元**：文件预览六分支统一用 `FilePreview`（variant=panel/page），时间格式化统一用 `lib/format.fmtTime`（勿再内联 toLocaleString），原生重扫统一用 `lib/native/useRescan`（勿各自维护 busy/msg）；协议/embedding 枚举与预设地址单一来源 `lib/llm-options.ts`（Onboarding 与设置页共用，新增协议需同步 backend `ProviderType`）；新增同类重复先查这些单元
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
 - **移动端文件工具栏**：`<640px` 保持 3×2、44px 高触控网格；`<360px` 顶栏只视觉隐藏 Agent Drive 文字（保留无障碍文本），320/407px 必须无横向滚动
 - **Next viewport**：Next.js 16 在 `layout.tsx` 用独立 `export const viewport: Viewport`；勿放回 `metadata.viewport`（构建会警告并可能被忽略）
@@ -113,6 +113,8 @@ cd frontend/android && gradlew.bat assembleRelease
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
 - **工程质量分析 agent**：任何质量/可维护性分析按 `docs/quality-analysis.md` 协议执行——架构与技术栈属基线（记录在快照，不频繁重审），每次只做增量检查（风格一致性/耦合重复/门禁/测试缺口/复杂度热点/死代码/文档同步）；分析阶段只读，完成后先出报告等用户确认，只有用户明示“直接修”才动手。禁止“边分析边改”
 - **模型列表端点**：POST /api/v1/config/models 只读探测、不落盘；api_key 留空仅当表单 type+base_url 与已存配置一致才回退已存 key（不得把已存 key 发给新填的陌生地址）；20s 超时。Provider 统一实现 list_models()（OpenAI 系 GET /models、Anthropic GET /v1/models；Ollama 等非标准 /models 形状会返回错误提示，用户手动填写）
+- **配置保存 key 回退**：POST /config 与 /config/models 语义一致——api_key 留空仅当 type+base_url 与已存配置一致才沿用已存 key，改协议/地址必须重填（防旧 key 打向新地址）。勿退回"无条件回退已存 key"
+- **温度不入配置**：模型请求从不携带 temperature（按各服务商默认），LLMConfig 不存温度、设置页无温度输入——勿恢复温度字段或 UI
 - **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:tasks-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
 
 ## 5. 安全红线（勿破坏）

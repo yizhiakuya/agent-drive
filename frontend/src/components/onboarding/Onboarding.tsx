@@ -2,12 +2,7 @@
 import { useState } from "react";
 import { configureLLM } from "@/lib/api/config";
 import { useAppStore } from "@/lib/store";
-
-const PROVIDERS = [
-  { type: "openai_compat", name: "OpenAI 兼容", desc: "DeepSeek / Ollama / vLLM / Groq 等" },
-  { type: "openai_responses", name: "OpenAI Responses", desc: "OpenAI 官方新协议" },
-  { type: "anthropic", name: "Anthropic", desc: "Claude 及兼容服务" },
-];
+import { PROTOCOLS, protocolOf } from "@/lib/llm-options";
 
 export default function Onboarding() {
   const setConfigured = useAppStore((s) => s.setConfigured);
@@ -53,17 +48,17 @@ export default function Onboarding() {
         </div>
 
         <div className="grid gap-2 mb-4">
-          {PROVIDERS.map((p) => (
+          {PROTOCOLS.map((p) => (
             <button key={p.type} onClick={() => setType(p.type)}
                     className={`text-left bg-card border rounded-xl px-3.5 py-3 cursor-pointer ${type === p.type ? "border-accent bg-accent-soft" : "border-border"}`}>
-              <div className="font-semibold text-sm">{p.name}</div>
+              <div className="font-semibold text-sm">{p.label}</div>
               <small className="text-muted text-xs">{p.desc}</small>
             </button>
           ))}
         </div>
 
-        {field("接口地址", baseUrl, setBaseUrl, "https://api.deepseek.com/v1")}
-        {field("模型名", model, setModel, "如 deepseek-v4-flash")}
+        {field("接口地址", baseUrl, setBaseUrl, protocolOf(type)?.defaultBaseUrl || "https://...")}
+        {field("模型名", model, setModel, protocolOf(type)?.placeholderModel || "模型名")}
         {field("API Key", apiKey, setApiKey, "sk-...", "password")}
 
         {msg && (

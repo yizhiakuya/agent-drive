@@ -223,5 +223,4 @@ export interface LLMConfigPayload {
   base_url: string;
   api_key: string;
   model: string;
-  temperature?: number;
 }

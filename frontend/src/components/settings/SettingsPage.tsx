@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getConfig, saveEmbeddings, configureLLM, listModels } from "@/lib/api/config";
+import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
@@ -13,7 +14,7 @@ import { EV, emitTasksChanged, emitToast } from "@/lib/events";
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  const [llmForm, setLlmForm] = useState({ type: "openai_compat", base_url: "", model: "", api_key: "", temperature: "0.3" });
+  const [llmForm, setLlmForm] = useState({ type: "openai_compat", base_url: "", model: "", api_key: "" });
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
   const [saving, setSaving] = useState<"llm" | "emb" | null>(null);
   const [modelList, setModelList] = useState<string[] | null>(null);
@@ -63,7 +64,7 @@ export default function SettingsPage() {
     try {
       const d = await getConfig();
       setCfg(d);
-      if (d.llm) setLlmForm((f) => ({ ...f, type: d.llm!.type, base_url: d.llm!.base_url, model: d.llm!.model, temperature: String(d.llm!.temperature ?? 0.3) }));
+      if (d.llm) setLlmForm((f) => ({ ...f, type: d.llm!.type, base_url: d.llm!.base_url, model: d.llm!.model }));
       if (d.embeddings) setEmbForm((f) => ({ ...f, provider: d.embeddings!.provider, base_url: d.embeddings!.base_url, model: d.embeddings!.model }));
     } catch (e) {
       setMsg({ kind: "error", text: String(e) });
@@ -78,14 +79,33 @@ export default function SettingsPage() {
 
   async function saveLlm() {
     setMsg(null);
+    if (!llmForm.base_url || !/^https?:\/\//i.test(llmForm.base_url)) {
+      setMsg({ kind: "error", text: "接口地址需以 http(s):// 开头" });
+      return;
+    }
+    if (!llmForm.model.trim()) {
+      setMsg({ kind: "error", text: "请填写或选择模型" });
+      return;
+    }
     setSaving("llm");
     try {
-      const r = await configureLLM({ ...llmForm, temperature: Number(llmForm.temperature) }) as { ok?: boolean; test?: unknown };
-      if (r.ok === false) setMsg({ kind: "error", text: "连接测试失败: " + JSON.stringify(r.test) });
-      else setMsg({ kind: "ok", text: "✅ LLM 配置已保存并测试通过" });
+      const r = await configureLLM({ ...llmForm }) as { ok?: boolean; error?: string; test?: { error?: string } };
+      if (r.ok === false) {
+        setMsg({ kind: "error", text: `保存失败：${r.error || r.test?.error || "连接测试失败"}` });
+      } else setMsg({ kind: "ok", text: "✅ LLM 配置已保存并测试通过" });
       load();
     } catch (e) { setMsg({ kind: "error", text: String(e) }); }
     finally { setSaving(null); }
+  }
+
+  function changeProtocol(type: string) {
+    const proto = protocolOf(type);
+    setLlmForm((f) => {
+      const prev = protocolOf(f.type);
+      const baseIsDefault = !f.base_url || (prev ? f.base_url === prev.defaultBaseUrl : false);
+      return { ...f, type, base_url: baseIsDefault && proto ? proto.defaultBaseUrl : f.base_url };
+    });
+    setModelList(null);
   }
 
   async function fetchModels() {
@@ -143,30 +163,47 @@ export default function SettingsPage() {
       {!isNative && (<>
       <div className="bg-panel border border-border rounded-xl p-4 mb-4">
         <h3 className="font-bold text-sm mb-1">🧠 LLM 模型</h3>
-        <p className="text-muted text-xs mb-3">Agent 的大脑。支持 OpenAI 兼容 / OpenAI Responses / Anthropic 三协议。</p>
-        {field("协议", llmForm.type, (v) => { setLlmForm((f) => ({ ...f, type: v })); setModelList(null); }, "openai_compat")}
-        {field("接口地址", llmForm.base_url, (v) => { setLlmForm((f) => ({ ...f, base_url: v })); setModelList(null); }, "https://...")}
+        <p className="text-muted text-xs mb-3">Agent 的大脑。选择协议后可一键获取该服务商的可用模型。</p>
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          {PROTOCOLS.map((p) => (
+            <button key={p.type} onClick={() => changeProtocol(p.type)}
+                    className={`text-left bg-card border rounded-lg px-2.5 py-2 cursor-pointer text-xs ${llmForm.type === p.type ? "border-accent bg-accent-soft" : "border-border"}`}>
+              <div className="font-semibold">{p.label}</div>
+              <small className="text-muted text-[10px]">{p.desc}</small>
+            </button>
+          ))}
+        </div>
+        <label className="flex flex-col gap-1 mb-2.5 text-xs">
+          <span className="text-muted">接口地址</span>
+          <input
+            type="text"
+            value={llmForm.base_url}
+            placeholder={protocolOf(llmForm.type)?.defaultBaseUrl || "https://..."}
+            list="base-url-presets"
+            onChange={(e) => { setLlmForm((f) => ({ ...f, base_url: e.target.value })); setModelList(null); }}
+            className="px-2.5 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent"
+          />
+          <datalist id="base-url-presets">
+            {(protocolOf(llmForm.type)?.baseUrlPresets || []).map((u) => (
+              <option key={u} value={u} />
+            ))}
+          </datalist>
+        </label>
         <label className="flex flex-col gap-1 mb-2.5 text-xs">
           <span className="text-muted">模型</span>
-          {modelList && modelList.length > 0 && (
-            <select
-              value={modelList.includes(llmForm.model) ? llmForm.model : ""}
-              onChange={(e) => e.target.value && setLlmForm((f) => ({ ...f, model: e.target.value }))}
-              className="px-2.5 py-2 border border-border rounded-lg text-sm bg-panel focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent"
-            >
-              <option value="">— 从可用模型选择 —</option>
-              {modelList.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          )}
           <input
             type="text"
             value={llmForm.model}
-            placeholder="如 deepseek-v4-flash"
+            placeholder={protocolOf(llmForm.type)?.placeholderModel || "模型名"}
+            list="model-options"
             onChange={(e) => setLlmForm((f) => ({ ...f, model: e.target.value }))}
             className="px-2.5 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent"
           />
+          <datalist id="model-options">
+            {(modelList || []).map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
           <div className="flex items-center gap-2 mt-1">
             <button
               className="border border-border text-muted px-2.5 py-1 rounded-md text-xs cursor-pointer disabled:opacity-60"
@@ -175,11 +212,10 @@ export default function SettingsPage() {
             >
               {modelsLoading ? "获取中…" : "获取可用模型"}
             </button>
-            <span className="text-muted text-[10px]">API Key 留空时使用已保存的 Key</span>
+            <span className="text-muted text-[10px]">API Key 留空时沿用已保存的 Key</span>
           </div>
         </label>
         {field("API Key", llmForm.api_key, (v) => setLlmForm((f) => ({ ...f, api_key: v })), cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-...", "password")}
-        {field("温度", llmForm.temperature, (v) => setLlmForm((f) => ({ ...f, temperature: v })), "0.3", "number", "0.1")}
         <button className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60"
                 onClick={saveLlm} disabled={saving !== null}>
           {saving === "llm" ? "测试中…" : "保存并测试连接"}
@@ -189,9 +225,17 @@ export default function SettingsPage() {
       <div className="bg-panel border border-border rounded-xl p-4 mb-4">
         <h3 className="font-bold text-sm mb-1">🧭 向量化（语义搜索）</h3>
         <p className="text-muted text-xs mb-3">文件语义搜索的 embedding 服务（云 API，如 Jina AI）。</p>
-        {field("Provider", embForm.provider, (v) => setEmbForm((f) => ({ ...f, provider: v })), "jina")}
-        {field("接口地址", embForm.base_url, (v) => setEmbForm((f) => ({ ...f, base_url: v })), "https://api.jina.ai/v1")}
-        {field("模型", embForm.model, (v) => setEmbForm((f) => ({ ...f, model: v })), "jina-embeddings-v3")}
+        <label className="flex flex-col gap-1 mb-2.5 text-xs">
+          <span className="text-muted">Provider</span>
+          <select value={embForm.provider} onChange={(e) => setEmbForm((f) => ({ ...f, provider: e.target.value }))}
+                  className="px-2.5 py-2 border border-border rounded-lg text-sm bg-panel focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent">
+            {EMBEDDING_PROVIDERS.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        </label>
+        {field("接口地址", embForm.base_url, (v) => setEmbForm((f) => ({ ...f, base_url: v })), EMBEDDING_PROVIDERS[0].defaultBaseUrl)}
+        {field("模型", embForm.model, (v) => setEmbForm((f) => ({ ...f, model: v })), EMBEDDING_PROVIDERS[0].placeholderModel)}
         {field("API Key", embForm.api_key, (v) => setEmbForm((f) => ({ ...f, api_key: v })), cfg?.embeddings?.api_key_masked ? `当前: ${cfg.embeddings.api_key_masked}（留空不变）` : "jina_...", "password")}
         <button className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60"
                 onClick={saveEmb} disabled={saving !== null}>
