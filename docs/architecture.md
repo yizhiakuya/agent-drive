@@ -9,7 +9,7 @@
 ```
 ┌─────────────────────────────────────────────────┐
 │  Presentation 表现层                              │
-│  frontend (Next.js 16 · Tailwind · TS · zustand)  │
+│  frontend (Next.js 16 · Tailwind 4 · TS · zustand · shadcn/ui)  │
 │  静态导出 out/ 由 backend 单服务托管               │
 ├─────────────────────────────────────────────────┤
 │  Interface 接口层（含应用编排）                    │
@@ -194,10 +194,11 @@ backend/
 ├── pyproject.toml  .env.example  Dockerfile
 └── requirements.txt（doc-only，pyproject 为唯一真相源）
 
-frontend/（Next.js 16 App Router + TS + Tailwind v4）
+frontend/（Next.js 16 App Router + TS + Tailwind v4 + shadcn/ui，设计规范见 docs/frontend-design.md）
 ├── src/
 │   ├── app/  layout.tsx  page.tsx  globals.css(@theme 设计 token)
 │   ├── components/
+│   │   ├── ui/  shadcn/ui 组件库（button/input/select/combobox/card/badge/switch/skeleton/alert/separator）
 │   │   ├── chat/  ChatPanel.tsx  ToolStep.tsx  ContextBar.tsx  PlanCard.tsx
 │   │   ├── files/  FilePage.tsx  FilePanel.tsx
 │   │   ├── sessions/  SessionList.tsx

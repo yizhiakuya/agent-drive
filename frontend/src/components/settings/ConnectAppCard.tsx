@@ -5,6 +5,8 @@ import { Capacitor } from "@capacitor/core";
 import { getPairing } from "@/lib/api/auth";
 import { currentServer } from "@/lib/native/server-config";
 import { useRescan } from "@/lib/native/useRescan";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * 连接手机 App：web 端展示带一次性授权码的二维码（扫码即授权，免密码）；
@@ -66,10 +68,9 @@ export default function ConnectAppCard() {
           <p className="text-muted text-xs mb-2">
             当前服务器：<span className="text-text font-mono">{server || "未配置"}</span>
           </p>
-          <button className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60"
-                  onClick={rescan} disabled={rescanBusy}>
+          <Button onClick={rescan} disabled={rescanBusy}>
             {rescanBusy ? "等待扫码…" : "重新扫码连接"}
-          </button>
+          </Button>
           {rescanMsg && <p className="text-danger text-xs mt-2">{rescanMsg}</p>}
         </div>
       ) : (
@@ -82,17 +83,20 @@ export default function ConnectAppCard() {
             ? <>
                 <img src={qr} alt="扫码连接服务器" className="w-52 h-52 rounded-lg border border-border" />
                 <div className="flex items-center gap-2">
-                  <span className="text-muted text-xs">{left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} 后过期` : "已过期"}</span>
-                  <button className="text-accent text-xs cursor-pointer" onClick={refresh} disabled={busy}>
+                  <Badge variant="outline" className="text-muted">
+                    {left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} 后过期` : "已过期"}
+                  </Badge>
+                  <Button variant="ghost" size="sm" onClick={refresh} disabled={busy}>
                     {busy ? "生成中…" : "刷新二维码"}
-                  </button>
+                  </Button>
                 </div>
               </>
             : <p className="text-muted text-xs">生成中…</p>}
-          <a href="/app/agent-drive.apk" download
-             className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer">
-            📲 下载安卓 App（APK）
-          </a>
+          <Button asChild>
+            <a href="/app/agent-drive.apk" download>
+              📲 下载安卓 App（APK）
+            </a>
+          </Button>
           <p className="text-muted text-[10px]">扫码即授权（一次性 5 分钟）；App 内重扫：设置 → 连接手机 App</p>
           {msg && <p className="text-danger text-xs">{msg}</p>}
         </div>

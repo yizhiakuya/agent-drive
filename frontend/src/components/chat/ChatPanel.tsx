@@ -6,6 +6,8 @@ import { chatStream } from "@/lib/api/chat";
 import { api } from "@/lib/api/client";
 import { getSession, summarizeSession } from "@/lib/api/sessions";
 import { EV, emitFilesChanged } from "@/lib/events";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ToolStep } from "./ToolStep";
 import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
@@ -329,10 +331,10 @@ export default function ChatPanel() {
               <button className="text-muted text-xs cursor-pointer hover:text-text" onClick={() => markReportRead(autoReport.date)}>✕</button>
             </div>
             <div className="markdown-body mt-1 max-h-56 overflow-auto">{autoReport.text}</div>
-            <button className="mt-2 bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer hover:opacity-85"
+            <Button size="sm" className="mt-2"
                     onClick={() => { markReportRead(autoReport.date); send("详细说说昨晚的自动化执行结果"); }}>
               让 Agent 总结一下
-            </button>
+            </Button>
           </div>
         )}
         {messages.length === 0 && !busy && (
@@ -342,11 +344,11 @@ export default function ChatPanel() {
             <div className="text-muted text-sm mb-3">用对话管理你的网盘：搜索、整理、理解、自动化</div>
             <div className="flex flex-wrap gap-2.5 justify-center max-w-md">
               {QUICK_ACTIONS.map((a) => (
-                <button key={a.label} onClick={() => send(a.msg)}
-                        className="flex items-center gap-2 bg-panel border border-border rounded-xl px-4 py-2.5 text-sm cursor-pointer shadow-sm hover:border-accent hover:text-accent hover:-translate-y-0.5 transition-all">
+                <Button key={a.label} variant="outline" onClick={() => send(a.msg)}
+                        className="h-auto rounded-xl px-4 py-2.5 text-sm shadow-sm hover:border-accent hover:text-accent hover:-translate-y-0.5 transition-all">
                   <span className="text-base">{a.icon}</span>
                   <span>{a.label}</span>
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -361,7 +363,13 @@ export default function ChatPanel() {
                   ? "bg-warn-soft text-warn border border-warn/30"
                   : "bg-card border border-border"
               } ${isThinking ? "text-muted animate-pulse-soft" : ""}`}>
-                {isThinking ? (hasRunningTool ? "正在执行操作…" : "Agent 思考中…") : m.type === "assistant" ? (
+                {isThinking ? (
+                  <div className="flex items-center gap-2 text-muted" aria-live="polite">
+                    <Skeleton className="h-2 w-2 rounded-full" />
+                    <Skeleton className="h-2 w-28" />
+                    <span className="text-xs whitespace-nowrap">{hasRunningTool ? "正在执行操作…" : "Agent 思考中…"}</span>
+                  </div>
+                ) : m.type === "assistant" ? (
                   <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown></div>
                 ) : (
                   m.content
@@ -379,8 +387,8 @@ export default function ChatPanel() {
               <br />此操作<b>不可撤销</b>，是否继续？
             </div>
             <div className="flex gap-2.5">
-              <button className="bg-danger text-white px-4 py-2 rounded-lg font-semibold cursor-pointer hover:opacity-85" onClick={confirmYes}>确认执行</button>
-              <button className="border border-border text-text px-4 py-2 rounded-lg cursor-pointer hover:bg-card" onClick={confirmNo}>取消</button>
+              <Button variant="destructive" onClick={confirmYes}>确认执行</Button>
+              <Button variant="default" onClick={confirmNo}>取消</Button>
             </div>
           </div>
         )}
@@ -390,7 +398,7 @@ export default function ChatPanel() {
       {plan.length > 0 && <div className="px-4 pb-2"><PlanCard plan={plan} /></div>}
       {contextUsage && <ContextBar usage={contextUsage} />}
 
-      <div className="input-bar-safe flex gap-2.5 px-5 py-3.5 border-t border-border bg-panel">
+      <div className="input-bar-safe flex gap-2.5 px-5 py-3.5 mb-2 border-t border-border bg-panel">
         <textarea
           ref={taRef}
           value={input}
@@ -403,19 +411,18 @@ export default function ChatPanel() {
           className="flex-1 bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none resize-none text-sm leading-relaxed max-h-40 focus:border-accent focus:bg-panel focus:ring-2 focus:ring-accent-soft"
         />
         {busy ? (
-          <button className="bg-danger text-white px-4 rounded-lg font-semibold cursor-pointer hover:opacity-85" onClick={stop}>⏹ 停止</button>
+          <Button variant="destructive" onClick={stop}>⏹ 停止</Button>
         ) : (
-          <button className="bg-accent text-white px-5 rounded-lg font-semibold cursor-pointer disabled:opacity-50"
-                  onClick={() => send()} disabled={!input.trim()}>
+          <Button onClick={() => send()} disabled={!input.trim()}>
             {input.trim() ? "发送" : "✈"}
-          </button>
+          </Button>
         )}
       </div>
       {showJump && (
-        <button onClick={jumpBottom} title="回到底部"
-                className="absolute bottom-24 right-[45%] bg-panel border border-border rounded-full px-4 py-1.5 text-xs shadow-md cursor-pointer hover:border-accent hover:text-accent animate-slide-in z-10">
+        <Button onClick={jumpBottom} title="回到底部" variant="ghost"
+                className="absolute bottom-24 right-[45%] rounded-full px-4 py-1.5 text-xs shadow-md hover:border-accent hover:text-accent animate-slide-in z-10">
           ↓ 最新
-        </button>
+        </Button>
       )}
     </section>
   );

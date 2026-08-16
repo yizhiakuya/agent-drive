@@ -11,8 +11,9 @@ mkdir -p /tmp/ad-qa/system /tmp/ad-qa/data
 cd backend && AGENT_DRIVE_APP_ENV=test AGENT_DRIVE_BACKEND_DIR=/tmp/ad-qa \
   AGENT_DRIVE_TASK_WORKER_ENABLED=false python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8100 &
 
-# 3) playwright（一次性：npm i playwright@1.57.0，系统 chromium）
-cd /tmp/qa && node /root/projects/agent-drive/scripts/qa-settings/qa-settings.mjs
+# 3) playwright（一次性：本目录 npm install；浏览器用系统 chromium）
+cd scripts/qa-settings && npm install
+node qa-settings.mjs
 
 # 4) 截图 /tmp/qa/shot-settings-final.png（可经 vision 模型复查 CSS）
 ```

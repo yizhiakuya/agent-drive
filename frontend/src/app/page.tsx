@@ -19,22 +19,23 @@ import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
 import { EV, emitFilesChanged, emitRefresh } from "@/lib/events";
 import { Folder, ListChecks, MessageSquare, Settings } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function SkeletonScreen() {
   return (
     <div className="flex flex-col h-screen">
       <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-panel">
         <div className="font-bold text-lg">🦋 Agent Drive</div>
-        <div className="skeleton w-24 h-6 rounded-full" />
+        <Skeleton className="w-24 h-6 rounded-full" />
       </header>
       <main className="flex flex-1 overflow-hidden">
-        <div className="w-60 border-r border-border bg-panel"><div className="skeleton m-3 h-10" /></div>
+        <div className="w-60 border-r border-border bg-panel p-3"><Skeleton className="h-10" /></div>
         <section className="flex-1 p-5 flex flex-col gap-3.5">
-          <div className="skeleton w-3/5 h-10" />
-          <div className="skeleton w-2/5 h-10 self-end" />
-          <div className="skeleton w-4/5 h-10" />
+          <Skeleton className="w-3/5 h-10" />
+          <Skeleton className="w-2/5 h-10 self-end" />
+          <Skeleton className="w-4/5 h-10" />
         </section>
-        <div className="w-80 border-l border-border bg-panel"><div className="skeleton m-3 h-52" /></div>
+        <div className="w-80 border-l border-border bg-panel p-3"><Skeleton className="h-52" /></div>
       </main>
     </div>
   );
@@ -186,7 +187,7 @@ export default function Home() {
             <button key={n.key}
                     title={n.label}
                     aria-label={n.label}
-                    className={`h-10 min-w-10 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm cursor-pointer transition-all whitespace-nowrap inline-flex items-center justify-center gap-1.5 ${tab === n.key ? "bg-accent text-white font-semibold" : "text-text hover:bg-card"}`}
+                    className={`h-10 min-w-10 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm cursor-pointer transition-all whitespace-nowrap inline-flex items-center justify-center gap-1.5 ${tab === n.key ? "bg-accent text-white font-semibold" : "text-muted hover:bg-card"}`}
                     onClick={() => setTab(n.key)}>
               <n.icon className="size-4" />
               <span className="hidden min-[430px]:inline">{n.label}</span>

@@ -23,6 +23,7 @@ src/
 ```
 
 **演进要点**（相对迁移当天）：
+- 2026-08-16：引入 shadcn/ui（radix 底座）——`components/ui/` 组件库 + `docs/frontend-design.md` 设计规范（控件清单/排版/反馈/反模式）；协议枚举单一来源 `lib/llm-options.ts`；模型选择 Combobox 单控件
 - 认证体系：登录/设密页、扫码配对、401 全局拦截、原生端"重扫码"模式
 - 原生桥：ServerConfig / PhotoSync 插件（服务器地址、设备令牌、同步进度事件）
 - 事件总线扩展：`agent-drive:refresh`（下拉刷新全局联动）+ 既有 files-changed/toast

@@ -1,5 +1,6 @@
 "use client";
 import { useRescan } from "@/lib/native/useRescan";
+import { Button } from "@/components/ui/button";
 
 /** 原生 App：无有效凭据时的重新扫码卡（主路径扫码；密码登录作逃生口）。 */
 export default function RescanCard({ hint, onPasswordFallback }: { hint?: string; onPasswordFallback: () => void }) {
@@ -13,14 +14,15 @@ export default function RescanCard({ hint, onPasswordFallback }: { hint?: string
         <p className="text-muted text-xs mb-4 mt-1">
           {hint || "在网页「设置 → 连接手机 App」打开二维码，扫码即授权（免密码）"}
         </p>
-        <button onClick={scan} disabled={busy}
-                className="w-full bg-accent text-white px-4 py-2.5 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60">
+        <Button onClick={scan} disabled={busy}
+                className="w-full py-2.5 text-sm font-semibold">
           {busy ? "等待扫码…" : "打开扫码"}
-        </button>
-        <button onClick={onPasswordFallback}
-                className="w-full text-muted text-xs mt-3 cursor-pointer hover:text-text">
+        </Button>
+        <Button onClick={onPasswordFallback}
+                variant="link"
+                className="w-full text-muted text-xs mt-3 hover:text-text">
           无法扫码？使用密码登录
-        </button>
+        </Button>
         {msg && <p className="text-danger text-xs mt-2">{msg}</p>}
       </div>
     </div>

@@ -3,6 +3,8 @@ import { useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { apiErrorMessage, authenticatedFetch, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 /** 登录/设密页：web 与原生 App 共用（App 登录成功后额外颁发设备令牌存原生）。 */
 export default function LoginCard({ mode, onDone }: { mode: "setup" | "login"; onDone: () => void }) {
@@ -67,18 +69,18 @@ export default function LoginCard({ mode, onDone }: { mode: "setup" | "login"; o
         <p className="text-muted text-xs mb-4 mt-1">
           {isSetup ? "首次使用：设置主人密码（第一个设置者成为主人）" : "输入密码解锁网盘"}
         </p>
-        <input type="password" value={pw} placeholder="密码（至少 8 位）"
+        <Input type="password" value={pw} placeholder="密码（至少 8 位）"
                onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
-               className="w-full px-3 py-2.5 border border-border rounded-lg text-sm mb-2.5 focus:outline-none focus:ring-2 focus:ring-accent-soft" />
+               className="h-auto py-2.5 text-sm mb-2.5" />
         {isSetup && (
-          <input type="password" value={pw2} placeholder="确认密码"
+          <Input type="password" value={pw2} placeholder="确认密码"
                  onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
-                 className="w-full px-3 py-2.5 border border-border rounded-lg text-sm mb-2.5 focus:outline-none focus:ring-2 focus:ring-accent-soft" />
+                 className="h-auto py-2.5 text-sm mb-2.5" />
         )}
-        <button onClick={submit} disabled={busy || !pw}
-                className="w-full bg-accent text-white px-4 py-2.5 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60">
+        <Button onClick={submit} disabled={busy || !pw}
+                className="w-full py-2.5 text-sm font-semibold">
           {busy ? "处理中…" : isSetup ? "设置密码并进入" : "登录"}
-        </button>
+        </Button>
         {msg && <p className="text-danger text-xs mt-2.5">{msg}</p>}
       </div>
     </div>

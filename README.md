@@ -84,11 +84,12 @@ agent-drive/
 │   ├── tests/                   # unit 15 套（pytest 收集 9 + 脚本直跑 6；retry/bugfixes 双轨）+ integration pytest
 │   ├── scripts/                 # benchmark_real.py / mock_llm.py / backup.sh
 │   └── pyproject.toml           # 依赖唯一真相源
-├── frontend/                    # Next.js 16 + Tailwind + TS + zustand
+├── frontend/                    # Next.js 16 + Tailwind 4 + TS + zustand + shadcn/ui（设计规范 docs/frontend-design.md）
 │   └── src/
 │       ├── app/                 # layout/page + globals.css(主题)
 │       ├── components/          # chat/files/tasks/sessions/settings/onboarding/auth + PullToRefresh
-│       └── lib/                 # store/events/format + api + native(插件桥)
+│       │   └── ui/              # shadcn/ui 组件库（button/input/select/combobox/card/badge/switch/skeleton/alert/separator）
+│       └── lib/                 # store/events/format/llm-options + api + native(插件桥) + utils
 ├── frontend/android/           # Capacitor 原生壳（扫码连接 + 相册自动同步 + 后台任务）
 ├── Makefile                     # install/dev/test/bench/build
 └── docker-compose.yml           # db(pgvector)+redis+backend+frontend

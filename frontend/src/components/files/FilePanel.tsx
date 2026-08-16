@@ -4,6 +4,8 @@ import { listFiles, uploadFile, getFileInfo, FileInfo, fileDownloadUrl } from "@
 import FilePreview from "./FilePreview";
 import { fmtSize } from "@/lib/format";
 import { EV, emitToast, emitTasksChanged } from "@/lib/events";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export default function FilePanel() {
   const [path, setPath] = useState("");
@@ -70,26 +72,26 @@ export default function FilePanel() {
       <div className="flex justify-between items-center px-4 py-3.5 border-b border-border">
         <b className="text-sm">📁 文件</b>
         <span className="flex gap-1.5 items-center">
-          <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer" onClick={() => fileRef.current?.click()}>⬆ 上传</button>
-          <button className="bg-accent text-white text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={() => load(path)} title="刷新">🔄</button>
-          <button className="bg-accent text-white text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={() => setCollapsed((v) => !v)}
-                  title={collapsed ? "展开" : "收起"}>{collapsed ? "▶" : "▼"}</button>
+          <Button variant="default" size="sm" onClick={() => fileRef.current?.click()}>⬆ 上传</Button>
+          <Button variant="ghost" size="sm" onClick={() => load(path)} title="刷新" aria-label="刷新">🔄</Button>
+          <Button variant="ghost" size="sm" onClick={() => setCollapsed((v) => !v)}
+                  title={collapsed ? "展开" : "收起"} aria-label={collapsed ? "展开" : "收起"}>{collapsed ? "▶" : "▼"}</Button>
         </span>
         <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
       </div>
       {!collapsed && (
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex items-center px-3 py-1.5 text-xs flex-wrap gap-0.5 border-b border-border/60">
-            <button className={`px-1 rounded cursor-pointer hover:bg-card ${!path ? "font-bold" : "text-accent"}`} onClick={() => load("")}>🏠</button>
+            <Button variant="ghost" size="sm" className={`px-1 ${!path ? "font-bold" : "text-accent"}`} onClick={() => load("")}>🏠</Button>
             {crumbs.map((c, i) => (
               <span key={i}>
                 <span className="text-muted mx-0.5">/</span>
-                <button className={`px-1 rounded cursor-pointer hover:bg-card ${i === crumbs.length - 1 ? "font-bold" : "text-accent"}`}
-                        onClick={() => load(crumbs.slice(0, i + 1).join("/"))}>{c}</button>
+                <Button variant="ghost" size="sm" className={`px-1 ${i === crumbs.length - 1 ? "font-bold" : "text-accent"}`}
+                        onClick={() => load(crumbs.slice(0, i + 1).join("/"))}>{c}</Button>
               </span>
             ))}
-            {path && <button className="ml-1 font-bold cursor-pointer hover:bg-card px-1 rounded" title="返回上级"
-                            onClick={() => load(crumbs.slice(0, -1).join("/"))}>⬆</button>}
+            {path && <Button variant="ghost" size="sm" className="ml-1 font-bold px-1" title="返回上级"
+                            onClick={() => load(crumbs.slice(0, -1).join("/"))}>⬆</Button>}
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {items.length === 0 && (
@@ -113,12 +115,12 @@ export default function FilePanel() {
               <div className="flex justify-between items-center px-2.5 py-1.5 border-b border-border/60">
                 <b className="text-xs truncate flex-1" title={selected.path}>{selected.path.split("/").pop()}</b>
                 <span className="flex gap-1">
-                  <a className="bg-accent text-white text-xs px-2 py-1 rounded cursor-pointer" href={fileDownloadUrl(selected.path)} download>⬇</a>
-                  <button className="bg-border text-text text-xs px-2 py-1 rounded cursor-pointer" onClick={() => setSelected(null)}>✕</button>
+                  <Button variant="default" size="sm" asChild><a href={fileDownloadUrl(selected.path)} download>⬇</a></Button>
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(null)} aria-label="关闭预览">✕</Button>
                 </span>
               </div>
               {selected.info?.indexed && (
-                <div className="px-2.5 py-0.5 text-muted text-xs">已索引({selected.info.indexed.method}, {selected.info.indexed.chars}字)</div>
+                <div className="px-2.5 py-0.5"><Badge variant="outline">已索引({selected.info.indexed.method}, {selected.info.indexed.chars}字)</Badge></div>
               )}
               <div className="flex-1 overflow-auto">
                 {selected.info && (

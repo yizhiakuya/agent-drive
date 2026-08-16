@@ -27,6 +27,9 @@ import {
 } from "@/lib/api/tasks";
 import { EV, emitTasksChanged, emitToast } from "@/lib/events";
 import { fmtTime } from "@/lib/format";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 type Filter = "all" | "active" | "failed" | "done";
 
@@ -56,6 +59,17 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 };
 
 const ACTIVE = new Set<TaskStatus>(["queued", "running", "retry_wait", "cancelling"]);
+
+// 状态 → badge variant（进行中 secondary、失败 destructive、完成 outline、其余 outline 弱化）
+const STATUS_VARIANT: Record<TaskStatus, "default" | "secondary" | "destructive" | "outline"> = {
+  queued: "secondary",
+  running: "secondary",
+  retry_wait: "secondary",
+  cancelling: "secondary",
+  succeeded: "outline",
+  failed: "destructive",
+  cancelled: "outline",
+};
 
 function StatusIcon({ status }: { status: TaskStatus }) {
   const className = "size-4 shrink-0";
@@ -87,7 +101,7 @@ function TaskRow({ task, pending, onCancel, onRetry }: {
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <h3 className="text-sm font-semibold break-words">{TASK_LABELS[task.type] || task.type}</h3>
-            <span className="text-[11px] text-muted">{STATUS_LABELS[task.status]}</span>
+            <Badge variant={STATUS_VARIANT[task.status]}>{STATUS_LABELS[task.status]}</Badge>
             <span className="text-[11px] text-muted">{formatTime(task.created_at)}</span>
           </div>
           {task.resource_key && (
@@ -106,28 +120,33 @@ function TaskRow({ task, pending, onCancel, onRetry }: {
         </div>
         <div className="flex shrink-0 gap-1">
           {ACTIVE.has(task.status) && (
-            <button
+            <Button
               type="button"
-              className="size-9 grid place-items-center text-muted hover:text-danger hover:bg-danger-soft rounded-lg disabled:opacity-50"
+              variant="ghost"
+              size="icon-lg"
+              className="text-muted hover:text-danger hover:bg-danger-soft"
               title="取消任务"
               aria-label="取消任务"
               disabled={pending || task.status === "cancelling"}
               onClick={() => onCancel(task.id)}
             >
               <Square className="size-4" />
-            </button>
+            </Button>
           )}
           {(task.status === "failed" || task.status === "cancelled") && (
-            <button
+            <Button
               type="button"
-              className="size-9 grid place-items-center text-muted hover:text-accent hover:bg-accent-soft rounded-lg disabled:opacity-50"
+              variant="outline"
+              size="sm"
+              className="h-9 px-2 text-accent hover:bg-accent-soft"
               title="重试任务"
               aria-label="重试任务"
               disabled={pending}
               onClick={() => onRetry(task.id)}
             >
               <RotateCcw className="size-4" />
-            </button>
+              <span className="hidden sm:inline">重试</span>
+            </Button>
           )}
         </div>
       </div>
@@ -236,35 +255,39 @@ export default function TaskPage() {
             </p>
           </div>
           <div className="flex items-center gap-1.5">
-            <button
+            <Button
               type="button"
-              className="size-10 grid place-items-center text-muted hover:text-text hover:bg-card rounded-lg"
+              variant="ghost"
+              size="icon-lg"
+              className="text-muted hover:text-text hover:bg-card"
               title="刷新"
               aria-label="刷新任务"
               onClick={() => load()}
             >
               <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="h-10 px-3 inline-flex items-center gap-2 bg-accent text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+              variant="default"
+              size="default"
+              className="h-10 px-3 gap-2 font-semibold"
               disabled={!index?.embedding_configured || pending !== null}
               title={index?.embedding_configured ? "重建搜索索引" : "请先在设置中配置向量服务"}
               onClick={() => setConfirmRebuild(true)}
             >
               <DatabaseZap className="size-4" />
               <span>重建索引</span>
-            </button>
+            </Button>
           </div>
         </div>
       </header>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4">
         {!overview?.workers.online && (
-          <div className="mb-4 px-3 py-2.5 border border-warn/30 bg-warn-soft text-warn rounded-lg text-sm flex items-center gap-2">
+          <Alert className="mb-4 border-warn/30 bg-warn-soft text-warn">
             <AlertCircle className="size-4 shrink-0" />
-            <span>任务 Worker 未连接，队列会保留，服务恢复后继续执行。</span>
-          </div>
+            <AlertDescription>任务 Worker 未连接，队列会保留，服务恢复后继续执行。</AlertDescription>
+          </Alert>
         )}
 
         <div className="grid grid-cols-2 lg:grid-cols-4 border-y border-border bg-panel mb-4">
@@ -326,15 +349,16 @@ export default function TaskPage() {
             <h3 id="rebuild-title" className="font-bold text-sm">重建全部搜索索引</h3>
             <p className="text-sm text-muted mt-2">现有全文与向量索引会在后台重新生成，文件本身不会被修改。</p>
             <div className="flex justify-end gap-2 mt-4">
-              <button type="button" className="h-10 px-3 text-sm rounded-lg hover:bg-card" onClick={() => setConfirmRebuild(false)}>取消</button>
-              <button
+              <Button type="button" variant="ghost" className="h-10 px-3" onClick={() => setConfirmRebuild(false)}>取消</Button>
+              <Button
                 type="button"
-                className="h-10 px-3 text-sm font-semibold bg-accent text-white rounded-lg disabled:opacity-50"
+                variant="default"
+                className="h-10 px-3 font-semibold"
                 disabled={pending === "rebuild"}
                 onClick={startRebuild}
               >
                 {pending === "rebuild" ? "正在提交…" : "开始重建"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

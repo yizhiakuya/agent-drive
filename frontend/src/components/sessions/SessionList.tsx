@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { listSessions, deleteSession } from "@/lib/api/sessions";
 import { useAppStore } from "@/lib/store";
+import { Button } from "@/components/ui/button";
 
 export default function SessionList() {
   const sessionId = useAppStore((s) => s.sessionId);
@@ -32,8 +33,7 @@ export default function SessionList() {
     <aside className="hidden md:flex w-52 xl:w-60 border-r border-border bg-panel flex-col">
       <div className="flex justify-between items-center px-3 py-3.5 border-b border-border">
         <b className="text-sm">💬 会话</b>
-        <button className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer"
-                onClick={newSession}>＋ 新会话</button>
+        <Button className="text-xs px-3 py-1.5 h-auto" onClick={newSession}>＋ 新会话</Button>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {sessions.length === 0 && <div className="text-muted text-xs p-3">（暂无会话）</div>}

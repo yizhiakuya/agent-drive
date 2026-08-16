@@ -4,6 +4,9 @@ import { Capacitor } from "@capacitor/core";
 import { PhotoSync, PhotoSyncStatus, SyncProgress } from "@/lib/native/photo-sync";
 import { EV } from "@/lib/events";
 import { fmtTime } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Alert } from "@/components/ui/alert";
 
 const INTERVALS = [1, 6, 12, 24];
 
@@ -104,16 +107,16 @@ export default function PhotoSyncCard() {
       )}
 
       <label className="flex items-center gap-2 text-sm mb-2 cursor-pointer">
-        <input type="checkbox" checked={st?.enabled ?? false} disabled={busy}
-               onChange={(e) => apply({ enabled: e.target.checked })} />
+        <Switch checked={st?.enabled ?? false} disabled={busy}
+                onCheckedChange={(v) => apply({ enabled: v })} />
         启用自动同步
       </label>
 
       {st?.enabled && (
         <>
           <label className="flex items-center gap-2 text-sm mb-2 cursor-pointer">
-            <input type="checkbox" checked={st.wifiOnly} disabled={busy}
-                   onChange={(e) => apply({ wifiOnly: e.target.checked })} />
+            <Switch checked={st.wifiOnly} disabled={busy}
+                    onCheckedChange={(v) => apply({ wifiOnly: v })} />
             仅 Wi-Fi 时同步
           </label>
           <label className="flex items-center gap-2 text-sm mb-2">
@@ -130,10 +133,9 @@ export default function PhotoSyncCard() {
       )}
 
       <div className="flex items-center gap-2 mt-3">
-        <button className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60"
-                onClick={syncNow} disabled={busy || !st?.enabled}>
+        <Button onClick={syncNow} disabled={busy || !st?.enabled}>
           {busy ? "执行中…" : "立即同步"}
-        </button>
+        </Button>
         {st && (
           <span className="text-muted text-[10px]">
             上次：{fmt(st.lastSyncAt)} · 同步 {Math.max(st.lastSyncedCount, 0)} 张
@@ -141,7 +143,12 @@ export default function PhotoSyncCard() {
           </span>
         )}
       </div>
-      {msg && <p className="text-xs mt-2 text-muted">{msg}</p>}
+      {msg && (
+        <Alert
+          variant={msg.startsWith("✅") || msg.startsWith("🔄") || msg === "未启动" ? "default" : "destructive"}
+          className={`mt-2 text-xs ${msg.startsWith("✅") || msg.startsWith("🔄") || msg === "未启动" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}
+        >{msg}</Alert>
+      )}
     </div>
   );
 }

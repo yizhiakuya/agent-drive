@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { fmtSize, fmtToolArgs, TOOL_ICONS, STEP_STATUS } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export interface ToolStepData {
   tool: string;
@@ -20,17 +22,29 @@ export function ToolStep({ step }: { step: ToolStepData }) {
   const isListFiles = Array.isArray(step.parsed) && step.tool === "list_files";
   const isError = parsed && parsed.ok === false;
 
+  const statusBadge =
+    step.status === "error" ? (
+      <Badge variant="destructive">{statusIcon} {statusText}</Badge>
+    ) : step.status === "running" ? (
+      <Badge variant="secondary" className="text-warn">{statusIcon} {statusText}</Badge>
+    ) : (
+      <Badge variant="secondary" className="text-success">{statusIcon} {statusText}</Badge>
+    );
+
   return (
     <div className={`border rounded-lg mb-2 text-sm ${step.status === "error" ? "border-danger/40 bg-danger-soft/40" : "border-border bg-panel"}`}>
-      <button className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-card/60 rounded-lg" onClick={() => setOpen(!open)}>
+      <Button
+        variant="ghost"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="w-full justify-start gap-2 rounded-lg px-3 py-2 h-auto font-medium hover:bg-card/60"
+      >
         <span>{icon}</span>
         <span className="font-semibold">{step.tool}</span>
-        <code className="text-muted text-xs truncate flex-1 text-left">{argsBrief}</code>
-        <span className={`text-xs whitespace-nowrap ${step.status === "error" ? "text-danger" : step.status === "running" ? "text-warn" : "text-success"}`}>
-          {statusIcon} {statusText}
-        </span>
+        <code className="text-muted text-xs truncate flex-1 text-left font-normal">{argsBrief}</code>
+        {statusBadge}
         <span className="text-muted text-xs">{open ? "▲" : "▼"}</span>
-      </button>
+      </Button>
       {open && step.output && (
         <div className="border-t border-border px-3 py-2 max-h-64 overflow-auto">
           {isError ? (

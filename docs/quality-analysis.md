@@ -78,5 +78,5 @@ P0 / P1 / P2 …
 > 审计日期：2026-08-16（随重大架构/技术栈变更时更新本节，并同步 AGENTS.md §1 文档地图）
 
 - **架构**：FastAPI 单体后端（`app/api|agent|storage|tasks|auth|llm|ingest|core` 分层，API 与任务 Worker 进程分离）+ Next.js 16 静态导出前端（zustand 状态 + 类型化事件总线 + 身份隔离缓存 API 层）+ Capacitor 7 Android 原生壳（WorkManager 相册同步）。详见 `docs/architecture.md`。
-- **技术栈**：Python 3.10+（FastAPI/uvicorn/pytest/ruff/mypy）；TypeScript 5 + React 19 + Tailwind 4 + Vitest；Java 17 + AndroidX Security Crypto / WorkManager。
+- **技术栈**：Python 3.10+（FastAPI/uvicorn/pytest/ruff/mypy）；TypeScript 5 + React 19 + Tailwind 4 + shadcn/ui（radix 底座，2026-08-16 引入，规范 docs/frontend-design.md）+ Vitest；Java 17 + AndroidX Security Crypto / WorkManager。
 - **审计结论**：分层清晰、锁序与原子性约定完整、CI 覆盖三方门禁；无变更不重审。

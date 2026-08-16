@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getDevices, removeDevice, DeviceInfo } from "@/lib/api/devices";
 import { EV } from "@/lib/events";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 function relTime(ts: number): string {
   const diff = Math.max(0, Date.now() / 1000 - ts);
@@ -88,13 +90,12 @@ export default function DevicesCard() {
                 <td className="p-1.5 border-b border-border/50 text-muted hidden sm:table-cell">{d.app_version}</td>
                 <td className="p-1.5 border-b border-border/50">
                   {now - d.last_seen < 120
-                    ? <span className="bg-success-soft text-success px-1.5 py-0.5 rounded-full">在线</span>
+                    ? <Badge variant="outline" className="bg-success-soft text-success border-success/30">在线</Badge>
                     : <span className="text-muted">{relTime(d.last_seen)}</span>}
                 </td>
                 <td className="p-1.5 border-b border-border/50 text-muted hidden md:table-cell">{fmtSync(d)}</td>
                 <td className="p-1.5 border-b border-border/50 text-right">
-                  <button className="text-danger text-[11px] cursor-pointer disabled:opacity-50"
-                          onClick={() => rm(d.device_id)} disabled={busy !== null}>移除</button>
+                  <Button variant="destructive" size="sm" onClick={() => rm(d.device_id)} disabled={busy !== null}>移除</Button>
                 </td>
               </tr>
             ))}

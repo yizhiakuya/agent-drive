@@ -5,6 +5,9 @@ import { listFiles, uploadFile, getFileInfo, renameFile, moveFile, copyFile, mkd
 import FilePreview from "./FilePreview";
 import { fmtSize, fmtTime } from "@/lib/format";
 import { EV, emitToast, emitFilesChanged, emitTasksChanged } from "@/lib/events";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 
 export default function FilePage() {
   const [path, setPath] = useState("");
@@ -154,19 +157,19 @@ export default function FilePage() {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <b className="text-sm whitespace-nowrap">📁 文件</b>
           <span className="grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center">
-            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}><span aria-hidden="true">⬆</span> 上级</button>
-            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+            <Button variant="outline" size="sm" className="min-w-0 whitespace-nowrap"
+                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}><span aria-hidden="true">⬆</span> 上级</Button>
+            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap"
                     onClick={() => fileRef.current?.click()} disabled={uploading}>
               {uploading ? <><span className="inline-block w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow align-middle" /> 上传中</> : <><span aria-hidden="true">⬆</span> 上传</>}
-            </button>
-            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer" onClick={() => load(path)} title="刷新" aria-label="刷新"><span aria-hidden="true">🔄</span><span className="sm:hidden">刷新</span></button>
-            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 py-1.5 rounded-lg cursor-pointer sm:hidden" title="拍照上传" aria-label="拍照上传"
-                    onClick={() => cameraRef.current?.click()}><span aria-hidden="true">📷</span><span>拍照</span></button>
-            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer" title="新建文件夹" aria-label="新建文件夹"
-                    onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}><span aria-hidden="true">📁+</span><span className="sm:hidden">新建</span></button>
-            <button className="flex min-w-0 items-center justify-center gap-1 whitespace-nowrap bg-accent text-white text-xs px-2 sm:px-3 py-1.5 rounded-lg cursor-pointer" title="回收站" aria-label="回收站"
-                    onClick={openTrash}><span aria-hidden="true">♻️</span><span className="sm:hidden">回收站</span></button>
+            </Button>
+            <Button variant="ghost" size="sm" className="min-w-0 whitespace-nowrap" onClick={() => load(path)} title="刷新" aria-label="刷新"><span aria-hidden="true">🔄</span><span className="sm:hidden">刷新</span></Button>
+            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap sm:hidden" title="拍照上传" aria-label="拍照上传"
+                    onClick={() => cameraRef.current?.click()}><span aria-hidden="true">📷</span><span>拍照</span></Button>
+            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap" title="新建文件夹" aria-label="新建文件夹"
+                    onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}><span aria-hidden="true">📁+</span><span className="sm:hidden">新建</span></Button>
+            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap" title="回收站" aria-label="回收站"
+                    onClick={openTrash}><span aria-hidden="true">♻️</span><span className="sm:hidden">回收站</span></Button>
           </span>
           <input ref={fileRef} type="file" style={{ display: "none" }}
                  onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
@@ -177,23 +180,23 @@ export default function FilePage() {
         {selected && (
           <div className="flex items-center gap-1.5 text-xs flex-wrap">
             <span className="text-muted mr-1 truncate max-w-40" title={selected.path}>已选: {selected.path.split("/").pop()}</span>
-            <button className="border border-border px-2 py-1 rounded-lg cursor-pointer hover:border-accent hover:text-accent"
-                    onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}>✏️ 重命名</button>
-            <button className="border border-border px-2 py-1 rounded-lg cursor-pointer hover:border-accent hover:text-accent"
-                    onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}>🚚 移动</button>
-            <button className="border border-border px-2 py-1 rounded-lg cursor-pointer hover:border-accent hover:text-accent"
-                    onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}>📄 复制到</button>
-            <button className="border border-danger/50 text-danger px-2 py-1 rounded-lg cursor-pointer hover:bg-danger-soft"
-                    onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}>🗑️ 删除</button>
+            <Button variant="outline" size="sm"
+                    onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}>✏️ 重命名</Button>
+            <Button variant="outline" size="sm"
+                    onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}>🚚 移动</Button>
+            <Button variant="outline" size="sm"
+                    onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}>📄 复制到</Button>
+            <Button variant="destructive" size="sm"
+                    onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}>🗑️ 删除</Button>
           </div>
         )}
         <div className="flex items-center text-xs flex-wrap gap-0.5">
-          <button className={`px-1 rounded cursor-pointer hover:bg-card ${!path ? "font-bold" : "text-accent"}`} onClick={() => load("")}>🏠 根目录</button>
+          <Button variant="ghost" size="sm" className={`px-1 ${!path ? "font-bold" : "text-accent"}`} onClick={() => load("")}>🏠 根目录</Button>
           {crumbs.map((c, i) => (
             <span key={i}>
               <span className="text-muted mx-0.5">/</span>
-              <button className={`px-1 rounded cursor-pointer hover:bg-card ${i === crumbs.length - 1 ? "font-bold" : "text-accent"}`}
-                      onClick={() => load(crumbs.slice(0, i + 1).join("/"))}>{c}</button>
+              <Button variant="ghost" size="sm" className={`px-1 ${i === crumbs.length - 1 ? "font-bold" : "text-accent"}`}
+                      onClick={() => load(crumbs.slice(0, i + 1).join("/"))}>{c}</Button>
             </span>
           ))}
         </div>
@@ -240,18 +243,18 @@ export default function FilePage() {
             </div>
             {action.type !== "delete" ? (
               <div className="flex gap-2">
-                <input autoFocus value={actionValue}
+                <Input autoFocus value={actionValue}
                        onChange={(e) => setActionValue(e.target.value)}
                        onKeyDown={(e) => { if (e.key === "Enter") execAction(); if (e.key === "Escape") { setAction(null); setActionValue(""); } }}
                        placeholder={action.type === "rename" ? "新名称" : "目标目录（如 资料/合同）"}
-                       className="flex-1 border border-border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-soft" />
-                <button className="bg-accent text-white px-3 py-1.5 rounded-lg cursor-pointer" onClick={execAction}>确定</button>
-                <button className="border border-border px-3 py-1.5 rounded-lg cursor-pointer" onClick={() => { setAction(null); setActionValue(""); }}>取消</button>
+                       className="flex-1" />
+                <Button variant="default" size="sm" onClick={execAction}>确定</Button>
+                <Button variant="ghost" size="sm" onClick={() => { setAction(null); setActionValue(""); }}>取消</Button>
               </div>
             ) : (
               <div className="flex gap-2">
-                <button className="bg-danger text-white px-3 py-1.5 rounded-lg cursor-pointer" onClick={execAction}>确认删除</button>
-                <button className="border border-border px-3 py-1.5 rounded-lg cursor-pointer" onClick={() => { setAction(null); setActionValue(""); }}>取消</button>
+                <Button variant="destructive" size="sm" onClick={execAction}>确认删除</Button>
+                <Button variant="ghost" size="sm" onClick={() => { setAction(null); setActionValue(""); }}>取消</Button>
               </div>
             )}
           </div>
@@ -264,8 +267,8 @@ export default function FilePage() {
           <div className="flex justify-between items-center px-3 py-2.5 border-b border-border">
             <b className="text-sm">♻️ 回收站</b>
             <span className="flex gap-1.5">
-              <button className="bg-danger text-white text-xs px-2.5 py-1.5 rounded-lg cursor-pointer" onClick={doEmptyTrash}>清空</button>
-              <button className="border border-border text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={openTrash}>✕</button>
+              <Button variant="destructive" size="sm" onClick={doEmptyTrash}>清空</Button>
+              <Button variant="ghost" size="sm" onClick={openTrash} aria-label="关闭回收站">✕</Button>
             </span>
           </div>
           <div className="flex-1 overflow-auto p-2">
@@ -279,7 +282,7 @@ export default function FilePage() {
                 <span>{t.is_dir ? "📂" : "📄"}</span>
                 <span className="flex-1 truncate text-xs" title={t.path}>{t.path}</span>
                 <span className="text-muted text-xs">{fmtTime(t.deleted_at, { dateOnly: true })}</span>
-                <button className="text-accent text-xs cursor-pointer" onClick={() => doRestore(t)}>恢复</button>
+                <Button variant="link" size="sm" onClick={() => doRestore(t)}>恢复</Button>
               </div>
             ))}
           </div>
@@ -299,13 +302,13 @@ export default function FilePage() {
           <>
             <div className="flex justify-between items-center gap-2 px-3 py-2.5 border-b border-border">
               <b className="text-sm truncate flex-1" title={selected.path}>{selected.path.split("/").pop()}</b>
-              <a className="bg-accent text-white text-xs px-3 py-1.5 rounded-lg" href={fileDownloadUrl(selected.path)} download>⬇ 下载</a>
-              <button className="lg:hidden border border-border text-xs px-2 py-1.5 rounded-lg cursor-pointer" onClick={() => setSelected(null)} aria-label="关闭预览">✕</button>
+              <Button variant="default" size="sm" asChild><a href={fileDownloadUrl(selected.path)} download>⬇ 下载</a></Button>
+              <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setSelected(null)} aria-label="关闭预览">✕</Button>
             </div>
             {selected.info && (
               <div className="px-3 py-1 text-muted text-xs">
                 {fmtSize(selected.info.size)} · {fmtTime(selected.info.modified)}
-                {selected.info.indexed && ` · 已索引(${selected.info.indexed.method}, ${selected.info.indexed.chars}字)`}
+                {selected.info.indexed && <Badge variant="outline" className="ml-2">已索引({selected.info.indexed.method}, {selected.info.indexed.chars}字)</Badge>}
               </div>
             )}
             <div className="flex-1 overflow-auto">

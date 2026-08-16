@@ -1,0 +1,58 @@
+# 前端设计规范（现行）
+
+> 现行 UI/UX 规范，所有前端改动必须遵守。主题基座：shadcn/ui（radix 底座）+ Tailwind 4。
+> 设计 token 唯一来源：`frontend/src/app/globals.css` `:root`。本文件随实现更新（铁律 §0）。
+
+## 1. 视觉基座
+
+- 灰白 light 主题：品牌 token（`--bg/--panel/--card/--border/--text/--muted-text/--accent-brand/--accent-soft/danger/success/warn + soft`）唯一主题源；
+  shadcn 语义变量（`--primary/--accent/--muted/--ring/...`）全部映射到品牌 token，**禁止在组件里写死颜色/圆角/阴影值**。
+- 主色 `--accent-brand #4f6ef7`（primary）；圆角卡片 `rounded-xl`、控件 `rounded-lg`；1px `--border` 描边。
+- 仅 light 主题（`.dark` 保留未启用，不要依赖 dark 样式）。
+
+## 2. 控件清单（唯一实现，禁止自造复刻）
+
+| 控件 | 组件 | 用法 |
+|------|------|------|
+| 按钮 | `ui/button` | 主操作 default；次要 outline；轻量/图标 ghost；危险操作（删除/清空/登出）destructive；文字链接 link。大小 default/sm |
+| 输入框 | `ui/input` | 全站唯一输入实现；需要内嵌图标/按钮用 `ui/input-group` |
+| 下拉 | `ui/select` | 多选一场景；**单值场景禁用**（见反模式 1） |
+| 组合框 | `ui/combobox` | 可过滤选择 + 自由文本并存场景（模型名）。Base UI 底座：Root 受控 `value/onValueChange`，`items=[{value,label}]` 或 ComboboxCollection/Item，`ComboboxInput/Content/List/Empty/Trigger/Clear` |
+| 卡片 | `ui/card` | `Card/CardHeader/CardTitle/CardDescription/CardContent/CardFooter`，bg-panel |
+| 状态标签 | `ui/badge` | 任务状态/设备/索引等；variant default/secondary/destructive/outline |
+| 开关 | `ui/switch` | 布尔设置（PhotoSync 等） |
+| 骨架屏 | `ui/skeleton` | 加载态 |
+| 就地反馈 | `ui/alert` | 卡片内成功/失败细条：成功 `className="bg-success-soft text-success border-success/30"`、失败 `bg-danger-soft text-danger border-danger/30` |
+| 分隔线 | `ui/separator` | 区块分隔 |
+
+## 3. 排版与节奏
+
+- 卡片：`bg-panel border rounded-xl p-4`（Card 组件），卡片间距 `mb-4`；页容器 `max-w-3xl mx-auto`。
+- 表单：label `text-xs text-muted` + 控件 `text-sm`，字段纵向 `gap-2`，区块内 `mb-3`。
+- 标题：卡片 `CardTitle text-sm font-bold`；页面 h2 `text-lg font-bold`。
+
+## 4. 反馈与状态语义
+
+- 轻量信息：就地小字（字段旁/卡片底部）；跨页事件才走全局 ToastStack（事件总线 `EV.toast` 不变）。
+- 状态色语义：danger=失败/破坏性操作；success=成功；warn=警示；muted=次要文本。**禁止错位**（红底选中、蓝字错误等）。
+- 操作后必须有反馈：保存/获取/删除/恢复都要就地提示或 toast。
+
+## 5. 移动端（沿用 AGENTS.md 坑位 + 新增）
+
+- <640：表单单列、多列选择卡竖排；触控目标 ≥40px（globals 已全局 min-h-44）；320px 无横向滚动。
+- FilePage 预览/回收站移动端全屏覆盖层 `fixed inset-0 z-40 lg:static` 保持不变。
+
+## 6. 不应该的样子（反模式，禁止）
+
+1. **同一值两个控件**（select+input 并列、chips+input 等价物）——一个值只允许一个控件；选择+手输并存用 Combobox。
+2. **只有一个选项的下拉框**——单值改为静态文案。
+3. **手写 className 复刻 ui/ 组件**——新控件一律走 `components/ui/`。
+4. **提示文案错位**——解释 A 字段的文字必须贴在 A 字段下。
+5. **全宽横幅刷屏**——轻量信息用就地小字。
+6. **固定多列小屏挤压**、无空态文案的列表、无加载/禁用态的操作区。
+
+## 7. 迁移原则
+
+- 只换表现层（className/组件），**不改任何逻辑**：SSE 解析/80ms 节流/事件总线/状态机/缓存键一律不动。
+- 行为等价：控件触发、文案、状态流转与改造前一致；视觉对齐本规范。
+- 每页改完 `npm run lint && npm test && npm run build` 全绿；完成后主代理跑浏览器 QA + vision 复查。

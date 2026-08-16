@@ -3,6 +3,9 @@ import { useState } from "react";
 import { configureLLM } from "@/lib/api/config";
 import { useAppStore } from "@/lib/store";
 import { PROTOCOLS, protocolOf } from "@/lib/llm-options";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 
 export default function Onboarding() {
   const setConfigured = useAppStore((s) => s.setConfigured);
@@ -32,9 +35,9 @@ export default function Onboarding() {
 
   const field = (label: string, value: string, onChange: (v: string) => void, placeholder: string, type = "text") => (
     <label className="block mb-4">
-      <span className="block text-xs text-muted mb-1.5 font-semibold">{label}</span>
-      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
-             className="w-full bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none text-sm focus:border-accent" />
+      <span className="block text-xs text-muted mb-1.5">{label}</span>
+      <Input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+             className="w-full text-sm" />
     </label>
   );
 
@@ -49,8 +52,8 @@ export default function Onboarding() {
 
         <div className="grid gap-2 mb-4">
           {PROTOCOLS.map((p) => (
-            <button key={p.type} onClick={() => setType(p.type)}
-                    className={`text-left bg-card border rounded-xl px-3.5 py-3 cursor-pointer ${type === p.type ? "border-accent bg-accent-soft" : "border-border"}`}>
+            <button key={p.type} type="button" onClick={() => setType(p.type)}
+                    className={`text-left bg-card border rounded-xl px-3.5 py-3 cursor-pointer transition-colors ${type === p.type ? "border-accent bg-accent-soft" : "border-border hover:bg-muted"}`}>
               <div className="font-semibold text-sm">{p.label}</div>
               <small className="text-muted text-xs">{p.desc}</small>
             </button>
@@ -62,14 +65,14 @@ export default function Onboarding() {
         {field("API Key", apiKey, setApiKey, "sk-...", "password")}
 
         {msg && (
-          <div className={`px-3.5 py-2.5 rounded-lg mb-3.5 text-sm ${msg.ok ? "bg-success-soft text-success" : "bg-danger-soft text-danger"}`}>{msg.text}</div>
+          <Alert variant={msg.ok ? "default" : "destructive"}
+                 className={`mb-3.5 text-sm ${msg.ok ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{msg.text}</Alert>
         )}
 
         <div className="flex justify-end">
-          <button className="bg-accent text-white px-5 py-2.5 rounded-lg font-semibold cursor-pointer disabled:opacity-60"
-                  onClick={submit} disabled={busy || !baseUrl || !model || !apiKey}>
+          <Button onClick={submit} disabled={busy || !baseUrl || !model || !apiKey}>
             {busy ? "测试连接中…" : "连接并启动"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

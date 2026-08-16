@@ -1,6 +1,7 @@
 # frontend — Agent Drive 前端（Next.js 16）
 
-> Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + zustand + Capacitor 7
+> Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + shadcn/ui + zustand + Capacitor 7
+> UI 规范见 docs/frontend-design.md；新控件一律 components/ui/，禁止内联自造。
 > 静态导出 `out/`，由 backend（FastAPI）单服务托管；同时打包进安卓 App（Capacitor 原生壳）。
 
 ## 开发
@@ -21,6 +22,7 @@ npx cap sync android           # 拷贝 web 资源进安卓工程（frontend/and
 src/
 ├── app/                # layout（主题/安全区）+ page（认证门控/三 tab/下拉刷新）
 ├── components/
+│   ├── ui/             # shadcn/ui 组件库（button/input/select/combobox/card/badge/switch/skeleton/alert/separator）
 │   ├── chat/           # 对话面板 + 工具轨迹/计划/上下文条
 │   ├── files/          # 文件页/侧栏面板
 │   ├── sessions/       # 会话列表
