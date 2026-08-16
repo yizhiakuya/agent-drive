@@ -127,7 +127,7 @@ cd frontend/android && gradlew.bat assembleRelease
 
 ## 6. 修改检查单
 
-- [ ] 后端改动 → `ruff check app/` + 对应 unit/integration 测试；前端改动 → `npm run build` + `npm test`；原生改动 → APK 构建验证
+- [ ] 后端改动 → `ruff check app/` + 对应 unit/integration 测试；前端改动 → `npm run build` + `npm test`；**前端交互/设置页改动 → 必跑浏览器 QA**（`scripts/qa-settings/`：mock 模型服务 + 临时后端 8100 + Playwright 走通关键流程，截图经 vision 复查 CSS）；原生改动 → APK 构建验证
 - [ ] 全量门禁：backend unit + integration + vitest 全绿再提交
 - [ ] 版本号 +1 / APK 构建（仅测试 App 业务或发版时；日常功能迭代跳过打包）
 - [ ] 同步文档 + 本 skill：README / docs/* 相应小节 / AGENTS.md（铁律 §0，同一次提交内完成）

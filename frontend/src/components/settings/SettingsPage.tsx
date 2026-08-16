@@ -115,6 +115,7 @@ export default function SettingsPage() {
       const r = await listModels({ type: llmForm.type, base_url: llmForm.base_url, api_key: llmForm.api_key });
       if (r.ok && r.models && r.models.length > 0) {
         setModelList(r.models);
+        setMsg({ kind: "ok", text: `✅ 已获取 ${r.models.length} 个可用模型` });
       } else {
         setModelList(null);
         setMsg({ kind: "error", text: r.error || "获取模型列表失败" });
@@ -189,22 +190,28 @@ export default function SettingsPage() {
             ))}
           </datalist>
         </label>
-        <label className="flex flex-col gap-1 mb-2.5 text-xs">
+        <label className="flex flex-col gap-1.5 mb-2.5 text-xs">
           <span className="text-muted">模型</span>
+          {modelList && modelList.length > 0 && (
+            <select
+              value={modelList.includes(llmForm.model) ? llmForm.model : ""}
+              onChange={(e) => e.target.value && setLlmForm((f) => ({ ...f, model: e.target.value }))}
+              className="px-2.5 py-2 border border-border rounded-lg text-sm bg-panel focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent cursor-pointer"
+            >
+              <option value="">— 从可用模型选择（共 {modelList.length} 个）—</option>
+              {modelList.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          )}
           <input
             type="text"
             value={llmForm.model}
             placeholder={protocolOf(llmForm.type)?.placeholderModel || "模型名"}
-            list="model-options"
             onChange={(e) => setLlmForm((f) => ({ ...f, model: e.target.value }))}
             className="px-2.5 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent"
           />
-          <datalist id="model-options">
-            {(modelList || []).map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-0.5">
             <button
               className="border border-border text-muted px-2.5 py-1 rounded-md text-xs cursor-pointer disabled:opacity-60"
               onClick={fetchModels}
