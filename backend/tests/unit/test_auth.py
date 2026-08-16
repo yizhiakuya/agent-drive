@@ -5,7 +5,9 @@ import os
 import stat
 
 import pytest
+from starlette.requests import Request
 
+from app.api.v1.auth import _client_ip
 from app.auth.store import AuthStore, AuthStoreLoadError
 
 
@@ -28,6 +30,38 @@ def test_corrupt_auth_file_fails_closed_and_is_preserved(tmp_path, contents):
         AuthStore(path)
 
     assert path.read_bytes() == contents
+
+
+def test_corrupt_auth_collection_fails_closed(tmp_path):
+    path = tmp_path / "auth.json"
+    path.write_text('{"secret":"abc","revoked_sessions":[]}', encoding="utf-8")
+    with pytest.raises(AuthStoreLoadError, match="revoked_sessions"):
+        AuthStore(path)
+
+    path.write_text('{"secret":"abc","device_tokens":{"bad":[]}}', encoding="utf-8")
+    with pytest.raises(AuthStoreLoadError, match="device_tokens"):
+        AuthStore(path)
+
+    path.write_text(
+        '{"secret":"abc","device_tokens":{"bad":{"last_used":"not-a-time"}}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(AuthStoreLoadError, match="设备或配对"):
+        AuthStore(path)
+
+    path.write_text(
+        '{"secret":"abc","device_tokens":{"bad":{"created_at":NaN}}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(AuthStoreLoadError, match="设备或配对"):
+        AuthStore(path)
+
+    path.write_text(
+        '{"secret":"abc","revoked_sessions":{"hash":"9999999999"}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(AuthStoreLoadError, match="revoked_sessions"):
+        AuthStore(path)
 
 
 def test_setup_and_verify(tmp_path):
@@ -62,6 +96,31 @@ def test_session_token_roundtrip_and_tamper(tmp_path):
     forged = version + "." + body[:-2] + "AA" + "." + sig
     assert auth.verify_session(forged) is False
     assert auth.verify_session("not-a-token") is False
+    assert auth.verify_session("s1.%%%%.bad") is False
+
+
+def test_session_revocation_persists_until_expiry(tmp_path):
+    path = tmp_path / "auth.json"
+    auth = AuthStore(path)
+    token = auth.issue_session()
+    assert auth.revoke_session(token) is True
+    assert auth.verify_session(token) is False
+    assert AuthStore(path).verify_session(token) is False
+    assert auth.revoke_session("not-a-token") is False
+
+
+def test_multiple_store_instances_reload_before_mutation(tmp_path):
+    path = tmp_path / "auth.json"
+    first = AuthStore(path)
+    second = AuthStore(path)
+    assert first._lock is second._lock  # 无 fcntl 平台也必须共享同路径的进程锁。
+    session = first.issue_session()
+    device = second.issue_device_token("dev-1")
+    assert first.revoke_session(session) is True
+    # second instance must reload the revocation before its next write; neither state is lost.
+    second.revoke_device_token(device)
+    assert AuthStore(path).verify_session(session) is False
+    assert AuthStore(path).verify_device_token(device) is False
 
 
 def test_device_token_roundtrip_and_revoke(tmp_path):
@@ -75,6 +134,23 @@ def test_device_token_roundtrip_and_revoke(tmp_path):
     # 吊销
     assert auth2.revoke_device("dev-1") == 1
     assert auth2.verify_device_token(tok) is False
+
+
+def test_forwarded_ip_only_trusted_from_loopback_proxy():
+    def request(peer: str) -> Request:
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/login",
+            "headers": [(b"x-forwarded-for", b"spoofed, 198.51.100.9")],
+            "client": (peer, 12345),
+            "server": ("test", 80),
+            "scheme": "http",
+            "query_string": b"",
+        })
+
+    assert _client_ip(request("127.0.0.1")) == "198.51.100.9"
+    assert _client_ip(request("203.0.113.7")) == "203.0.113.7"
 
 
 def test_rate_limit(tmp_path):

@@ -1,5 +1,5 @@
 // 文件 API（补全：info/raw 走封装，组件不再绕层）
-import { api, apiPath, authHeaders, getDeviceToken } from "./client";
+import { api, apiPath, authenticatedFetch, ApiError, apiErrorMessage, getDeviceToken } from "./client";
 
 export interface FileItem {
   name: string;
@@ -32,16 +32,14 @@ export const listFiles = (path = "") =>
 export const uploadFile = async (file: File, path = ""): Promise<UploadResponse> => {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(apiPath(`/files/upload?path=${encodeURIComponent(path)}`), {
+  const res = await authenticatedFetch(`/files/upload?path=${encodeURIComponent(path)}`, {
     method: "POST",
     body: form,
-    credentials: "include",
-    headers: authHeaders(),
   });
-  if (res.status === 401 && typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("agent-drive:unauthorized"));
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, apiErrorMessage(body, res.statusText || `HTTP ${res.status}`));
   }
-  if (!res.ok) throw new Error("上传失败");
   return res.json() as Promise<UploadResponse>;
 };
 
@@ -56,9 +54,9 @@ export const copyFile = (src: string, dst: string, overwrite = false) =>
   api(`/files/copy?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}&overwrite=${overwrite}`, { method: "POST" });
 export const deleteToTrash = (path: string) =>
   api(`/files/delete?path=${encodeURIComponent(path)}`, { method: "POST" });
-export const listTrash = () => api<{ items: { path: string; deleted_at: number; size: number; is_dir: boolean }[] }>("/files/trash");
-export const restoreFromTrash = (path: string) =>
-  api(`/files/trash/restore?path=${encodeURIComponent(path)}`, { method: "POST" });
+export const listTrash = () => api<{ items: { path: string; trash_id: string; deleted_at: number; size: number; is_dir: boolean }[] }>("/files/trash");
+export const restoreFromTrash = (trashId: string) =>
+  api(`/files/trash/restore?trash_id=${encodeURIComponent(trashId)}`, { method: "POST" });
 export const emptyTrash = () => api("/files/trash/empty", { method: "POST" });
 
 export const getFileInfo = (path: string) =>

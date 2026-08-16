@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Capacitor } from "@capacitor/core";
-import { V1, authHeaders, ensureBase, setDeviceToken } from "@/lib/api/client";
+import { apiErrorMessage, authenticatedFetch, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
 
 /** 登录/设密页：web 与原生 App 共用（App 登录成功后额外颁发设备令牌存原生）。 */
@@ -19,32 +19,36 @@ export default function LoginCard({ mode, onDone }: { mode: "setup" | "login"; o
     setBusy(true);
     setMsg(null);
     try {
-      await ensureBase();
       const endpoint = mode === "setup" ? "/auth/setup" : "/auth/login";
-      const res = await fetch(`${V1}${endpoint}`, {
+      const res = await authenticatedFetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: pw }),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg((body as { detail?: string }).detail || `HTTP ${res.status}`); return; }
+      if (!res.ok) { setMsg(apiErrorMessage(body, `HTTP ${res.status}`)); return; }
 
       if (native) {
         // 跨域拿不到 Cookie：用响应体的 session 令牌换设备令牌（后台同步鉴权）
-        const session = (body as { session?: string }).session;
+        const session = (body as { session?: unknown }).session;
+        if (typeof session !== "string" || !session) {
+          setMsg("服务器未返回可用会话令牌");
+          return;
+        }
         const { deviceId } = await ServerConfig.getDeviceId();
-        const r2 = await fetch(`${V1}/auth/device-token`, {
+        const r2 = await authenticatedFetch("/auth/device-token", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
           body: JSON.stringify({ device_id: deviceId, name: "安卓设备" }),
         });
         const b2 = await r2.json().catch(() => ({}));
-        if (r2.ok && (b2 as { token?: string }).token) {
-          const token = (b2 as { token: string }).token;
-          await ServerConfig.storeDeviceToken({ token });
-          setDeviceToken(token);
+        const token = (b2 as { token?: unknown }).token;
+        if (!r2.ok || typeof token !== "string" || !token) {
+          setMsg(apiErrorMessage(b2, `设备授权失败 HTTP ${r2.status}`));
+          return;
         }
+        await ServerConfig.storeDeviceToken({ token });
+        setDeviceToken(token);
       }
       onDone();
     } catch (e) {

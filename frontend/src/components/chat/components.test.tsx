@@ -4,6 +4,7 @@ import { fmtSize, fmtTokens, fmtToolArgs } from "@/lib/format";
 import { ToolStep } from "./ToolStep";
 import { ContextBar } from "./ContextBar";
 import { PlanCard } from "./PlanCard";
+import { chatTextDelta } from "./ChatPanel";
 
 describe("fmt 工具函数", () => {
   it("token 格式化", () => {
@@ -16,6 +17,13 @@ describe("fmt 工具函数", () => {
     expect(fmtSize(500)).toBe("500 B");
     expect(fmtSize(2048)).toBe("2.0 KB");
     expect(fmtSize(5 * 1024 * 1024)).toBe("5.2 MB");
+  });
+});
+
+describe("ChatPanel SSE 文本", () => {
+  it("从 text 事件对象读取增量而非拼接 object", () => {
+    expect(chatTextDelta({ text: "你好" })).toBe("你好");
+    expect(chatTextDelta({ text: { nested: true } })).toBe("");
   });
 });
 

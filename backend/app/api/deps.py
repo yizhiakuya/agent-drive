@@ -11,13 +11,14 @@ def get_container(request: Request) -> Container:
     return request.app.state.container
 
 
-def get_owner(request: Request) -> None:
-    """统一鉴权：会话 Cookie / Bearer 设备令牌 / 媒体查询参数 token，任一有效即放行。
+_QUERY_TOKEN_PATHS = frozenset({"/api/v1/files/raw", "/api/v1/files/download"})
 
-    三种通道的原因：
-    - Cookie：web/PWA 同源请求（含 SSE、上传、分享）
-    - Bearer：App 原生后台（相册同步 Worker、心跳）
-    - ?token=：媒体元素（img/video/audio）无法带 Cookie/Header 的兼容通道
+
+def get_owner(request: Request) -> None:
+    """统一鉴权：Cookie/Bearer 全站；设备查询令牌只限媒体读取端点。
+
+    媒体元素无法附加 Authorization Header，因此原生 App 的 raw/download GET
+    保留 ``?token=`` 兼容通道；其他路径即便携带合法设备令牌也不得借 URL 放行。
     """
     auth = request.app.state.container.auth
     token = request.cookies.get(SESSION_COOKIE)
@@ -29,6 +30,11 @@ def get_owner(request: Request) -> None:
         if auth.verify_session(bearer) or auth.verify_device_token(bearer):
             return
     query_token = request.query_params.get("token")
-    if query_token and auth.verify_device_token(query_token):
+    if (
+        request.method == "GET"
+        and request.url.path in _QUERY_TOKEN_PATHS
+        and query_token
+        and auth.verify_device_token(query_token)
+    ):
         return
     raise HTTPException(401, "未登录")

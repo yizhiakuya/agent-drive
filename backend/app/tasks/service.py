@@ -189,7 +189,10 @@ class TaskService:
     @staticmethod
     def _internal(path: str) -> bool:
         parts = Path(path).parts
-        return bool(parts and parts[0] in {".index", ".trash"})
+        return bool(parts and (
+            parts[0] in {".index", ".trash", ".storage.lock"}
+            or parts[0].startswith((".upload.", ".copy.", ".copy-old."))
+        ))
 
     def overview(self) -> dict[str, Any]:
         workers = self.store.active_workers()

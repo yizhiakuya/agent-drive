@@ -13,7 +13,7 @@ import { getStatus, getConfig } from "@/lib/api/config";
 import LoginCard from "@/components/auth/LoginCard";
 import RescanCard from "@/components/auth/RescanCard";
 import ServerNotReadyCard from "@/components/auth/ServerNotReadyCard";
-import { V1, ApiError, authHeaders, ensureBase, getDeviceToken } from "@/lib/api/client";
+import { ApiError, authenticatedFetch, ensureBase, getDeviceToken } from "@/lib/api/client";
 import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
@@ -57,8 +57,8 @@ export default function Home() {
     // 会话过期（任意 API 返回 401）→ web 回登录页；原生 App 回重扫码页（令牌被吊销）
     const onUnauthorized = () =>
       setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
-    window.addEventListener("agent-drive:unauthorized", onUnauthorized);
-    return () => window.removeEventListener("agent-drive:unauthorized", onUnauthorized);
+    window.addEventListener(EV.unauthorized, onUnauthorized);
+    return () => window.removeEventListener(EV.unauthorized, onUnauthorized);
   }, [setAuthMode]);
 
   useEffect(() => {
@@ -108,7 +108,7 @@ export default function Home() {
         }
       }
       // 认证门：web=设密/登录页；App=扫码授权（无令牌即重扫码）
-      const ares = await fetch(`${V1}/auth/status`, { credentials: "include", headers: authHeaders() });
+      const ares = await authenticatedFetch("/auth/status");
       if (!ares.ok) {
         setAuthMode(native ? "rescan" : "login");
         return;
@@ -146,7 +146,12 @@ export default function Home() {
         }
         setConfigured(false); // 网络/服务错误：进入 onboarding 便于重试
       }
-    } catch {
+    } catch (error) {
+      if (Capacitor.isNativePlatform()) {
+        window.dispatchEvent(new CustomEvent(EV.toast, {
+          detail: { kind: "error", text: `安全配置读取失败：${String(error)}` },
+        }));
+      }
       setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
     } finally {
       setLoading(false);

@@ -1,6 +1,8 @@
 """v1 认证路由：设密 / 登录 / 登出 / 设备令牌 / 状态。"""
 from __future__ import annotations
 
+import ipaddress
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
@@ -37,11 +39,23 @@ def _set_session_cookie(response: Response, token: str, secure: bool) -> None:
 
 
 def _client_ip(request: Request) -> str:
-    # nginx 反代：优先取 X-Forwarded-For 首段
+    """只信任从 loopback 反代进来的 X-Forwarded-For，直连请求不能伪造限速 key。"""
+    peer = request.client.host if request.client else "unknown"
+    trusted_proxy = False
+    try:
+        trusted_proxy = ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        pass
     fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    if trusted_proxy and fwd:
+        # nginx 的 $proxy_add_x_forwarded_for 会保留客户端自带值并把真实对端追加在末尾；
+        # 因此只取最右侧地址，不能取可由公网请求伪造的第一个值。
+        candidate = fwd.rsplit(",", 1)[-1].strip()
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            pass
+    return peer
 
 
 @router.get("/status")
@@ -82,8 +96,18 @@ async def login(payload: PasswordBody, request: Request, response: Response, con
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response, container=Depends(get_container)):
+    """退出当前凭据：删除 Cookie，并在服务端吊销当前 session 或设备令牌。"""
+    revoked = False
+    session = request.cookies.get(SESSION_COOKIE)
+    if session:
+        revoked = container.auth.revoke_session(session) or revoked
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        bearer = header[7:].strip()
+        revoked = container.auth.revoke_session(bearer) or container.auth.revoke_device_token(bearer) or revoked
     response.delete_cookie(SESSION_COOKIE, path="/")
+    container.audit.record("auth.logout", "revoked=" + str(revoked).lower())
     return {"ok": True}
 
 

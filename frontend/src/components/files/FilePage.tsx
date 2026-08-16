@@ -15,7 +15,7 @@ export default function FilePage() {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
-  const [trashItems, setTrashItems] = useState<{ path: string; deleted_at: number; size: number; is_dir: boolean }[]>([]);
+  const [trashItems, setTrashItems] = useState<{ path: string; trash_id: string; deleted_at: number; size: number; is_dir: boolean }[]>([]);
   const [action, setAction] = useState<{ type: string; item: { name: string; path: string; is_dir: boolean } } | null>(null);
   const [actionValue, setActionValue] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -78,11 +78,11 @@ export default function FilePage() {
     }
   }
 
-  async function doRestore(p: string) {
+  async function doRestore(item: { path: string; trash_id: string }) {
     try {
-      await restoreFromTrash(p);
-      emitToast({ kind: "ok", text: `已恢复 ${p}` });
-      setTrashItems((t) => t.filter((x) => x.path !== p));
+      await restoreFromTrash(item.trash_id);
+      emitToast({ kind: "ok", text: `已恢复 ${item.path}` });
+      setTrashItems((t) => t.filter((x) => x.trash_id !== item.trash_id));
       load(path);
       emitFilesChanged();
     } catch (e) {
@@ -276,11 +276,11 @@ export default function FilePage() {
               </div>
             )}
             {trashItems.map((t) => (
-              <div key={t.path} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm hover:bg-card">
+              <div key={t.trash_id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm hover:bg-card">
                 <span>{t.is_dir ? "📂" : "📄"}</span>
                 <span className="flex-1 truncate text-xs" title={t.path}>{t.path}</span>
                 <span className="text-muted text-xs">{new Date(t.deleted_at * 1000).toLocaleDateString()}</span>
-                <button className="text-accent text-xs cursor-pointer" onClick={() => doRestore(t.path)}>恢复</button>
+                <button className="text-accent text-xs cursor-pointer" onClick={() => doRestore(t)}>恢复</button>
               </div>
             ))}
           </div>

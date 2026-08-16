@@ -5,10 +5,10 @@ import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
 import { Capacitor } from "@capacitor/core";
-import { V1, authHeaders, setDeviceToken } from "@/lib/api/client";
+import { apiErrorMessage, authenticatedFetch, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
-import { EV, emitTasksChanged } from "@/lib/events";
+import { EV, emitTasksChanged, emitToast } from "@/lib/events";
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -20,14 +20,41 @@ export default function SettingsPage() {
   const isNative = Capacitor.isNativePlatform();
 
   async function logout() {
+    const native = Capacitor.isNativePlatform();
+    let serverLogoutWarning: string | null = null;
     try {
-      await fetch(`${V1}/auth/logout`, { method: "POST", credentials: "include", headers: authHeaders() });
-      if (Capacitor.isNativePlatform()) {
-        await ServerConfig.clearDeviceToken(); // 原生：同时吊销本地设备令牌
+      const res = await authenticatedFetch("/auth/logout", { method: "POST" });
+      if (!res.ok && !(native && (res.status === 401 || res.status === 403))) {
+        const body = await res.json().catch(() => ({}));
+        const detail = apiErrorMessage(body, `HTTP ${res.status}`);
+        if (!native) throw new Error(detail);
+        serverLogoutWarning = `无法确认服务端是否已吊销旧令牌（${detail}）`;
       }
-      setDeviceToken(null);
-    } catch { /* 忽略 */ }
-    setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
+    } catch (error) {
+      if (!native) {
+        setMsg({ kind: "error", text: `服务端登出失败：${String(error)}` });
+        return;
+      }
+      // 原生端离线时仍销毁本地凭据；服务端状态未知，不能宣称吊销成功或失败。
+      serverLogoutWarning = `网络异常，无法确认服务端是否已吊销旧令牌（${String(error)}）`;
+    }
+    if (native) {
+      try {
+        await ServerConfig.clearDeviceToken();
+      } catch (error) {
+        setDeviceToken(null); // 当前进程立即失败关闭，但保留页面显示持久清理失败。
+        setMsg({ kind: "error", text: `安全配置存储清理失败，请重试或清除 App 数据：${String(error)}` });
+        return;
+      }
+    }
+    setDeviceToken(null);
+    setAuthMode(native ? "rescan" : "login");
+    if (serverLogoutWarning) {
+      emitToast({
+        kind: "error",
+        text: `本机凭据已清除；${serverLogoutWarning}。联网后可从设备列表确认并移除旧设备。`,
+      });
+    }
   }
 
   async function load() {

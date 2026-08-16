@@ -213,9 +213,9 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None, t
             "查看回收站（已删除文件，30 天内可恢复）",
             {},
             doc=(
-                "用途：查看回收站中的文件（path 为原路径、deleted_at 删除时间）。\n"
+                "用途：查看回收站中的文件（path 为原路径、trash_id 为本次删除的唯一标识）。\n"
                 "参数：无。\n"
-                "输出：[{path, trash_path, deleted_at, size, is_dir}] 按删除时间倒序。"
+                "输出：[{path, trash_id, deleted_at, size, is_dir}] 按删除时间倒序。"
             ),
         ),
         list_trash,
@@ -223,17 +223,17 @@ def register_file_tools(reg: ToolRegistry, storage: LocalStorage, ingest=None, t
     )
 
     async def restore_file(path: str) -> dict[str, Any]:
-        """从回收站恢复（path 为原路径，list_trash 可查）"""
+        """从回收站恢复（path 传 list_trash 返回的 trash_id，兼容旧原路径）"""
         return storage.restore_from_trash(path)
 
     reg.register(
         ToolSpec(
             "restore_file",
             "从回收站恢复文件到原位置",
-            {"type": "object", "properties": {"path": {"type": "string", "description": "原路径（用 list_trash 查询）"}}, "required": ["path"]},
+            {"type": "object", "properties": {"path": {"type": "string", "description": "list_trash 返回的 trash_id（兼容旧原路径）"}}, "required": ["path"]},
             doc=(
                 "用途：把回收站中的文件恢复到原位置。\n"
-                "参数：path（必填）原路径。\n"
+                "参数：path（必填）传 list_trash 的 trash_id；同一路径多次删除时必须用它区分版本。\n"
                 "输出：{restored: path}。\n"
                 "错误：原位置已有文件/回收站不存在返回 {ok:false, error}。"
             ),

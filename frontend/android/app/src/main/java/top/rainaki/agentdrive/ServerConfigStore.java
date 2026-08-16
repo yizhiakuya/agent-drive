@@ -4,10 +4,10 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
 
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import androidx.security.crypto.EncryptedSharedPreferences;
@@ -22,7 +22,15 @@ import androidx.security.crypto.MasterKey;
 public final class ServerConfigStore {
 
     private static final String TAG = "ServerConfigStore";
-    private static final String PREFS = "agent_drive";
+    private static final String LEGACY_PREFS = "agent_drive";
+    private static final String SECURE_PREFS = "agent_drive_secure";
+    private static final String KEY_KEYSET = "__androidx_security_crypto_encrypted_prefs_key_keyset__";
+    private static final String VALUE_KEYSET = "__androidx_security_crypto_encrypted_prefs_value_keyset__";
+    private static final String[] CONFIG_KEYS = {
+            "server", "device_id", "device_token", "sync_enabled", "sync_wifi_only",
+            "sync_interval_bits", "sync_folder", "sync_last_at", "sync_pending_second",
+            "sync_pending_max_id", "sync_last_count", "sync_last_error"
+    };
     private static volatile SharedPreferences cached;
 
     private ServerConfigStore() {
@@ -39,118 +47,214 @@ public final class ServerConfigStore {
                 return p;
             }
             try {
-                MasterKey masterKey = new MasterKey.Builder(ctx)
+                Context app = ctx.getApplicationContext();
+                MasterKey masterKey = new MasterKey.Builder(app)
                         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                         .build();
-                p = EncryptedSharedPreferences.create(
-                        ctx, PREFS, masterKey,
-                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
+                p = createEncrypted(app, SECURE_PREFS, masterKey);
+                migrateLegacy(app, p, masterKey);
             } catch (Exception e) {
-                // Keystore 不可用（异常固件/极老设备）：降级明文保证功能可用
-                Log.w(TAG, "加密存储不可用，降级明文 SharedPreferences", e);
-                p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                // 绝不能把 token/config 静默写入明文；调用方必须明确收到失败。
+                RuntimeException failure = new IllegalStateException("安全配置存储初始化失败", e);
+                Log.e(TAG, failure.getMessage(), e);
+                throw failure;
             }
-            migrateLegacy(ctx, p);
             cached = p;
             return p;
         }
     }
 
+    private static SharedPreferences createEncrypted(Context ctx, String name, MasterKey masterKey)
+            throws Exception {
+        return EncryptedSharedPreferences.create(
+                ctx, name, masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
+    }
+
     /**
-     * 旧版明文 prefs → 加密 prefs 一次性迁移（幂等）。
+     * 将旧 ``agent_drive`` 文件中的明文或 1.0.27 同文件密文迁到独立加密文件。
      *
-     * EncryptedSharedPreferences 与旧版明文 prefs 使用同一个底层文件时，底层 map
-     * 会同时包含 AndroidX 的 keyset 条目和旧明文条目。只迁移应用自己的键，并在
-     * 加密提交成功后逐项清理旧键，不能对底层文件调用 clear()，否则会把新 keyset 一起删掉。
+     * 新文件与 legacy 文件彻底分离，避免 AndroidX keyset/密文键和旧明文业务键混存。
+     * legacy 同键密文是 1.0.27 持续写入的现行值，优先于更老明文/清理残留；独立新
+     * 密文若与 legacy 现行值冲突则保留双方并失败关闭。写入成功后才逐键清理旧业务
+     * 数据，keyset 永远不 clear；清理失败时下次启动保留新值并幂等重试。
      */
-    private static void migrateLegacy(Context ctx, SharedPreferences encrypted) {
-        if (!(encrypted instanceof EncryptedSharedPreferences)) {
-            // 降级到明文 SharedPreferences 时，旧值已经可直接使用，不做迁移或清理。
-            return;
+    private static void migrateLegacy(Context ctx, SharedPreferences secure, MasterKey masterKey)
+            throws Exception {
+        if (!(secure instanceof EncryptedSharedPreferences)) {
+            throw new IllegalStateException("安全配置存储不是加密实现");
         }
-        SharedPreferences legacy = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        Map<String, ?> all = legacy.getAll();
-        if (all.isEmpty()) {
-            return;
+        SharedPreferences legacyRaw = ctx.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE);
+        Map<String, ?> rawValues = legacyRaw.getAll();
+        boolean hasKeyKeyset = rawValues.containsKey(KEY_KEYSET);
+        boolean hasValueKeyset = rawValues.containsKey(VALUE_KEYSET);
+        if (hasKeyKeyset != hasValueKeyset) {
+            throw new IllegalStateException("旧版加密 keyset 不完整");
+        }
+        SharedPreferences legacyEncrypted = hasKeyKeyset
+                ? createEncrypted(ctx, LEGACY_PREFS, masterKey)
+                : null;
+
+        migrateSources(secure, legacyRaw, legacyEncrypted, rawValues);
+    }
+
+    /** 纯 SharedPreferences 迁移事务，独立于 Keystore，便于 JVM 回归测试。 */
+    static void migrateSources(
+            SharedPreferences secure,
+            SharedPreferences legacyRaw,
+            SharedPreferences legacyEncrypted,
+            Map<String, ?> rawValues) {
+        Map<String, Object> sourceValues = new HashMap<>();
+        Set<String> encryptedKeys = new HashSet<>();
+        Set<String> rawKeys = new HashSet<>();
+        for (String key : CONFIG_KEYS) {
+            boolean hasEncrypted = legacyEncrypted != null && legacyEncrypted.contains(key);
+            boolean hasRaw = rawValues.containsKey(key);
+            Object encryptedValue = hasEncrypted ? readPreferenceValue(legacyEncrypted, key) : null;
+            Object rawValue = hasRaw && !hasEncrypted
+                    ? normalizeRawLegacyValue(key, rawValues.get(key)) : null;
+            if (hasEncrypted) {
+                // 1.0.27 持续写同文件密文；同名明文只可能来自更老版本或清理失败残留。
+                // 因此密文是该 legacy 文件内的现行值，即使它与残留明文不同也应优先。
+                sourceValues.put(key, encryptedValue);
+                encryptedKeys.add(key);
+            } else if (hasRaw) {
+                sourceValues.put(key, rawValue);
+            }
+            if (hasRaw) rawKeys.add(key);
         }
 
-        SharedPreferences.Editor ed = encrypted.edit();
-        List<String> migratedKeys = new ArrayList<>();
-        for (Map.Entry<String, ?> e : all.entrySet()) {
-            String key = e.getKey();
-            if (!isLegacyConfigKey(key)) {
-                // 跳过 AndroidX 内部 keyset 及已经加密的底层键。
+        SharedPreferences.Editor destination = secure.edit();
+        boolean destinationChanged = false;
+        for (Map.Entry<String, Object> entry : sourceValues.entrySet()) {
+            String key = entry.getKey();
+            Object sourceValue = entry.getValue();
+            if (secure.contains(key)) {
+                Object currentValue = readPreferenceValue(secure, key);
+                if (!Objects.equals(currentValue, sourceValue)) {
+                    // 无可靠版本号时不能猜哪个更新；保留两份并失败关闭，避免令牌/检查点丢失。
+                    throw new IllegalStateException("新旧加密配置冲突，拒绝删除任一副本: " + key);
+                }
                 continue;
             }
-            Object v = e.getValue();
-            boolean copied = false;
-            if (v instanceof String) {
-                ed.putString(key, (String) v);
-                copied = true;
-            } else if (v instanceof Boolean) {
-                ed.putBoolean(key, (Boolean) v);
-                copied = true;
-            } else if (v instanceof Integer) {
-                ed.putInt(key, (Integer) v);
-                copied = true;
-            } else if (v instanceof Long) {
-                ed.putLong(key, (Long) v);
-                copied = true;
-            } else if (v instanceof Float) {
-                ed.putFloat(key, (Float) v);
-                copied = true;
-            } else if (v instanceof Set<?>) {
-                Set<String> strings = new HashSet<>();
-                boolean valid = true;
-                for (Object item : (Set<?>) v) {
-                    if (!(item instanceof String)) {
-                        valid = false;
-                        break;
-                    }
-                    strings.add((String) item);
-                }
-                if (valid) {
-                    ed.putStringSet(key, strings);
-                    copied = true;
-                }
-            }
-            if (copied) {
-                migratedKeys.add(key);
-            }
+            putTypedValue(destination, key, sourceValue);
+            destinationChanged = true;
         }
-        if (migratedKeys.isEmpty() || !ed.commit()) {
-            Log.w(TAG, "旧版配置迁移写入失败");
-            return;
+        if (destinationChanged && !destination.commit()) {
+            throw new IllegalStateException("旧版配置迁移到独立加密存储失败");
         }
 
-        // 只删除旧的明文键，保留加密值和 AndroidX keyset。
-        SharedPreferences.Editor cleanup = legacy.edit();
-        for (String key : migratedKeys) {
-            cleanup.remove(key);
+        // 走到这里说明每个旧值都已成功复制，或与新值逐项相等；此时才允许清理旧源。
+        // 明文必须先清：若其 commit 失败，保留的 1.0.27 密文仍可在下次启动证明现行值，
+        // 不会让更老明文残留单独与新存储冲突。
+        if (!rawKeys.isEmpty()) {
+            SharedPreferences.Editor cleanupRaw = legacyRaw.edit();
+            for (String key : rawKeys) cleanupRaw.remove(key);
+            if (!cleanupRaw.commit()) {
+                throw new IllegalStateException("旧版明文配置清理失败");
+            }
         }
-        if (!cleanup.commit()) {
-            Log.w(TAG, "旧版配置明文清理失败");
+        if (legacyEncrypted != null && !encryptedKeys.isEmpty()) {
+            SharedPreferences.Editor cleanupEncrypted = legacyEncrypted.edit();
+            for (String key : encryptedKeys) cleanupEncrypted.remove(key);
+            if (!cleanupEncrypted.commit()) {
+                throw new IllegalStateException("旧版加密配置清理失败");
+            }
         }
     }
 
-    private static boolean isLegacyConfigKey(String key) {
+    private static Object readPreferenceValue(SharedPreferences source, String key) {
         switch (key) {
+            case "sync_last_error":
+                return source.getString(key, null); // null 等价于“当前无同步错误”。
             case "server":
             case "device_id":
             case "device_token":
+            case "sync_folder":
+                String stringValue = source.getString(key, null);
+                if (stringValue == null) {
+                    throw new IllegalStateException("旧版加密字段损坏: " + key);
+                }
+                return stringValue;
             case "sync_enabled":
             case "sync_wifi_only":
+                return source.getBoolean(key, false);
             case "sync_interval_bits":
-            case "sync_folder":
             case "sync_last_at":
             case "sync_pending_second":
             case "sync_pending_max_id":
+                return source.getLong(key, 0L);
             case "sync_last_count":
-            case "sync_last_error":
-                return true;
+                return source.getInt(key, 0);
             default:
-                return false;
+                throw new IllegalArgumentException("未知配置键: " + key);
+        }
+    }
+
+    private static Object normalizeRawLegacyValue(String key, Object value) {
+        switch (key) {
+            case "sync_last_error":
+                if (value == null || value instanceof String) return value;
+                break;
+            case "server":
+            case "device_id":
+            case "device_token":
+            case "sync_folder":
+                if (value instanceof String) return value;
+                break;
+            case "sync_enabled":
+            case "sync_wifi_only":
+                if (value instanceof Boolean) return value;
+                break;
+            case "sync_interval_bits":
+            case "sync_last_at":
+            case "sync_pending_second":
+            case "sync_pending_max_id":
+                if (value instanceof Long) return value;
+                break;
+            case "sync_last_count":
+                if (value instanceof Integer) return value;
+                break;
+            default:
+                throw new IllegalArgumentException("未知配置键: " + key);
+        }
+        throw new IllegalStateException("旧版明文字段类型损坏: " + key);
+    }
+
+    private static void putTypedValue(SharedPreferences.Editor destination, String key, Object value) {
+        switch (key) {
+            case "sync_last_error":
+                if (value == null) destination.remove(key);
+                else destination.putString(key, (String) value);
+                return;
+            case "server":
+            case "device_id":
+            case "device_token":
+            case "sync_folder":
+                destination.putString(key, (String) value);
+                return;
+            case "sync_enabled":
+            case "sync_wifi_only":
+                destination.putBoolean(key, (Boolean) value);
+                return;
+            case "sync_interval_bits":
+            case "sync_last_at":
+            case "sync_pending_second":
+            case "sync_pending_max_id":
+                destination.putLong(key, (Long) value);
+                return;
+            case "sync_last_count":
+                destination.putInt(key, (Integer) value);
+                return;
+            default:
+                throw new IllegalArgumentException("未知配置键: " + key);
+        }
+    }
+
+    private static void commitOrThrow(SharedPreferences.Editor editor) {
+        if (!editor.commit()) {
+            throw new IllegalStateException("安全配置写入失败");
         }
     }
 
@@ -160,7 +264,14 @@ public final class ServerConfigStore {
     }
 
     public static void setServer(Context ctx, String server) {
-        prefs(ctx).edit().putString("server", server).apply();
+        commitOrThrow(prefs(ctx).edit().putString("server", server));
+    }
+
+    /** 扫码成功后原子保存连接地址与设备令牌，避免只写入一半。 */
+    public static void setConnection(Context ctx, String server, String token) {
+        commitOrThrow(prefs(ctx).edit()
+                .putString("server", server)
+                .putString("device_token", token));
     }
 
     public static boolean isConfigured(Context ctx) {
@@ -169,11 +280,11 @@ public final class ServerConfigStore {
     }
 
     // ---- 设备身份（首次生成，持久保存） ----
-    public static String getDeviceId(Context ctx) {
+    public static synchronized String getDeviceId(Context ctx) {
         String id = prefs(ctx).getString("device_id", null);
         if (id == null) {
             id = java.util.UUID.randomUUID().toString();
-            prefs(ctx).edit().putString("device_id", id).apply();
+            commitOrThrow(prefs(ctx).edit().putString("device_id", id));
         }
         return id;
     }
@@ -184,11 +295,11 @@ public final class ServerConfigStore {
     }
 
     public static void setDeviceToken(Context ctx, String token) {
-        prefs(ctx).edit().putString("device_token", token).apply();
+        commitOrThrow(prefs(ctx).edit().putString("device_token", token));
     }
 
     public static void clearDeviceToken(Context ctx) {
-        prefs(ctx).edit().remove("device_token").apply();
+        commitOrThrow(prefs(ctx).edit().remove("device_token"));
     }
 
     // ---- 相册同步设置 ----
@@ -196,16 +307,8 @@ public final class ServerConfigStore {
         return prefs(ctx).getBoolean("sync_enabled", false);
     }
 
-    public static void setSyncEnabled(Context ctx, boolean v) {
-        prefs(ctx).edit().putBoolean("sync_enabled", v).apply();
-    }
-
     public static boolean isWifiOnly(Context ctx) {
         return prefs(ctx).getBoolean("sync_wifi_only", true);
-    }
-
-    public static void setWifiOnly(Context ctx, boolean v) {
-        prefs(ctx).edit().putBoolean("sync_wifi_only", v).apply();
     }
 
     /** 同步周期（小时）。 */
@@ -213,16 +316,35 @@ public final class ServerConfigStore {
         return Double.longBitsToDouble(prefs(ctx).getLong("sync_interval_bits", Double.doubleToLongBits(6.0)));
     }
 
-    public static void setIntervalHours(Context ctx, double hours) {
-        prefs(ctx).edit().putLong("sync_interval_bits", Double.doubleToLongBits(hours)).apply();
-    }
-
     public static String getTargetFolder(Context ctx) {
         return prefs(ctx).getString("sync_folder", "相册同步");
     }
 
-    public static void setTargetFolder(Context ctx, String folder) {
-        prefs(ctx).edit().putString("sync_folder", folder).apply();
+    /** 单次 commit 保存本次 configure 的全部字段。持久设置是调度的期望状态源。 */
+    static synchronized void updateSyncSettings(
+            Context ctx, Boolean enabled, Boolean wifiOnly, Double intervalHours, String folder) {
+        updateSyncSettings(prefs(ctx), enabled, wifiOnly, intervalHours, folder);
+    }
+
+    static void updateSyncSettings(
+            SharedPreferences p, Boolean enabled, Boolean wifiOnly, Double intervalHours, String folder) {
+        SharedPreferences.Editor editor = p.edit();
+        if (enabled != null) editor.putBoolean("sync_enabled", enabled);
+        if (wifiOnly != null) editor.putBoolean("sync_wifi_only", wifiOnly);
+        if (intervalHours != null) {
+            if (!Double.isFinite(intervalHours) || intervalHours <= 0) {
+                throw new IllegalArgumentException("同步周期必须为正数");
+            }
+            editor.putLong("sync_interval_bits", Double.doubleToLongBits(intervalHours));
+        }
+        if (folder != null) {
+            String normalized = folder.trim();
+            if (normalized.isEmpty()) {
+                throw new IllegalArgumentException("同步目录不能为空");
+            }
+            editor.putString("sync_folder", normalized);
+        }
+        commitOrThrow(editor);
     }
 
     /** 上次同步截至时间（epoch 秒）——只推进到「整秒全部成功」的秒。 */
@@ -230,17 +352,9 @@ public final class ServerConfigStore {
         return prefs(ctx).getLong("sync_last_at", 0L);
     }
 
-    public static void setLastSyncAt(Context ctx, long ts) {
-        prefs(ctx).edit().putLong("sync_last_at", ts).apply();
-    }
-
     /** 未完成秒（-1 = 无）：该秒内有失败/未取完的照片，下轮从 _ID 水位续传。 */
     public static long getPendingSecond(Context ctx) {
         return prefs(ctx).getLong("sync_pending_second", -1L);
-    }
-
-    public static void setPendingSecond(Context ctx, long ts) {
-        prefs(ctx).edit().putLong("sync_pending_second", ts).apply();
     }
 
     /** 未完成秒内已成功上传的最大 _ID（0 = 无）。 */
@@ -248,12 +362,16 @@ public final class ServerConfigStore {
         return prefs(ctx).getLong("sync_pending_max_id", 0L);
     }
 
-    public static void setPendingMaxId(Context ctx, long id) {
-        prefs(ctx).edit().putLong("sync_pending_max_id", id).apply();
-    }
-
-    public static void clearPending(Context ctx) {
-        prefs(ctx).edit().remove("sync_pending_second").remove("sync_pending_max_id").apply();
+    /** 原子发布完整同步检查点，避免 lastSyncAt 与 pending 状态只写入一半。 */
+    public static void setCheckpoint(Context ctx, long lastSyncAt, long pendingSecond, long pendingMaxId) {
+        SharedPreferences.Editor editor = prefs(ctx).edit().putLong("sync_last_at", lastSyncAt);
+        if (pendingSecond >= 0) {
+            editor.putLong("sync_pending_second", pendingSecond)
+                    .putLong("sync_pending_max_id", pendingMaxId);
+        } else {
+            editor.remove("sync_pending_second").remove("sync_pending_max_id");
+        }
+        commitOrThrow(editor);
     }
 
     public static int getLastCount(Context ctx) {
@@ -261,7 +379,7 @@ public final class ServerConfigStore {
     }
 
     public static void setLastCount(Context ctx, int n) {
-        prefs(ctx).edit().putInt("sync_last_count", n).apply();
+        commitOrThrow(prefs(ctx).edit().putInt("sync_last_count", n));
     }
 
     public static String getLastError(Context ctx) {
@@ -269,6 +387,6 @@ public final class ServerConfigStore {
     }
 
     public static void setLastError(Context ctx, String e) {
-        prefs(ctx).edit().putString("sync_last_error", e).apply();
+        commitOrThrow(prefs(ctx).edit().putString("sync_last_error", e));
     }
 }

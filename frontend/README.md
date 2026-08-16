@@ -11,7 +11,7 @@ npm run dev                    # next dev :3000（默认同源 /api/v1）
 NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # 直连后端开发
 
 npm run build                  # 静态导出 out/（backend 托管）
-npm test                       # vitest（19 项：SSE 流解析 + 组件）
+npm test                       # vitest（SSE、API 身份/缓存竞态、上传与组件）
 npx cap sync android           # 拷贝 web 资源进安卓工程（frontend/android）
 ```
 
@@ -36,8 +36,10 @@ src/
 
 ## 鉴权约定
 
-- web/PWA：HttpOnly Cookie（登录/设密页）；401 全局拦截回登录页
-- 原生 App：扫码配对换设备令牌（Bearer）；无令牌 → 重扫码页（密码登录为逃生口）
+- web/PWA：HttpOnly Cookie（登录/设密页）；普通 API、上传与 Chat SSE 的 401 都通过 `EV.unauthorized` 全局回登录页；旧身份迟到的 401 不影响已切换的新身份
+- API GET 缓存按 base + credential generation + cache generation + path 隔离；凭据切换和每个写请求的开始/结束（含 HTTP 错误、网络失败和 Abort）各自失效，交错写也不会让旧 GET 快照继续缓存
+- Chat SSE 解析支持 LF/CRLF/CR、跨 chunk 换行与 UTF-8、多行 `data:`、流末尾无空行事件；非 2xx 保留字符串或结构化后端 `detail` 为 `ApiError`
+- 原生 App：扫码配对换设备令牌（Bearer）；配置存独立 EncryptedSharedPreferences，升级兼容旧明文与 1.0.27 同文件密文（同键密文优先于更老明文残留；独立新旧密文冲突则保留双方并失败关闭）；存储错误会 reject 并显示而不会降级明文或静默使用默认地址。无令牌 → 重扫码页（密码登录为逃生口）。登出先清除加密令牌：离线/5xx 明示服务端吊销状态未知，401/403 视为凭据已不可用
 - AI 配置界面仅 web 渲染；App 内提示"配置在网页端管理"
 
 ## 相关文档

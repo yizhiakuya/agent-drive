@@ -1,6 +1,12 @@
 """v1 文件路由"""
 from __future__ import annotations
 
+import hashlib
+import logging
+import os
+import re
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -17,24 +23,62 @@ def _friendly(e: Exception) -> HTTPException:
         return HTTPException(409, str(e))
     if isinstance(e, (PermissionError, NotADirectoryError, IsADirectoryError)):
         return HTTPException(403, str(e))
+    if isinstance(e, OSError):
+        # 存储/IO 层故障必须 500 重试，绝不能映射成 400：Android 把永久 4xx 当
+        # 成“可跳过的照片”，一次瞬时磁盘错误就会让照片被永久跳过。
+        return HTTPException(500, f"存储服务异常: {e}")
     return HTTPException(400, str(e))
+
+
+def _record_index(container, md5: str, path: str, size: int, revision: str | None) -> None:
+    """发布成功后的去重登记。索引是优化项：登记失败不能把已上传文件伪报为
+    失败，否则客户端重试会经 noclobber 落成重复照片；verified 查询会靠
+    exists+revision 自愈旧条目。"""
+    try:
+        container.upload_index.record(md5, path, size, revision=revision)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "文件已发布但去重索引登记失败: %s", path, exc_info=True,
+        )
+
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 
-async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
-    """分块读取并限制大小：超限抛 413（不会把超大文件整体载入内存）。"""
-    chunks: list[bytes] = []
+_MD5_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+async def _stage_upload(file: UploadFile, storage, max_bytes: int) -> tuple[Path, int, str]:
+    """边读边写入 0600 临时文件并计算 MD5；超限或读取失败时不留残件。"""
+    tmp, stream = storage.create_temp_file()
     total = 0
-    while True:
-        chunk = await file.read(1024 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > max_bytes:
-            raise HTTPException(413, f"文件超过大小上限 {max_bytes // (1024 * 1024)}MB")
-        chunks.append(chunk)
-    return b"".join(chunks)
+    digest = hashlib.md5(usedforsecurity=False)
+    completed = False
+    try:
+        with stream:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(413, f"文件超过大小上限 {max_bytes // (1024 * 1024)}MB")
+                digest.update(chunk)
+                stream.write(chunk)
+            stream.flush()
+            os.fsync(stream.fileno())
+        completed = True
+        return tmp, total, digest.hexdigest()
+    finally:
+        if not completed:
+            tmp.unlink(missing_ok=True)
+
+
+def _validated_declared_md5(value: str) -> str:
+    declared = value.strip().lower()
+    if declared and not _MD5_RE.fullmatch(declared):
+        raise HTTPException(400, "md5 必须是 32 位十六进制字符串")
+    return declared
 
 
 @router.get("")
@@ -60,44 +104,76 @@ def _unique_path(st, rel: str) -> str:
     return candidate
 
 
+@router.get("/dedupe")
+async def dedupe_lookup(md5: str, container=Depends(get_container)):
+    """相册同步免传预检：只命中由服务端实算 MD5 写入的有效索引。"""
+    actual_md5 = _validated_declared_md5(md5)
+    if not actual_md5:
+        raise HTTPException(400, "md5 不能为空")
+    hit = container.upload_index.lookup(actual_md5, verified_only=True)
+    if hit is None:
+        raise HTTPException(404, "未命中")
+    # 预检必须是无副作用 GET；真正上传时已负责入队索引任务。
+    return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}}
+
+
 @router.post("/upload")
 async def upload(container=Depends(get_container), file: UploadFile = File(...),
                  path: str = "", md5: str = Form(""), noclobber: bool = Form(False)):
     """上传。path 走查询参数（web 同款）；md5/noclobber 为表单字段（相册同步专用）。
 
-    - md5：内容去重（秒传）——命中且文件仍在则跳过传输与索引
+    - md5：客户端声明值必须与服务端流式实算值一致；免传请先 GET /files/dedupe
     - noclobber：同名冲突自动加序号（不覆盖）；web 上传不传此字段，保持覆盖语义
     """
     st = container.storage
     filename = file.filename or "未命名"
     rel = f"{path.strip('/')}/{filename}".lstrip("/") if path else filename
+    try:
+        st.resolve(rel)  # 在读取请求体前尽早拒绝穿越/符号链接目标
+    except Exception as exc:
+        raise _friendly(exc)
+    declared_md5 = _validated_declared_md5(md5)
+    temp_path, _size, actual_md5 = await _stage_upload(
+        file, st, container.settings.max_upload_mb * 1024 * 1024,
+    )
+    try:
+        if declared_md5 and declared_md5 != actual_md5:
+            raise HTTPException(400, "md5 与实际文件内容不一致")
 
-    # 秒传：内容去重命中 → 直接返回已有文件
-    if md5:
-        hit = container.upload_index.lookup(md5)
-        if hit:
-            job, _ = container.tasks.enqueue_index(hit["path"], origin="upload.dedupe", priority=30)
-            indexed = {"task_id": job.id, "status": job.status} if job else None
-            return {"uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True}, "indexed": indexed}
+        # 只有客户端显式请求秒传时才按内容复用；索引键始终来自服务端实算结果。
+        if declared_md5:
+            hit = container.upload_index.lookup(actual_md5, verified_only=True)
+            if hit:
+                job, _ = container.tasks.enqueue_index(hit["path"], origin="upload.dedupe", priority=30)
+                indexed = {"task_id": job.id, "status": job.status} if job else None
+                return {
+                    "uploaded": {"path": hit["path"], "size": hit["size"], "deduped": True},
+                    "indexed": indexed,
+                }
 
-    data = await _read_limited(file, container.settings.max_upload_mb * 1024 * 1024)
-    if noclobber:
-        # 原子独占创建：exists 检查与写入之间不再有竞态窗口
-        for _ in range(20):
-            try:
-                info = st.save_bytes(rel, data, exclusive=True)
-                break
-            except FileExistsError:
-                rel = _unique_path(st, rel)
+        if noclobber:
+            # 原子独占创建：若并发占用候选名，保留同一临时文件并换名重试。
+            for _ in range(20):
+                try:
+                    info = st.publish_temp(rel, temp_path, exclusive=True)
+                    break
+                except FileExistsError:
+                    rel = _unique_path(st, rel)
+            else:
+                raise HTTPException(409, f"同名冲突过多: {rel}")
         else:
-            raise HTTPException(409, f"同名冲突过多: {rel}")
-    else:
-        info = st.save_bytes(rel, data)
-    if md5:
-        container.upload_index.record(md5, rel, info["size"])
-    job, _ = container.tasks.enqueue_index(rel, origin="upload", priority=30)
-    indexed = {"task_id": job.id, "status": job.status} if job else None
-    return {"uploaded": info, "indexed": indexed}
+            info = st.publish_temp(rel, temp_path)
+        revision = info.pop("_revision", None)
+        _record_index(container, actual_md5, info["path"], info["size"], revision)
+        job, _ = container.tasks.enqueue_index(info["path"], origin="upload", priority=30)
+        indexed = {"task_id": job.id, "status": job.status} if job else None
+        return {"uploaded": info, "indexed": indexed}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _friendly(exc)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 @router.get("/download")
@@ -120,17 +196,34 @@ async def upload_share(container=Depends(get_container), file: UploadFile = File
     from fastapi.responses import RedirectResponse
 
     st = container.storage
-    data = await _read_limited(file, container.settings.max_upload_mb * 1024 * 1024)
-    # 同名处理：自动加序号
     rel = file.filename or "分享的文件"
-    base, ext = (rel.rsplit(".", 1) + [""])[:2] if "." in rel else (rel, "")
-    candidate, i = rel, 1
-    while st.exists(candidate):
-        candidate = f"{base}-{i}.{ext}" if ext else f"{base}-{i}"
-        i += 1
-    st.save_bytes(candidate, data)
-    container.tasks.enqueue_index(candidate, origin="share", priority=30)
-    return RedirectResponse(url=f"/?shared={candidate}", status_code=303)
+    try:
+        st.resolve(rel)
+    except Exception as exc:
+        raise _friendly(exc)
+    temp_path, _size, actual_md5 = await _stage_upload(
+        file, st, container.settings.max_upload_mb * 1024 * 1024,
+    )
+    try:
+        base, ext = (rel.rsplit(".", 1) + [""])[:2] if "." in rel else (rel, "")
+        candidate, i = rel, 1
+        while True:
+            try:
+                info = st.publish_temp(candidate, temp_path, exclusive=True)
+                break
+            except FileExistsError:
+                candidate = f"{base}-{i}.{ext}" if ext else f"{base}-{i}"
+                i += 1
+        revision = info.pop("_revision", None)
+        _record_index(container, actual_md5, info["path"], info["size"], revision)
+        container.tasks.enqueue_index(info["path"], origin="share", priority=30)
+        return RedirectResponse(url=f"/?shared={info['path']}", status_code=303)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _friendly(exc)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 @router.post("/mkdir")
@@ -257,13 +350,22 @@ async def delete(container=Depends(get_container), path: str = ""):
 
 @router.get("/trash")
 async def trash_list(container=Depends(get_container)):
-    return {"items": container.storage.list_trash()}
+    try:
+        return {"items": container.storage.list_trash()}
+    except Exception as exc:
+        raise _friendly(exc)
 
 
 @router.post("/trash/restore")
-async def trash_restore(container=Depends(get_container), path: str = ""):
+async def trash_restore(
+    container=Depends(get_container),
+    trash_id: str | None = None,
+    path: str | None = None,
+):
+    """按唯一 trash_id 恢复；path 仅为旧客户端兼容参数。"""
+    identifier = trash_id if trash_id is not None else (path or "")
     try:
-        return container.storage.restore_from_trash(path)
+        return container.storage.restore_from_trash(identifier)
     except Exception as e:
         raise _friendly(e)
 

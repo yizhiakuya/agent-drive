@@ -7,7 +7,7 @@
 - **Agent 自管理**：LLM 配置存在网盘里（`backend/system/agent-config.json`），Agent 可以通过对话修改自己的配置
 - **三协议 LLM 支持**：OpenAI 兼容 (chat/completions) / OpenAI Responses / Anthropic (Claude)
 - **Agentic Loop**：意图理解 → 规划 → 工具调用 → 观察 → 回复（含工具轨迹可视化）
-- **流式输出**：SSE 逐块渲染，Agent 边思考边输出
+- **流式输出**：SSE 逐块渲染，支持 CRLF/跨分块 UTF-8/多行 data 与尾事件收束；401 统一触发未授权事件，Web/PWA 回登录页、原生 App 回重新扫码页
 - **技能包**：可插拔 Skills（周报生成器/文件整理器），read_skill 按需加载
 - **意图路由**：闲聊走轻量路径（更快更省），任务走完整 Loop
 - **重试与退避**：LLM/工具瞬态错误指数退避重试，永久错误立即失败
@@ -18,7 +18,8 @@
 - **记忆系统**：用户偏好 + 多会话 + 跨会话摘要
 - **全站认证**：网页密码登录（PBKDF2）+ App 扫码即授权（一次性配对码换设备令牌）+ 登录限速（见 docs/security.md）
 - **设备管理**：web 设置页设备列表——型号/活跃时间/相册同步状态，移除即吊销令牌
-- **安卓原生壳**：Capacitor（frontend/android）打包 web UI + 原生能力：扫码连接、相册自动同步（WorkManager 后台/去重秒传/断点续传/进度可视）、通知、全局下拉刷新
+- **安卓原生壳**：Capacitor（frontend/android）打包 web UI + 原生能力：扫码连接、相册自动同步（WorkManager 后台/服务端验证秒传/整秒断点续传/进度可视）、通知、全局下拉刷新
+- **可靠文件写入**：上传请求流式落 0600 临时文件并由服务端实算 MD5；文本与文件原子发布，目录复制先完整 staging 再一次替换，非原子 fallback 由 recovery marker 保证崩溃后恢复旧目标或清理已提交备份；内部索引/回收站命名空间不可由公共文件 API 访问，同一路径多版本可恢复
 
 ## 🚀 快速开始
 
@@ -151,8 +152,8 @@ python scripts/mock_llm.py &                 # Mock LLM (端口 9999)
 
 ## ⚠️ 安全说明
 
-- **全站鉴权**：首次访问设主人密码（PBKDF2），web 走 HttpOnly Cookie，App 走设备令牌（可单设备吊销）；登录限速防爆破。设计见 docs/security.md
-- 路径穿越防护已内置
+- **全站鉴权**：首次访问设主人密码（PBKDF2），web 走 HttpOnly Cookie，App 走设备令牌；登出会在服务端吊销当前 session/device token，媒体 `?token=` 只允许 raw/download GET。设计见 docs/security.md
+- 路径穿越与符号链接防护已内置；上传、文本写入和回收站元数据均走原子发布
 - 工具按 green/yellow/red 分级，红色操作需 HMAC 签名确认（nonce 防重放）
 - 删除进回收站（30 天可恢复），彻底删除需 red 确认
 - 文件内容注入防护（多模式正则 + 内容一律视为数据）

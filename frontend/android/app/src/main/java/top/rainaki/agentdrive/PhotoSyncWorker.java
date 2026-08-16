@@ -4,6 +4,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.os.Build;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
@@ -14,6 +15,7 @@ import androidx.work.WorkerParameters;
 /** 后台同步任务：扫描新增照片并上传，完成后发通知。 */
 public class PhotoSyncWorker extends Worker {
 
+    private static final String TAG = "PhotoSyncWorker";
     private static final String CHANNEL = "photo_sync";
     private static final int NOTIFY_ID = 1;
 
@@ -36,7 +38,13 @@ public class PhotoSyncWorker extends Worker {
             // 有失败 → 退避重试（断点续传 + 秒传让重试零流量）
             return ServerConfigStore.getLastError(ctx) == null ? Result.success() : Result.retry();
         } catch (Exception e) {
-            ServerConfigStore.setLastError(ctx, String.valueOf(e.getMessage()));
+            Log.e(TAG, "相册同步失败", e);
+            try {
+                ServerConfigStore.setLastError(ctx, String.valueOf(e.getMessage()));
+            } catch (RuntimeException storageError) {
+                // 安全存储本身故障时不能在异常处理路径再次崩溃或降级到明文。
+                Log.e(TAG, "无法写入加密同步错误状态", storageError);
+            }
             return Result.retry();
         }
     }

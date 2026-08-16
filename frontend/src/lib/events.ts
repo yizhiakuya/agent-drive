@@ -4,6 +4,7 @@ export const EV = {
   toast: "agent-drive:toast",
   refresh: "agent-drive:refresh",
   tasksChanged: "agent-drive:tasks-changed",
+  unauthorized: "agent-drive:unauthorized",
 } as const;
 
 export interface ToastDetail {

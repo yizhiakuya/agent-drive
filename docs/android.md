@@ -31,17 +31,21 @@ frontend/out (Next 静态导出)  ──打包──▶  APK 内本地资源（�
 **相册自动同步**：PhotoSyncWorker（WorkManager 周期任务，App 关闭/重启都运行）扫描 MediaStore 新增照片 → multipart 上传 /files/upload（按日期归档到 相册同步/YYYY-MM-DD/）→ 完成通知。约束：电池非低电量 + 网络（可选仅 Wi-Fi），频率 1/6/12/24 小时。
 
 **传输可靠性（网盘级去重）**：
-- 内容去重（秒传）：客户端逐张算 MD5 → 服务端索引（system/upload-index.json）命中且文件仍在 → 跳过传输与索引，直接算成功
+- 内容去重（秒传）：客户端读取照片到 cache 并算 MD5 → `GET /files/dedupe` 只查询服务端实算、revision 仍匹配的 verified 索引 → 命中零传输；未命中 multipart 上传，服务端边流式落盘边复算并拒绝 hash 不一致
 - 同名冲突：noclobber 参数 → 服务端自动加序号 name-2.jpg，绝不覆盖
-- 整秒检查点（1.0.22 起）：`lastSyncAt` 只推进到「整秒全部成功」的秒；同秒内有失败或未取完则挂 `pendingSecond+pendingMaxId`（_ID 水位）下一轮续传——同秒失败张、单秒超 200 张（连拍/批量导入）都不会再被 `DATE_ADDED > 检查点` 永久跳过
-- 单张失败不阻塞整批：跳过继续，Worker 指数退避重试；重试零流量（已传文件秒传命中）
-- 事件驱动：MediaStore ContentObserver 拍照触发快速同步（1 秒防抖合并连拍，周期任务兜底）；查询 SQL LIMIT 不 COUNT 全量统计
+- 整秒检查点：`CheckpointTracker` 只推进「整秒全部成功」的 `lastSyncAt`；首个失败后冻结连续 `_ID` 水位，更晚成功秒不得越过；200+1 行查询中第 201 行只作同秒/跨秒截断哨兵而不上传。查询、Cursor、MediaStore 字段和 checkpoint commit 异常也会保留已有/当前秒 pending 并退避重试；每行先读 DATE_ADDED 并以其真实秒 begin 再读其余字段，字段异常挂在真实失败秒上而不是误标上一组。`lastSyncAt + pendingSecond + pendingMaxId` 由一次加密 prefs commit 原子发布
+- 单张失败不阻塞整批：服务端会一直拒绝的永久 4xx（400/413/415/416/422）跳过该张并推进连续水位，不会无限重试卡死检查点；其余 4xx（404/405/408/409/429 等）视为可能瞬时，冻结水位由 Worker 指数退避重试；重试零流量（已传文件秒传命中）
+- 事件驱动：MediaStore ContentObserver 拍照触发快速同步（1 秒防抖合并连拍，周期任务兜底）；observer 由 Activity 字段持有且在 `onDestroy()` 注销/清除回调，避免重建后泄漏和重复排队；API 26+ Bundle 与旧版 sortOrder 都限制 201 行，不 COUNT 全量统计
+- 约束与并发一致：周期、ContentObserver 快速和手动立即同步都要求电池非低电量；“仅 Wi-Fi”用 `UNMETERED`，关闭时用 `CONNECTED`。不同 unique work 名称即使同时触发，`SyncEngine.sync()` 也在 App 进程内串行执行，避免两个 Worker 互相覆盖加密检查点
+- 配置与调度一致：一次 configure 的 enabled/wifiOnly/interval/folder 用单次加密 prefs commit 发布；多个 configure 进入专用单线程执行器，从写入到 WorkManager Operation 入库结果全程串行，不阻塞桥接/UI 线程。失败时保留已提交的“期望状态”并明确 reject，下次 App 启动由 `ensureScheduled` 幂等收敛，不执行无法保证副作用一致的伪回滚
 - 断网中止（1.0.23 起）：连接失败/401/403/5xx 整批中止 + 退避重试（不再逐张串行超时）；单张 4xx 跳过继续
 - 权限判定只看图片读取权限：通知权限被拒不算同步失败（仅失去进度通知）
-- 令牌与配置加密存储：服务器地址/设备令牌/同步设置存 EncryptedSharedPreferences；`allowBackup=false` 防云备份恢复克隆令牌；旧版明文迁移只复制应用配置键，跳过 AndroidX 内部 keyset，并在加密写入成功后逐项清理旧明文
+- 令牌与配置加密存储：服务器地址/设备令牌/同步设置存独立 `agent_drive_secure` EncryptedSharedPreferences；`allowBackup=false` 防云备份恢复克隆令牌。升级兼容旧 `agent_drive` 明文与 1.0.27 同文件密文：同键时以 1.0.27 持续写入的密文为现行值，旧明文视为更早版本/清理残留；独立新密文若与 legacy 现行值冲突则保留双方并失败关闭。新密文 commit 成功或逐键确认相等后才清理旧业务数据，AndroidX keyset 永不 clear，清理失败下次启动幂等重试；初始化/迁移/commit 失败不降级明文，入口弹窗、插件 reject、Worker Log+retry 都显式处理
 - 1.0.24：修复旧版明文配置迁移在 Android 16 上因误处理 AndroidX 保留键导致的启动崩溃
 - 1.0.25：文件页手机工具栏改为 3×2、44px 触控网格；320px 极窄屏隐藏品牌文字但保留图标与无障碍名称，修复标题竖排、设置入口被截断和整页横向滚动；viewport 使用 Next.js 16 独立导出
 - 1.0.26：新增「后台任务」页，展示文件索引、批量重建、维护与自动化任务的状态/进度/错误，支持取消、失败重试和手动重建索引；原生 App 每 5 秒携带 Bearer 令牌轮询，web/PWA 使用 Cookie SSE
+- 1.0.27：修复不可读 MediaStore 流未标记失败导致的检查点丢图；引入连续水位 Tracker 与 201 行哨兵，检查点单次原子提交并串行化同进程同步；秒传改 verified 预检 + 服务端实算 MD5；三种同步入口统一网络/电量约束；加密存储完全失败关闭并提供用户可见错误
+- 1.0.28：加密配置迁到独立 prefs 文件并兼容旧明文/1.0.27 同文件密文；同文件密文优先于明文残留，独立新旧密文冲突时保留双方并失败关闭。同步设置每次 configure 单次 commit，专用后台单线程串行等待 WorkManager 入库，调度失败保留期望状态供下次启动重试；服务端永久拒绝的 4xx 跳过推进水位，不再无限重试卡死检查点；Activity 销毁时注销 MediaStore observer 并取消挂起权限回调，避免重建后泄漏和重复快速同步
 - 相册同步进度可视：App 内进度块（实时事件）+ 通知栏进度条；全局下拉刷新（App/PWA 通用）
 
 ## 三、已完成的（有效资产）

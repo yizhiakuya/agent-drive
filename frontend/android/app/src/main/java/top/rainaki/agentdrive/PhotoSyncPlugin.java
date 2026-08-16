@@ -18,17 +18,36 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /** 相册自动同步桥：配置 / 状态 / 立即同步 / 权限申请。 */
 @CapacitorPlugin(name = "PhotoSync")
 public class PhotoSyncPlugin extends Plugin {
 
+    private static final ExecutorService CONFIGURE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "photo-sync-configure");
+        thread.setDaemon(true);
+        return thread;
+    });
     private static PhotoSyncPlugin instance;
     private static PluginCall pendingPermissionCall;
 
     @Override
     public void load() {
         instance = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        // Activity 销毁后不能再解析挂起的权限回调，否则旧 PluginCall 会失效。
+        PluginCall pending = pendingPermissionCall;
+        pendingPermissionCall = null;
+        if (pending != null) {
+            pending.reject("Activity 已销毁，权限请求已取消");
+        }
+        super.handleOnDestroy();
     }
 
     /** 供 SyncEngine 广播进度（WebView 打开时 JS 实时收到） */
@@ -50,46 +69,70 @@ public class PhotoSyncPlugin extends Plugin {
 
     @PluginMethod
     public void getStatus(PluginCall call) {
-        call.resolve(status());
+        try {
+            call.resolve(status());
+        } catch (RuntimeException e) {
+            call.reject("安全配置存储不可用：" + e.getMessage());
+        }
     }
 
     @PluginMethod
     public void configure(PluginCall call) {
         Context ctx = getContext();
-        if (call.hasOption("enabled")) {
-            ServerConfigStore.setSyncEnabled(ctx, call.getBoolean("enabled", false));
+        Boolean enabled = call.hasOption("enabled") ? call.getBoolean("enabled", false) : null;
+        Boolean wifiOnly = call.hasOption("wifiOnly") ? call.getBoolean("wifiOnly", true) : null;
+        Double interval = call.hasOption("intervalHours") ? call.getDouble("intervalHours", 6.0) : null;
+        String folder = call.hasOption("targetFolder") ? call.getString("targetFolder") : null;
+        try {
+            CONFIGURE_EXECUTOR.execute(() -> {
+                try {
+                    // 专用单线程从 commit 到调度结果全程串行，且不阻塞桥接/UI 线程。
+                    ServerConfigStore.updateSyncSettings(ctx, enabled, wifiOnly, interval, folder);
+                } catch (RuntimeException e) {
+                    call.reject("同步配置保存失败：" + e.getMessage());
+                    return;
+                }
+                try {
+                    PhotoSyncScheduler.ensureScheduledAndWait(ctx);
+                } catch (RuntimeException scheduleError) {
+                    // WorkManager 不是事务 API，不能假装可回滚其未知副作用。保留已提交的
+                    // 期望状态，App 下次启动会再次 ensureScheduled 幂等收敛。
+                    call.reject("同步配置已保存，但调度失败；下次启动将重试：" + scheduleError.getMessage());
+                    return;
+                }
+                try {
+                    call.resolve(status());
+                } catch (RuntimeException e) {
+                    call.reject("同步配置已保存，但读取状态失败：" + e.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            call.reject("同步配置任务无法启动：" + e.getMessage());
         }
-        if (call.hasOption("wifiOnly")) {
-            ServerConfigStore.setWifiOnly(ctx, call.getBoolean("wifiOnly", true));
-        }
-        if (call.hasOption("intervalHours")) {
-            ServerConfigStore.setIntervalHours(ctx, call.getDouble("intervalHours", 6.0));
-        }
-        if (call.hasOption("targetFolder")) {
-            String f = call.getString("targetFolder");
-            if (f != null && !f.trim().isEmpty()) {
-                ServerConfigStore.setTargetFolder(ctx, f.trim());
-            }
-        }
-        PhotoSyncScheduler.ensureScheduled(ctx);
-        call.resolve(status());
     }
 
     @PluginMethod
     public void syncNow(PluginCall call) {
-        if (!ServerConfigStore.isConfigured(getContext())) {
-            call.reject("未配置服务器：请先扫码连接");
-            return;
+        try {
+            if (!ServerConfigStore.isConfigured(getContext())) {
+                call.reject("未配置服务器：请先扫码连接");
+                return;
+            }
+            if (!hasMediaPermission()) {
+                call.reject("缺少相册权限");
+                return;
+            }
+            OneTimeWorkRequest req = new OneTimeWorkRequest.Builder(PhotoSyncWorker.class)
+                    .setConstraints(PhotoSyncScheduler.syncConstraints(getContext()))
+                    .build();
+            WorkManager.getInstance(getContext()).enqueueUniqueWork(PhotoSyncScheduler.UNIQUE_QUICK,
+                    ExistingWorkPolicy.KEEP, req);
+            JSObject ret = new JSObject();
+            ret.put("started", true);
+            call.resolve(ret);
+        } catch (RuntimeException e) {
+            call.reject("安全配置存储不可用：" + e.getMessage());
         }
-        if (!hasMediaPermission()) {
-            call.reject("缺少相册权限");
-            return;
-        }
-        OneTimeWorkRequest req = new OneTimeWorkRequest.Builder(PhotoSyncWorker.class).build();
-        WorkManager.getInstance(getContext()).enqueueUniqueWork("photo_sync_now", ExistingWorkPolicy.KEEP, req);
-        JSObject ret = new JSObject();
-        ret.put("started", true);
-        call.resolve(ret);
     }
 
     @PluginMethod
@@ -104,7 +147,11 @@ public class PhotoSyncPlugin extends Plugin {
             call.reject("activity 不可用");
             return;
         }
+        PluginCall previous = pendingPermissionCall;
         pendingPermissionCall = call;
+        if (previous != null) {
+            previous.reject("权限请求被新的请求取代");
+        }
         List<String> perms = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= 33) {
             perms.add("android.permission.READ_MEDIA_IMAGES");

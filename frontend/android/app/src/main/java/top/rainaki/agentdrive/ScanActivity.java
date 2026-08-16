@@ -89,8 +89,13 @@ public class ScanActivity extends Activity {
                     Toast.makeText(this, result.error, Toast.LENGTH_LONG).show();
                     return;
                 }
-                ServerConfigStore.setServer(getApplicationContext(), fServer);
-                ServerConfigStore.setDeviceToken(getApplicationContext(), result.token);
+                try {
+                    ServerConfigStore.setConnection(getApplicationContext(), fServer, result.token);
+                } catch (RuntimeException e) {
+                    handled = false;
+                    Toast.makeText(this, "授权成功，但安全存储失败；未保存设备令牌", Toast.LENGTH_LONG).show();
+                    return;
+                }
                 Toast.makeText(this, "已连接并授权", Toast.LENGTH_SHORT).show();
                 if (getIntent().getBooleanExtra(EXTRA_RESCAN, false)) {
                     setResult(RESULT_OK);

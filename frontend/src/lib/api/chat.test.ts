@@ -1,16 +1,24 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { EV } from "@/lib/events";
+import { ApiError } from "./client";
 import { chatStream } from "./chat";
 
 function sseResponse(chunks: string[]) {
   const encoder = new TextEncoder();
+  return byteResponse(chunks.map((c) => encoder.encode(c)));
+}
+
+function byteResponse(chunks: Uint8Array[]) {
   const stream = new ReadableStream({
     start(controller) {
-      for (const c of chunks) controller.enqueue(encoder.encode(c));
+      for (const c of chunks) controller.enqueue(c);
       controller.close();
     },
   });
   return new Response(stream, { status: 200 });
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("chatStream SSE 解析", () => {
   it("解析 text 事件并流式回调", async () => {
@@ -37,12 +45,98 @@ describe("chatStream SSE 解析", () => {
     expect(texts).toEqual(["跨块"]);
   });
 
+  it("支持 CRLF、多行 data 与流末尾无空行", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: text\r\ndata: {"text":\r\ndata: "多行"}\r\n\r\n',
+      'event: done\ndata: {"session_id":"tail"}',
+    ]));
+    const events: [string, unknown][] = [];
+    const result = await chatStream("hi", [], null, [], (e, d) => events.push([e, d]), new AbortController().signal);
+    expect(events).toEqual([
+      ["text", { text: "多行" }],
+      ["done", { session_id: "tail" }],
+    ]);
+    expect(result).toEqual({ session_id: "tail" });
+  });
+
+  it("CRLF 分隔符跨 chunk 且 event 有空白时仍正确解析", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      "event: done \r", "\ndata: {\"session_id\":\"split-crlf\"}\r", "\n\r", "\n",
+    ]));
+    const events: [string, unknown][] = [];
+    const result = await chatStream("hi", [], null, [], (e, d) => events.push([e, d]), new AbortController().signal);
+    expect(events).toEqual([["done", { session_id: "split-crlf" }]]);
+    expect(result).toEqual({ session_id: "split-crlf" });
+  });
+
+  it("支持纯 CR、注释、未知字段和跨 chunk 的尾 CR", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      ': heartbeat\runknown: ignored\revent: text\rdata: {"text":"纯CR"}\r',
+      '\revent: done\rdata: {"session_id":"cr"}\r',
+    ]));
+    const events: [string, unknown][] = [];
+    const result = await chatStream("hi", [], null, [], (e, d) => events.push([e, d]), new AbortController().signal);
+    expect(events).toEqual([
+      ["text", { text: "纯CR" }],
+      ["done", { session_id: "cr" }],
+    ]);
+    expect(result).toEqual({ session_id: "cr" });
+  });
+
+  it("格式错误的 JSON 带事件上下文抛出", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      "event: text\ndata: {bad}\n\n",
+    ]));
+    await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
+      .rejects.toThrow("SSE text 数据格式错误: {bad}");
+  });
+
+  it("没有响应流时明确报错", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
+      .rejects.toThrow("empty response body");
+  });
+
+  it("UTF-8 字符跨字节 chunk 仍正确解码", async () => {
+    const bytes = new TextEncoder().encode('event: text\ndata: {"text":"你好"}\n\n');
+    const chinese = bytes.findIndex((value) => value >= 0xe0);
+    global.fetch = vi.fn().mockResolvedValue(byteResponse([
+      bytes.slice(0, chinese + 1),
+      bytes.slice(chinese + 1, chinese + 4),
+      bytes.slice(chinese + 4),
+    ]));
+    const events: [string, unknown][] = [];
+    await chatStream("hi", [], null, [], (e, d) => events.push([e, d]), new AbortController().signal);
+    expect(events).toEqual([["text", { text: "你好" }]]);
+  });
+
   it("done 事件作为返回值", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: done\ndata: {"session_id":"s1"}\n\n',
     ]));
     const r = await chatStream("hi", [], null, [], () => {}, new AbortController().signal);
     expect(r).toEqual({ session_id: "s1" });
+  });
+
+  it("401 派发全局未授权事件并保留后端 detail", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "令牌已吊销" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    }));
+    const listener = vi.fn();
+    window.addEventListener(EV.unauthorized, listener);
+    try {
+      await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
+        .rejects.toMatchObject({ status: 401, message: "令牌已吊销" });
+      try {
+        await chatStream("hi", [], null, [], () => {}, new AbortController().signal);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApiError);
+      }
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener(EV.unauthorized, listener);
+    }
   });
 
   it("HTTP 错误抛异常", async () => {

@@ -33,7 +33,7 @@ class IngestPipeline:
     def __init__(self, storage: LocalStorage, embedder=None):
         self.storage = storage
         self.embedder = embedder
-        self.index_dir = storage.resolve(".index")
+        self.index_dir = storage.resolve(".index", allow_internal=True)
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
     def _safe_rel(self, rel_path: str) -> str:
@@ -94,9 +94,15 @@ class IngestPipeline:
             current_path = Path(current)
             dirs[:] = [
                 name for name in dirs
-                if name not in {".index", ".trash"} and not (current_path / name).is_symlink()
+                if name not in {".index", ".trash", ".storage.lock"}
+                and not name.startswith((".upload.", ".copy.", ".copy-old."))
+                and not (current_path / name).is_symlink()
             ]
             for name in files:
+                if name in {".storage.lock"} or name.startswith(
+                    (".upload.", ".copy.", ".copy-old."),
+                ):
+                    continue
                 source = current_path / name
                 if source.is_symlink():
                     continue

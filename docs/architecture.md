@@ -92,10 +92,13 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 
 ### 3.6 存储抽象（storage/）
 - `base.py`: Storage 协议（list/read/write/move/delete/stat）
-- `local.py`: 本地文件系统实现（路径安全：防穿越 + 组件级拒绝符号链接；写入原子：tmp + os.replace，独占写 os.link 防同名竞态）
-- `upload_index.py`: 秒传去重索引（md5→path，双向映射，读写加锁）
-- 索引生命周期自动同步：`container` 组装时 `storage.attach_index()` 反向注入，rename/move/删除/回收站/覆盖写等一切内容变更自动 `forget_path` 失效对应条目——秒传永不会命中已移动/已覆盖的旧路径
-- 搜索索引生命周期：`storage.attach_change_listener(tasks.handle_storage_change)` 在内容变更后同步失效旧 sidecar，再按文件/目录入队增量索引或批量重建；`.index` 和 `.trash` 永不触发递归任务
+- `local.py`: 本地文件系统实现。路径拒绝穿越和任一 symlink 组件；临时文件 0600，发布用 `dirfd + O_NOFOLLOW + os.replace/os.link`，父组件校验与写入不再有 symlink TOCTOU；复合写由进程内锁 + Linux `flock` 串行化
+- 覆盖/创建/文本追加均先写临时文件、`fsync` 后原子发布；文件以 `link/replace` 为可见性提交点，提交后的目录 `fsync` 或临时链接清理失败不会把已发布内容伪报为失败。追加锁覆盖“读旧值→追加→替换”全过程，避免并发追加丢内容。目录复制先在隐藏 staging 目录完整构建并 fsync，再用 Linux `renameat2` 原子 no-replace/exchange 一次发布；不支持原子系统调用时仅在 mutation lock 内做 no-replace/可回滚重命名（协作进程间安全，对不遵守 flock 的外部写入者仍有竞态窗口；生产部署为 Linux renameat2），并在挪动旧目标前 durable 写 recovery marker：重启会恢复尚未提交的旧目录或清理已提交后的 backup。提交点后的清理失败不会伪报复制失败；无 marker 的 `.copy-old.*` 因无法证明可删而保守保留
+- `.index`、`.trash`、`.storage.lock` 和在途 `.upload/.copy` 命名空间在公共 `resolve`/文件 API 层直接拒绝，仅内部流程可显式访问
+- 回收站 `.trash` 的输入路径和 metadata 内路径都重新校验；每次删除生成唯一 `trash_id`，同一路径多个历史版本可独立恢复；元数据也原子发布。恢复 API 正式使用 `trash_id`，暂兼容旧 `path`；孤儿 metadata 不展示并由清空操作回收
+- `upload_index.py`: 秒传去重索引（md5→path，双向映射）；sidecar `0600` 文件锁下每次 reload→modify→fsync→replace，支持 Linux 多进程实例。只有服务端实算 hash 的 `verified` 条目可用于免传，且必须绑定发布 revision，外部/并发覆盖后 lookup 自动失效
+- 索引生命周期自动同步：`container` 组装时 `storage.attach_index()` 反向注入，rename/move/删除/回收站/覆盖写等内容变更自动递归 `forget_path` 失效对应条目；存储与索引统一采用 storage→index 锁序，发布覆盖期间不会暴露陈旧秒传命中。上传发布成功后的 `record` 登记是优化项，登记失败只记 warning 不使上传报错（避免客户端重试经 noclobber 落成重复照片）；verified 查询靠 exists+revision 自愈陈旧条目
+- 搜索索引生命周期：`storage.attach_change_listener(tasks.handle_storage_change)` 在内容变更后同步失效旧 sidecar，再按文件/目录入队增量索引或批量重建；内部命名空间和 staging 永不触发递归任务
 - 业务代码只依赖 base，可平滑切换实现
 
 ### 3.7 Agent 工具注册（agent/tools/）
@@ -133,8 +136,9 @@ API / 文件写入 / 定时计划
 
 ### 3.10 版本化 API
 - `/api/v1/*`，版本路由聚合在 `api/v1/router.py`
-- 错误语义化：存储层异常映射 404/409/403（files.py `_friendly`），未匹配的 `/api` 路径返回 JSON 404（SPA fallback 不吐 HTML）
-- 上传端点：大小上限 413（流式限幅）；成功后返回索引任务 ID，不在请求事件循环执行 ingest
+- 错误语义化：存储层异常映射 404/409/403、裸 OSError（磁盘/IO 故障）映射 500 重试（files.py `_friendly`），未匹配的 `/api` 路径返回 JSON 404（SPA fallback 不吐 HTML）；客户端把永久 4xx 当可跳过照片，服务端瞬时故障绝不能落入 4xx
+- 上传端点：multipart 文件按 1MiB 分块流入数据根内 0600 临时文件，同时实算 MD5 和执行 413 限幅；声明 MD5 不一致即拒绝并清理。成功后原子发布、条件写 verified/revision 索引并返回后台索引任务 ID，不在请求事件循环执行 ingest
+- `GET /files/dedupe?md5=...` 是无副作用的 verified-only 免传预检；未命中 404。Android 先预检，真正上传仍由服务端复算，永不信任客户端 hash
 - 任务端点：`/tasks` 列表/详情/SSE，受限的重建和清理命令，以及取消/重试；不提供任意 task type/payload 创建接口
 - 破坏性变更升 v2，不破坏客户端
 
@@ -236,5 +240,5 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4）
 | **认证（单用户）** | ✅ 已落地 | auth/store.py（纯标准库 PBKDF2/HMAC）+ api/v1/auth.py + deps.get_owner 统一鉴权（Cookie/Bearer/?token=）；扫码配对免密，详见 docs/security.md |
 | 多用户 | 未做（个人项目） | 若需要：auth 层扩展 user 维度 |
 | **安卓原生壳** | ✅ 已落地 | frontend/android（Capacitor 7）：扫码配对、相册自动同步（WorkManager+秒传去重+整秒检查点+进度可视）、设备心跳、下拉刷新，详见 docs/android.md |
-| **上传去重（秒传）** | ✅ 已落地 | storage/upload_index.py + /files/upload 的 md5/noclobber 表单字段；索引随内容变更自动失效（attach_index） |
+| **上传去重（秒传）** | ✅ 已落地 | `/files/dedupe` verified-only 预检 + `/files/upload` 服务端流式实算 MD5；索引绑定文件 revision 并随内容变更自动失效 |
 | S3 存储 | 未做 | 若做：按 base 协议新增实现 + container 切换 |

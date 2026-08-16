@@ -1,6 +1,7 @@
 """API 集成测试（pytest 风格）：验证 v1 路由 + Container 组装。"""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -59,19 +60,26 @@ def test_auth_flow(tmp_path: Path):
         assert c.get("/api/v1/auth/status").json()["initialized"] is False
         r = c.post("/api/v1/auth/setup", json={"password": "password-abc-123"})
         assert r.status_code == 200
+        first_session = r.json()["session"]
         # 设置密码后直接已登录（cookie 已下发）
         assert c.get("/api/v1/auth/me").status_code == 200
-        # 登出
+        # 登出同时吊销服务端 session；复制出的 Bearer 也不能重放
         assert c.post("/api/v1/auth/logout").status_code == 200
         assert c.get("/api/v1/auth/me").status_code == 401
+        assert c.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {first_session}"}).status_code == 401
         # 错误密码 → 401；正确 → 200
         assert c.post("/api/v1/auth/login", json={"password": "wrong-password"}).status_code == 401
         assert c.post("/api/v1/auth/login", json={"password": "password-abc-123"}).status_code == 200
         # 颁发设备令牌 → Bearer 可用 → 吊销后失效
         tok = c.post("/api/v1/auth/device-token", json={"device_id": "dev-x"}).json()["token"]
         assert c.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+        # App 用 Bearer 登出会吊销当前设备令牌。
+        with TestClient(app) as phone:
+            assert phone.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+            assert phone.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
+        tok = c.post("/api/v1/auth/device-token", json={"device_id": "dev-x"}).json()["token"]
         container.auth.revoke_device("dev-x")
-        c.cookies.clear()  # 去掉登录 cookie，单独验证 Bearer 吊销生效
+        c.cookies.clear()  # 去掉登录 cookie，单独验证设备列表吊销生效
         assert c.get("/api/v1/files", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
 
 
@@ -142,6 +150,7 @@ def test_upload_too_large_413(tmp_path: Path):
         big = b"x" * (1024 * 1024 + 10)
         r = c.post("/api/v1/files/upload", files={"file": ("big.bin", big, "application/octet-stream")})
         assert r.status_code == 413
+        assert not list(container.storage.root.glob(".upload.*.tmp"))
         ok = c.post("/api/v1/files/upload", files={"file": ("small.bin", b"hi", "application/octet-stream")})
         assert ok.status_code == 200
 
@@ -163,26 +172,59 @@ def test_status_not_configured(client):
 
 
 def test_upload_dedup_and_noclobber(client):
-    """秒传（md5 去重）与同名冲突自动加序号。"""
-    c, _ = client
-    # 首次上传（带 md5 + noclobber）
+    """服务端实算 MD5、免传预检与同名冲突自动加序号。"""
+    c, container = client
+    photo = b"photo-bytes"
+    photo_md5 = hashlib.md5(photo, usedforsecurity=False).hexdigest()
+    other = b"other-bytes"
+    other_md5 = hashlib.md5(other, usedforsecurity=False).hexdigest()
+
     r = c.post("/api/v1/files/upload?path=相册同步/2026-08-14",
-               files={"file": ("IMG_0001.jpg", b"photo-bytes", "image/jpeg")},
-               data={"md5": "d41d8cd98f00b204e9800998ecf8427e", "noclobber": "true"})
+               files={"file": ("IMG_0001.jpg", photo, "image/jpeg")},
+               data={"md5": photo_md5, "noclobber": "true"})
     assert r.status_code == 200
     assert r.json()["uploaded"]["path"] == "相册同步/2026-08-14/IMG_0001.jpg"
-    # 同内容再传（不同名）→ 秒传命中，不落新文件
+
+    # Android 先做免传预检；只命中服务端实算并标记 verified 的索引。
+    hit = c.get("/api/v1/files/dedupe", params={"md5": photo_md5})
+    assert hit.status_code == 200
+    assert hit.json()["uploaded"]["deduped"] is True
+
+    # 兼容旧客户端：即便仍上传同内容，服务端校验后也返回已存在文件。
     r2 = c.post("/api/v1/files/upload?path=相册同步/2026-08-14",
-                files={"file": ("别的名字.jpg", b"photo-bytes", "image/jpeg")},
-                data={"md5": "d41d8cd98f00b204e9800998ecf8427e"})
+                files={"file": ("别的名字.jpg", photo, "image/jpeg")},
+                data={"md5": photo_md5})
     assert r2.status_code == 200
     assert r2.json()["uploaded"].get("deduped") is True
-    # 同名不同内容 + noclobber → 自动 -2 序号，不覆盖
+
+    # 声明 hash 与内容不一致必须拒绝，且不留下临时文件/污染索引。
+    bad = c.post("/api/v1/files/upload",
+                 files={"file": ("bad.jpg", photo, "image/jpeg")},
+                 data={"md5": other_md5})
+    assert bad.status_code == 400
+    assert "不一致" in bad.json()["detail"]
+    assert not container.storage.exists("bad.jpg")
+    assert not list(container.storage.root.glob(".upload.*.tmp"))
+
     r3 = c.post("/api/v1/files/upload?path=相册同步/2026-08-14",
-                files={"file": ("IMG_0001.jpg", b"other-bytes", "image/jpeg")},
-                data={"md5": "aabbccdd11223344556677889900aabb", "noclobber": "true"})
+                files={"file": ("IMG_0001.jpg", other, "image/jpeg")},
+                data={"md5": other_md5, "noclobber": "true"})
     assert r3.status_code == 200
     assert r3.json()["uploaded"]["path"] == "相册同步/2026-08-14/IMG_0001-2.jpg"
+
+
+def test_device_query_token_only_allows_media_gets(client):
+    """?token= 只为 raw/download 媒体 GET 放行，不能访问列表、状态或写接口。"""
+    c, container = client
+    container.storage.save_bytes("media.txt", b"hello")
+    token = container.auth.issue_device_token("media-device")
+    c.cookies.clear()
+
+    assert c.get("/api/v1/files/raw", params={"path": "media.txt", "token": token}).status_code == 200
+    assert c.get("/api/v1/files/download", params={"path": "media.txt", "token": token}).status_code == 200
+    assert c.get("/api/v1/files", params={"token": token}).status_code == 401
+    assert c.get("/api/v1/status", params={"token": token}).status_code == 401
+    assert c.post("/api/v1/files/mkdir", params={"path": "bad", "token": token}).status_code == 401
 
 
 def test_files_upload_and_list(client):
@@ -206,6 +248,30 @@ def test_error_semantics(client):
     c.post("/api/v1/files/upload", files={"file": ("b.txt", b"2", "text/plain")})
     r = c.post("/api/v1/files/move", params={"src": "b.txt", "dst_dir": ""})
     assert r.status_code == 409
+
+
+def test_friendly_maps_server_io_errors_to_retryable_500():
+    """裸 OSError 是服务端故障，必须 500 重试；Android 会把 400 当永久跳过。"""
+    from app.api.v1.files import _friendly
+
+    assert _friendly(OSError("disk full")).status_code == 500
+    assert _friendly(FileNotFoundError("x")).status_code == 404
+    assert _friendly(FileExistsError("x")).status_code == 409
+    assert _friendly(PermissionError("x")).status_code == 403
+    assert _friendly(ValueError("bad input")).status_code == 400
+
+
+def test_upload_succeeds_even_when_index_record_fails(client, monkeypatch):
+    """发布成功后去重索引登记失败不得让上传报错，否则客户端重试产生重复照片。"""
+    c, container = client
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(container.upload_index, "record", boom)
+    r = c.post("/api/v1/files/upload", files={"file": ("ok.txt", b"data", "text/plain")})
+    assert r.status_code == 200
+    assert container.storage.exists("ok.txt")
 
 
 def test_api_404_returns_json(client):
@@ -245,6 +311,12 @@ def test_files_path_traversal_blocked(client):
     c, _ = client
     r = c.get("/api/v1/files/download", params={"path": "../../../etc/passwd"})
     assert r.status_code == 403
+    assert c.get("/api/v1/files/download", params={"path": ".storage.lock"}).status_code == 403
+    hidden = c.post(
+        "/api/v1/files/upload?path=.trash",
+        files={"file": ("hidden.txt", b"x", "text/plain")},
+    )
+    assert hidden.status_code == 403
 
 
 def test_chat_requires_config(client):

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { chatStream } from "@/lib/api/chat";
-import { V1, authHeaders } from "@/lib/api/client";
+import { api } from "@/lib/api/client";
 import { getSession, summarizeSession } from "@/lib/api/sessions";
 import { EV, emitFilesChanged } from "@/lib/events";
 import { ToolStep } from "./ToolStep";
@@ -33,6 +33,10 @@ interface PendingConfirmation {
 const FILES_TOOLS = ["list_files", "search_files", "read_file", "write_file", "append_file",
   "copy_file", "create_folder", "rename_file", "move_file", "delete_file", "get_storage_info",
   "read_document", "search_content", "semantic_search", "index_stats"];
+
+export function chatTextDelta(data: Record<string, unknown>): string {
+  return typeof data.text === "string" ? data.text : "";
+}
 
 const QUICK_ACTIONS = [
   { icon: "📂", label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
@@ -118,11 +122,11 @@ export default function ChatPanel() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${V1}/automation/latest`, { credentials: "include", headers: authHeaders() });
-        if (r.ok) {
-          const d = await r.json() as { report?: { date: string; text: string } | null };
-          if (d.report && !isReportRead(d.report.date)) setAutoReport(d.report);
-        }
+        const d = await api<{ report?: { date: string; text: string } | null }>(
+          "/automation/latest",
+          { cache: "no-store" },
+        );
+        if (d.report && !isReportRead(d.report.date)) setAutoReport(d.report);
       } catch { /* 忽略 */ }
     })();
   }, [messages.length === 0 ? sessionId : sessionId]);
@@ -210,7 +214,9 @@ export default function ChatPanel() {
     try {
       const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
         if (event === "text") {
-          replyRef += data as unknown as string;
+          const delta = chatTextDelta(data);
+          if (!delta) return;
+          replyRef += delta;
           if (!streamTimerRef.current) {
             streamTimerRef.current = setTimeout(() => {
               streamTimerRef.current = null;
