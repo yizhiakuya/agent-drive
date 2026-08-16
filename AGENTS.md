@@ -41,7 +41,8 @@ for t in test_agent test_critic test_reliability test_retry test_compress test_w
 cd frontend && npm run build    # TS 类型检查 + 静态导出 out/
 npm test                        # vitest
 
-# 安卓 APK（本机环境：JAVA_HOME=Temurin 21，ANDROID_HOME=C:\Android\Sdk，Gradle 8.14.3）
+# 安卓 APK（仅测试 App 业务或发版时构建；日常功能迭代不打包）
+# 本机环境：JAVA_HOME=Temurin 21，ANDROID_HOME=C:\Android\Sdk，Gradle 8.14.3
 cd frontend/android && gradlew.bat assembleRelease
 # 产物：app/build/outputs/apk/release/app-release.apk（keystore.properties 就位则自动签名）
 ```
@@ -53,10 +54,11 @@ cd frontend/android && gradlew.bat assembleRelease
    后端/任务代码有改动重启 `agent-drive.service agent-drive-worker.service`（纯前端改动无需重启）。首次安装或 unit 变更还要复制 `deploy/agent-drive*.service` 到 `/etc/systemd/system/` 后 `systemctl daemon-reload`；`/etc/agent-drive/proxy.env` 从 `deploy/proxy.env.example` 创建、chmod 0600，并确认只含 HTTP(S) 代理
 3. **前端产物**：`tar -cf out.tar -C out .` → scp → 服务器 out.new 解包 → 原子替换 out/。
    ⚠️ 不要用 PowerShell 通配符 `out\*` scp——会漏掉点开头的目录（.well-known/assetlinks.json）；tar 全量打包是安全做法
-4. **发布 APK**：拷贝 app-release.apk → `out/app/agent-drive.apk` → 随前端一起部署。
+   服务器原地重建：`bash deploy/rebuild-out.sh`（自动快照旧 out → build → 恢复 APK → chmod，一条命令）
+4. **发布 APK**（仅测试 App 业务或发版时）：拷贝 app-release.apk → `out/app/agent-drive.apk` → 随前端一起部署。
    下载地址恒定：https://home.rainaki.top:13311/app/agent-drive.apk；
    ⚠️ APK 不要放进 public/（会被 cap sync 嵌套打包进 App 自身资源）；
-   ⚠️ 在服务器原地 `npm run build` 会清空 out/ 并丢掉手工拷入的 out/app/——重建后必须从 `/root/agent-drive-rollbacks/` 恢复 agent-drive.apk，并 `chmod -R a+rX out/`（build 产物默认 0600）
+   ⚠️ 日常迭代不打包 APK——`next build` 会清空 out/，rebuild-out.sh 只从旧产物恢复既有 APK 保持下载地址可用，不触发任何 APK 构建
 5. **数据备份**：deploy/agent-drive-backup.{service,timer} 已在服务器安装启用（每日 04:00，/root/backups 轮转 7 份）；`tasks.sqlite3` 必须经 Python sqlite3 backup API 生成一致快照，禁止直接打包活动中的 WAL 三件套
 
 ## 4. 关键约定与坑位（改动前必读）
@@ -125,7 +127,7 @@ cd frontend/android && gradlew.bat assembleRelease
 
 - [ ] 后端改动 → `ruff check app/` + 对应 unit/integration 测试；前端改动 → `npm run build` + `npm test`；原生改动 → APK 构建验证
 - [ ] 全量门禁：backend unit + integration + vitest 全绿再提交
-- [ ] 版本号 +1（涉及 App 行为/资源变更时）
+- [ ] 版本号 +1 / APK 构建（仅测试 App 业务或发版时；日常功能迭代跳过打包）
 - [ ] 同步文档 + 本 skill：README / docs/* 相应小节 / AGENTS.md（铁律 §0，同一次提交内完成）
 - [ ] 提交并推送 → 服务器 git pull（后端同时 restart API+Worker）→ 前端 tar 部署 / APK 发布
 
