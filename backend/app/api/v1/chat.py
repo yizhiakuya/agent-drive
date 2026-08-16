@@ -37,6 +37,9 @@ async def chat_stream(req: ChatRequest, container=Depends(get_container)):
             async for event, payload in loop.run_stream(
                 req.message, req.history, req.confirmations, req.session_id
             ):
+                # 线上契约：SSE 每个 data 必须是 JSON 对象（前端解析器拒绝裸字符串）
+                if event == "text" and isinstance(payload, str):
+                    payload = {"text": payload}
                 data = _json.dumps(payload, ensure_ascii=False)
                 yield f"event: {event}\ndata: {data}\n\n"
         except Exception as e:

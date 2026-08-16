@@ -104,7 +104,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **systemd unit 语法**：`StartLimitIntervalSec/StartLimitBurst` 放 `[Unit]`；systemd 不支持指令值后的行尾注释（会把注释当值并忽略安全项）。unit 变更部署前必须跑 `systemd-analyze verify`，Agent Drive unit 不得出现 warning
 - **前端 GET 去重与身份隔离**：cache key 必须含 API base + credential generation + cache generation + path；凭据代次与缓存代次分离，旧 in-flight 不得写入新身份/新缓存或派发迟到 401。每个非 GET 在请求开始和结束（成功、HTTP 错误、网络异常、Abort）都独立失效，交错写不能跳过结束清理
 - **原生登出语义**：先清 EncryptedSharedPreferences 再清进程令牌；安全存储清理失败必须停留并报错。离线/5xx 本地退出后只提示“服务端吊销状态未知”，401/403 视为凭据已不可用，勿误报旧令牌仍有效
-- **chat SSE 解析**：chatStream 必须处理 LF/CRLF/CR、换行跨 chunk、UTF-8 码点跨 chunk、多行 data 和无终止空行的尾事件；401 与普通 API/上传共用 `EV.unauthorized`，错误保留后端 detail
+- **chat SSE 解析**：chatStream 必须处理 LF/CRLF/CR、换行跨 chunk、UTF-8 码点跨 chunk、多行 data 和无终止空行的尾事件；401 与普通 API/上传共用 `EV.unauthorized`，错误保留后端 detail。**线上契约：每个 SSE data 必须是 JSON 对象**（前端解析器拒绝裸字符串）——text 事件形状 `{"text": str}`，后端 chat.py 负责把 run_stream 的裸字符串 payload 包成对象（集成测试钉死契约，勿改回裸字符串）
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
 - **前端复用单元**：全站 UI 规范见 `docs/frontend-design.md`（控件清单/排版/反馈/反模式清单）；新控件一律用 `components/ui/`（shadcn，radix 底座），**禁止内联自造复刻**——一个值只允许一个控件（选择+手输并存用 Combobox，禁止 select+input 并列）。业务复用单元：文件预览 `FilePreview`、时间格式化 `fmtTime`、原生重扫 `useRescan`、协议/预设枚举 `lib/llm-options.ts`（新增协议需同步 backend `ProviderType`）
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
