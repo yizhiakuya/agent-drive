@@ -32,6 +32,7 @@ from .memory.preferences import MemoryStore
 from .memory.sessions import SessionStore
 from .prompt import build_chat_prompt, build_system_prompt
 from .router import classify
+from .sanitize import ToolMarkupStripper, sanitize_tool_markup
 from .skills import SkillsRegistry
 from .tools.plan import register_plan_tools
 from .tools.registry import ToolRegistry
@@ -268,16 +269,24 @@ class AgentLoop:
             *build_history(history, 2000),
             {"role": "user", "content": user_message},
         ]
+        stripper = ToolMarkupStripper()  # 剔除模型正文里模拟工具调用的 DSML/XML 标记
         try:
             async for chunk in self.llm.stream_chat(chat_messages):
                 self._add_usage(None, chunk)
-                reply_parts.append(chunk)
-                yield ("text", chunk)
+                clean = stripper.feed(chunk)
+                if clean:
+                    reply_parts.append(clean)
+                    yield ("text", clean)
+            tail = stripper.flush()
+            if tail:
+                reply_parts.append(tail)
+                yield ("text", tail)
         except (NotImplementedError, TypeError):
             result = await self.llm.chat(chat_messages)
             self._add_usage(result.usage)
-            reply_parts.append(result.content or "")
-            yield ("text", result.content or "")
+            clean = sanitize_tool_markup(result.content or "")
+            reply_parts.append(clean)
+            yield ("text", clean)
         # 持久化（标题取首句，会话恢复时可回看）
         if self.sessions is not None and sid:
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
@@ -554,13 +563,20 @@ class AgentLoop:
     async def _final_reply(self, messages, result, sid, started, tool_trace, consumed_nonces, user_message, step):
         """流式最终回复 + 持久化（工具轨迹/会话/笔记/标题）+ done。"""
         full_reply = ""
+        stripper = ToolMarkupStripper()  # 剔除模型正文里模拟工具调用的 DSML/XML 标记
         try:
             async for chunk in self.llm.stream_chat(messages):
                 self._add_usage(None, chunk)
-                full_reply += chunk
-                yield ("text", chunk)
+                clean = stripper.feed(chunk)
+                if clean:
+                    full_reply += clean
+                    yield ("text", clean)
+            tail = stripper.flush()
+            if tail:
+                full_reply += tail
+                yield ("text", tail)
         except (NotImplementedError, TypeError):
-            full_reply = result.content or ""
+            full_reply = sanitize_tool_markup(result.content or "")
             self._add_usage(None, full_reply)
             yield ("text", full_reply)
 
