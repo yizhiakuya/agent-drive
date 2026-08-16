@@ -88,3 +88,30 @@ def test_max_hold_releases_oversized_pending():
     out = s.feed("<" + "长" * 3000)  # 疑似标记开头但超长（无换行）→ 放弃识别
     assert out == "<" + "长" * 3000
     assert s.flush() == ""
+
+def test_streaming_no_leak_when_chunk_ends_with_partial_tag():
+    """chunk 边界把标签从 '<'/'<|'/'</' 后切断时不得泄漏标记原文（生产回归：
+    会话正文曾出现 <tool_calls> 原文——_safe_cut 必须扣留行尾残缺起始符）。"""
+    text = "我先查一下。\n\n<tool_calls>\n<invoke name=\"get_system_status\">\n</invoke>\n</tool_calls>"
+    for cut in ("<", "<|", "</", "<t", "</i"):
+        s = ToolMarkupStripper()
+        idx = text.find(cut) + len(cut)
+        out = s.feed(text[:idx])
+        out += s.feed(text[idx:])
+        out += s.flush()
+        assert "<" not in out and "invoke" not in out, f"cut={cut!r} 泄漏: {out!r}"
+    # 单切点穷举：任意位置断流都不泄漏
+    for i in range(1, len(text)):
+        s = ToolMarkupStripper()
+        out = s.feed(text[:i]) + s.feed(text[i:]) + s.flush()
+        assert "<" not in out, f"切点 {i} 泄漏: {out!r}"
+
+
+def test_streaming_still_releases_plain_text_with_angle():
+    """普通文本 '<3'、'a < b'、行首 '</3' 不受扣留影响（原样放行）。"""
+    s = ToolMarkupStripper()
+    out = s.feed("我 <3 这个") + s.feed("项目，a < b 且") + s.flush()
+    assert out == "我 <3 这个项目，a < b 且"
+    s2 = ToolMarkupStripper()
+    out = s2.feed("行首\n</3 不是标签") + s2.flush()
+    assert out == "行首\n</3 不是标签"

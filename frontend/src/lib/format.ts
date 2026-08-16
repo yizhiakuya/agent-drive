@@ -56,8 +56,16 @@ export function fmtToolArgs(tool: string, args: Record<string, unknown>): string
     case "view_audit_log": return "查看审计日志";
     case "analyze_failures": return "分析失败记录";
     case "run_automation_now": return "执行自动化规则";
-    default: return JSON.stringify(a);
+    case "configure_embeddings": return `配置向量服务 ${String(a.model || "")}`;
+    default: return maskSecretsJson(a);
   }
+}
+
+/** JSON 展示脱敏：键名含 key/token/secret/password 的值一律 ***（工具参数/确认卡展示用）。 */
+export function maskSecretsJson(obj: unknown): string {
+  return JSON.stringify(obj, (k, v) =>
+    typeof k === "string" && /key|token|secret|password|authorization/i.test(k) ? "***" : v
+  );
 }
 
 export const TOOL_ICONS: Record<string, string> = {

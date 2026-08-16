@@ -48,12 +48,16 @@ _SENSITIVE_PATTERNS = tuple(
     re.compile(r'("?' + key + r'"?' + r'\s*[:=]\s*"?)([^",\s}]+)("?)', re.IGNORECASE)
     for key in ("api_key", "password", "token", "authorization", "secret", "key")
 )
+# 裸令牌（无键名上下文）：Jina 与 OpenAI 风格 API Key。
+# 阈值 12+ 字符，避免误伤短词；用户把 key 直接贴进聊天/记忆时也拦截
+_BARE_TOKEN = re.compile(r"\b(?:jina_[A-Za-z0-9]{12,}|sk-[A-Za-z0-9_-]{12,})\b")
 
 
 def redact_text(text: str) -> str:
-    """脱敏：key=value / "key": "value" 形式的敏感值替换为 ***。"""
+    """脱敏：key=value / "key": "value" 形式与裸令牌（jina_/sk-）替换为 ***。"""
     for pattern in _SENSITIVE_PATTERNS:
         text = pattern.sub(r"\1***\3", text)
+    text = _BARE_TOKEN.sub("***", text)
     return text
 
 

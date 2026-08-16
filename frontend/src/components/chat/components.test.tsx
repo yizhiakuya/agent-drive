@@ -83,6 +83,14 @@ describe("ToolStep 工具步骤", () => {
     render(<ToolStep step={{ tool: "read_file", arguments: { path: "x" }, status: "error", output: "{\"ok\":false,\"error\":\"文件不存在\"}", parsed: { ok: false, error: "文件不存在" } }} />);
     expect(screen.getByText(/失败/)).toBeInTheDocument();
   });
+  it("对象型 parsed 渲染为完整 JSON 而非截断原文", () => {
+    const parsed = { llm_configured: true, embeddings: { configured: false, model: "" } };
+    render(<ToolStep step={{ tool: "get_system_status", arguments: {}, status: "done", output: "{\"llm_configured\": true, \"embeddings\":", parsed }} />);
+    fireEvent.click(screen.getByText("get_system_status"));
+    expect(screen.getByText(/"configured": false/)).toBeInTheDocument();
+    expect(screen.getByText(/"model": ""/)).toBeInTheDocument();
+  });
+
   it("list_files 结果渲染为表格", () => {
     render(<ToolStep step={{
       tool: "list_files", arguments: {}, status: "done",

@@ -40,6 +40,16 @@ def test_redact_text_masks_sensitive_kv():
     assert "ok=1" in out
 
 
+def test_redact_text_masks_bare_tokens():
+    """无键名上下文的裸 API Key（用户直接贴进聊天/记忆）也要脱敏。"""
+    out = redact_text("配置向量 jina_abcdefghijklm 和 sk-abcd1234efgh5678 试试")
+    assert "jina_abcdefghijklm" not in out
+    assert "sk-abcd1234efgh5678" not in out
+    assert "***" in out
+    # 短字符串不误伤
+    assert redact_text("jina_abc sk-xy") == "jina_abc sk-xy"
+
+
 def test_redact_value_masks_by_key_and_recurses():
     data = {"api_key": "sk-x", "nested": {"Authorization": "Bearer y"}, "items": ["password=z"], "fine": "ok"}
     out = redact_value(data)

@@ -11,6 +11,7 @@ import { ToolStep } from "./ToolStep";
 import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
+import { maskSecretsJson } from "@/lib/format";
 import { useChatStream, chatTextDelta } from "./useChatStream";
 import type { Message, PendingConfirmation } from "./useChatStream";
 
@@ -257,7 +258,7 @@ export default function ChatPanel() {
             <div className="text-danger font-bold mb-2">⚠️ 高风险操作确认</div>
             <div className="text-sm leading-relaxed mb-3">
               Agent 请求执行：<code className="bg-danger/15 px-2 py-0.5 rounded text-danger">{pending.tool}</code>{" "}
-              <code className="bg-danger/15 px-2 py-0.5 rounded text-danger">{JSON.stringify(pending.arguments)}</code>
+              <code className="bg-danger/15 px-2 py-0.5 rounded text-danger">{maskSecretsJson(pending.arguments)}</code>
               <br />此操作<b>不可撤销</b>，是否继续？
             </div>
             <div className="flex gap-2.5">

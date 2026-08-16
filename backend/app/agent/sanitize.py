@@ -31,8 +31,9 @@ _PAIRED_BLOCK = re.compile(
     r"|<function_calls>[\s\S]*</function_calls>"
 )
 
-# 疑似标记行起点：行首 < 且后随 | 或字母（用于流式扣留判断）
-_TAG_START = re.compile(r"(?m)^[ \t]*<(?=\|?[a-zA-Z_])")
+# 疑似标记行起点：行首 < 且后随 |、/ 或字母（用于流式扣留判断）。
+# 注意 \Z：chunk 恰好以单独的 '<' 结尾时也必须扣留（否则后续 'tool_calls>' 泄漏）
+_TAG_START = re.compile(r"(?m)^[ \t]*<(?=[/|]?[a-zA-Z_]|\Z)")
 
 
 def sanitize_tool_markup(text: str) -> str:
@@ -90,6 +91,14 @@ class ToolMarkupStripper:
         if final:
             return len(self._pending)
         starts = [m.start() for m in _TAG_START.finditer(self._pending)]
+        # chunk 边界可能把标签从 '<' / '<|' 后切断：单独 '<' 或 '<|' 落在行尾时，
+        # lookahead（< 后须跟字母或 |）匹配不到，不扣留会把 '<' 提前放行——
+        # 后续 chunk 的 'tool_calls>' 无法再组成标签，标记原文泄漏
+        # （生产实测：会话正文出现 <tool_calls> 原文；fuzz 半数分块方式可触发）
+        if self._pending.endswith("<|") or self._pending.endswith("</"):
+            starts.append(len(self._pending) - 2)
+        elif self._pending.endswith("<"):
+            starts.append(len(self._pending) - 1)
         if not starts:
             return len(self._pending)
         cut = starts[-1]

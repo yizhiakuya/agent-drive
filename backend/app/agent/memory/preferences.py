@@ -299,13 +299,14 @@ class MemoryStore:
 
     # ---------- 每日笔记（工作层） ----------
     def daily_note(self, line: str) -> None:
-        """追加一行到今日笔记（会话活动记录）"""
+        """追加一行到今日笔记（会话活动记录；密钥脱敏后落盘）。"""
+        from ...core.logging import redact_text
         today = date.today().isoformat()
         note = self.notes_dir / f"{today}.md"
         if not note.exists():
             note.write_text(f"# {today}\n\n", encoding="utf-8")
         with open(note, "a", encoding="utf-8") as f:
-            f.write(f"- {line}\n")
+            f.write(f"- {redact_text(line)}\n")
 
     def yesterday_notes(self) -> list[str]:
         """昨天笔记内容（dreaming 巩固用）"""

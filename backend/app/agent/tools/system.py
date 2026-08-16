@@ -20,6 +20,7 @@ def register_system_tools(
     # ---------- 查看系统状态 ----------
     async def get_system_status() -> dict[str, Any]:
         cfg = llm.load()
+        emb = cfg.embeddings if cfg else None
         return {
             "llm_configured": cfg is not None and bool(cfg.api_key),
             "llm": {
@@ -27,6 +28,15 @@ def register_system_tools(
                 "base_url": cfg.base_url if cfg else None,
                 "model": cfg.model if cfg else None,
             } if cfg else None,
+            # 向量服务状态：Agent 必须能直接看到 embedding 是否已配置，
+            # 不能靠全盘扫描的 index_stats 猜（生产会话曾因此幻觉"已配置完成"）
+            "embeddings": {
+                "configured": bool(emb and emb.api_key),
+                "provider": emb.provider if emb else None,
+                "base_url": emb.base_url if emb else None,
+                "model": emb.model if emb else None,
+                "api_key_masked": (emb.api_key[:6] + "…") if emb and emb.api_key else "",
+            } if emb else None,
             "provider_options": PROVIDER_LABELS,
             "preferences": memory.all(),
             "rules": memory.list_rules(),
@@ -36,13 +46,13 @@ def register_system_tools(
     reg.register(
         ToolSpec(
             "get_system_status",
-            "查看系统当前状态：LLM 配置、偏好、规则、可用工具",
+            "查看系统当前状态：LLM/向量服务配置、偏好、规则、可用工具",
             {},
             doc=(
                 "用途：查看 Agent Drive 系统全貌。\n"
                 "参数：无。\n"
-                "输出：{llm_configured, llm, provider_options, preferences, rules, available_tools}。\n"
-                "注意：不暴露 API Key 明文。"
+                "输出：{llm_configured, llm, embeddings(configured/provider/model/api_key_masked), provider_options, preferences, rules, available_tools}。\n"
+                "注意：不暴露 API Key 明文（仅掩码前缀）。"
             ),
         ),
         get_system_status,
@@ -147,6 +157,73 @@ def register_system_tools(
             },
         ),
         set_llm_provider,
+        level="red",
+        group="system",
+    )
+
+    # ---------- 配置向量服务（Agent-first 配置入口） ----------
+    async def configure_embeddings(
+        provider: str,
+        base_url: str,
+        api_key: str,
+        model: str,
+    ) -> dict[str, Any]:
+        from ...llm.manager import EmbeddingConfig
+        cfg = llm.load()
+        if cfg is None:
+            return {"ok": False, "error": "LLM 未配置，请先完成 Onboarding"}
+        if provider != "jina":
+            return {"ok": False, "error": "当前仅支持 Jina embedding provider"}
+        # key 留空沿用语义（与设置页 PUT /config/embeddings 一致）：
+        # 仅当 provider/base_url/model 与已存配置一致才回退已存 key
+        incoming_key = api_key.strip()
+        base = base_url.strip() or "https://api.jina.ai/v1"
+        name = model.strip() or "jina-embeddings-v3"
+        if not incoming_key:
+            old = cfg.embeddings
+            if old is not None and old.provider == provider and old.base_url == base and old.model == name:
+                incoming_key = old.api_key
+            else:
+                return {"ok": False, "error": "api_key 留空仅当 provider/base_url/model 与已存配置一致时才沿用已存 key；改配置必须重填"}
+        new_emb = EmbeddingConfig(provider=provider, base_url=base, api_key=incoming_key, model=name)
+        cfg.embeddings = new_emb
+        llm.save(cfg)
+        # 测试连接（不阻塞保存，与设置页行为一致）
+        diag = await llm.get_embedding_provider().test_connection()
+        task = None
+        if diag.get("ok") and tasks is not None:
+            tasks.refresh_embedder()
+            job, _ = tasks.enqueue_rebuild(force=True, origin="embedding.config")
+            task = job.to_dict()
+        return {
+            "ok": True,
+            "saved": {"provider": provider, "base_url": base, "model": name},
+            "test": diag,
+            "rebuild_task": task,
+        }
+
+    reg.register(
+        ToolSpec(
+            "configure_embeddings",
+            "配置向量化（语义搜索）服务并测试连接",
+            {
+                "type": "object",
+                "properties": {
+                    "provider": {"type": "string", "description": "服务商，当前仅支持 jina"},
+                    "base_url": {"type": "string", "description": "API 地址，如 https://api.jina.ai/v1"},
+                    "api_key": {"type": "string", "description": "API Key；留空且 provider/base_url/model 与已存配置一致时沿用已存 key"},
+                    "model": {"type": "string", "description": "模型名，如 jina-embeddings-v3"},
+                },
+                "required": ["provider", "base_url", "api_key", "model"],
+            },
+            doc=(
+                "用途：配置语义搜索用的 embedding（向量化）服务（如 Jina AI）。\n"
+                "参数：provider/base_url/api_key/model；api_key 留空仅在其余三项与已存配置一致时沿用已存 key。\n"
+                "输出：{ok, saved, test(连接诊断), rebuild_task(连接成功时自动重建向量索引的任务)}。\n"
+                "注意：配置成功后系统会自动入队向量索引重建；连接测试失败也会保存配置（与设置页一致），test.ok=false 时告知用户并建议复核 key。"
+            ),
+        ),
+        configure_embeddings,
         level="red",
         group="system",
     )

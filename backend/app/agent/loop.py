@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from ..core.logging import redact_text, redact_value
 from ..core.retry import is_retryable_error
 from ..llm.base import LLMProvider, ToolSpec
 from .confirm import issue_confirmation, verify_confirmation
@@ -169,7 +170,7 @@ class AgentLoop:
             "role": "user",
             "content": "给以下对话起一个简短标题（不超过 10 个字，不要标点符号，直接输出标题本身）：\n" + transcript,
         }])
-        title = (result.content or "").strip()
+        title = sanitize_tool_markup((result.content or "").strip())
         title = title.strip('。！!？?""“”\' ')[:20]
         if title:
             sessions.update_summary(sid, summary=None, title=title)
@@ -199,9 +200,11 @@ class AgentLoop:
                 self.sessions.append(sid, {
                     "role": "tool_call",
                     "tool": t.get("tool"),
-                    "arguments": t.get("arguments", {}),
-                    "output": t.get("output", "")[:2000],
-                    "parsed": t.get("parsed"),
+                    # 密钥脱敏：工具参数（如 api_key）与输出落库前必须过 redact，
+                    # 勿存明文（审计层有脱敏，会话/记忆层此前缺失）
+                    "arguments": redact_value(t.get("arguments", {})),
+                    "output": redact_text(t.get("output", "")[:2000]),
+                    "parsed": redact_value(t.get("parsed")),
                     "ts": time.time(),
                 })
             except Exception:
@@ -216,12 +219,15 @@ class AgentLoop:
             output = await self.tools.execute(name, arguments)
         if len(output) > self.max_tool_output:
             output = output[:self.max_tool_output] + "\n...[截断]"
+        # parsed 用完整输出解析（此前用 output[:500] 截断片段，get_system_status
+        # 等 >500B 的 JSON 必然截断失败 → parsed=None → 前端降级为半截原文）
         entry = {
             "step": step,
             "tool": name,
             "arguments": arguments,
             "output": output[:500],
-            "parsed": try_parse_json(output[:500]),
+            "parsed": try_parse_json(output),
+            "output_truncated": len(output) > 500,
         }
         return output, entry
 
@@ -293,14 +299,14 @@ class AgentLoop:
             clean = sanitize_tool_markup(result.content or "")
             reply_parts.append(clean)
             yield ("text", clean)
-        # 持久化（标题取首句，会话恢复时可回看）
+        # 持久化（标题取首句，会话恢复时可回看；密钥脱敏后落库）
         if self.sessions is not None and sid:
-            self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
-            self.sessions.append(sid, {"role": "assistant", "content": "".join(reply_parts), "ts": time.time()})
+            self.sessions.append(sid, {"role": "user", "content": redact_text(user_message), "ts": time.time()})
+            self.sessions.append(sid, {"role": "assistant", "content": redact_text("".join(reply_parts)), "ts": time.time()})
             self.sessions.update_meta(sid, last_routed="chat")
             meta_now = self.sessions.get(sid)
             if meta_now and (not meta_now.get("title") or meta_now.get("title") == "新会话"):
-                title = user_message.strip().replace("\n", " ")[:24] or "闲聊"
+                title = redact_text(user_message.strip().replace("\n", " ")[:24]) or "闲聊"
                 self.sessions.update_meta(sid, title=title)
         yield ("done", {
             "steps": 1,
@@ -347,7 +353,8 @@ class AgentLoop:
             if sid is None or self.sessions.get(sid) is None:
                 meta = self.sessions.create()
                 sid = meta["id"]
-            self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
+            # 密钥脱敏后落库：用户可能把 key 贴进聊天，会话历史不留明文
+            self.sessions.append(sid, {"role": "user", "content": redact_text(user_message), "ts": time.time()})
             # 标记本轮路径：短消息续接路由依赖（chat/task 均写，见 _execute）
             self.sessions.update_meta(sid, last_routed="task")
 
@@ -607,9 +614,14 @@ class AgentLoop:
         needs_summary = False
         if self.sessions is not None and sid:
             self._persist_tool_trace(sid, tool_trace)
-            self.sessions.append(sid, {"role": "assistant", "content": full_reply, "ts": time.time()})
+            self.sessions.append(sid, {"role": "assistant", "content": redact_text(full_reply), "ts": time.time()})
             try:
-                self.sessions.update_meta(sid, last_trace=tool_trace, consumed_nonces=sorted(consumed_nonces))
+                # last_trace 落库同样脱敏（含 api_key 的工具轨迹不留明文）。
+                # 仅 yellow 工具依赖 last_trace 做确定性重放，而 yellow 工具不带密钥
+                # 参数；red 工具走 pending 确认重放，不受影响。
+                self.sessions.update_meta(
+                    sid, last_trace=redact_value(tool_trace), consumed_nonces=sorted(consumed_nonces)
+                )
             except Exception:
                 pass
             try:
@@ -708,7 +720,9 @@ class AgentLoop:
         )
         try:
             result = await self.llm.chat([{"role": "user", "content": prompt}])
-            summary = (result.content or "（摘要生成失败）").strip()
+            # 摘要同样必须过工具标记清洗：模型可能在摘要里"模拟"工具调用，
+            # 原文会泄漏到会话列表（生产实测：摘要中出现 <tool_calls> 原文）
+            summary = sanitize_tool_markup((result.content or "（摘要生成失败）").strip())
             title = summary[:20]
             sessions.update_summary(session_id, summary, title=title)
             return {"ok": True, "summary": summary, "title": title}

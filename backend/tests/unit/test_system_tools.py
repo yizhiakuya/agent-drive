@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -38,7 +37,6 @@ class _Memory:
 def tools(tmp_path):
     reg = ToolRegistry()
     memory = _Memory()
-    saved = {}
 
     class _LLM:
         def __init__(self):
@@ -46,6 +44,8 @@ def tools(tmp_path):
             self.saved_cfg = None
             self.test_calls = []
             self.load_return = None
+            self.emb_diag = {"ok": True, "dimensions": 1024}
+            self.emb_calls = []
 
         def load(self):
             return self.load_return
@@ -56,6 +56,14 @@ def tools(tmp_path):
 
         def save(self, cfg):
             self.saved_cfg = cfg
+
+        def get_embedding_provider(self):
+            outer = self
+            class _P:
+                async def test_connection(self):
+                    outer.emb_calls.append("test")
+                    return dict(outer.emb_diag)
+            return _P()
 
     llm = _LLM()
     register_system_tools(reg, llm, memory, audit_fn=None, scheduler=None, tasks=None)
@@ -149,3 +157,62 @@ async def test_get_system_status_hides_api_key(tools):
     assert res["llm_configured"] is False
     # 即便有配置，这里也无 api_key 明文（cfg 由 _LLM.load 提供，此处未设 → None）
     assert "api_key" not in json.dumps(res, ensure_ascii=False)
+
+async def test_get_system_status_reports_embeddings(tools):
+    from app.llm.manager import EmbeddingConfig, LLMConfig
+    tools["llm"].load_return = LLMConfig(
+        type="openai_compat", base_url="https://api.deepseek.com/v1", api_key="sk-x", model="m",
+        embeddings=EmbeddingConfig(provider="jina", base_url="https://api.jina.ai/v1",
+                                   api_key="jina_abcdefghijklmn", model="jina-embeddings-v3"),
+    )
+    res = await tools["call"]("get_system_status")
+    assert res["embeddings"]["configured"] is True
+    assert res["embeddings"]["model"] == "jina-embeddings-v3"
+    assert res["embeddings"]["api_key_masked"].endswith("…")
+    assert "jina_abcdefghijklmn" not in json.dumps(res), "状态工具绝不能回显明文 key"
+
+
+async def test_get_system_status_embeddings_none(tools):
+    res = await tools["call"]("get_system_status")
+    assert res["embeddings"] is None
+
+
+async def test_configure_embeddings_saves_and_reuses_key(tools):
+    from app.llm.manager import LLMConfig
+    tools["llm"].load_return = LLMConfig(type="openai_compat", base_url="https://api.deepseek.com/v1",
+                                         api_key="sk-x", model="m")
+    call = tools["call"]
+    res = await call("configure_embeddings", provider="jina", base_url="https://api.jina.ai/v1",
+                     api_key="jina_abcdefghijklmn", model="jina-embeddings-v3")
+    assert res["ok"] is True
+    assert tools["llm"].saved_cfg.embeddings.api_key == "jina_abcdefghijklmn"
+    assert res["test"]["ok"] is True
+    # key 留空 + 其余一致 → 沿用已存 key
+    res2 = await call("configure_embeddings", provider="jina", base_url="https://api.jina.ai/v1",
+                      api_key="", model="jina-embeddings-v3")
+    assert res2["ok"] is True
+    assert tools["llm"].saved_cfg.embeddings.api_key == "jina_abcdefghijklmn"
+
+
+async def test_configure_embeddings_key_reuse_requires_same_target(tools):
+    from app.llm.manager import EmbeddingConfig, LLMConfig
+    tools["llm"].load_return = LLMConfig(
+        type="openai_compat", base_url="https://api.deepseek.com/v1", api_key="sk-x", model="m",
+        embeddings=EmbeddingConfig(provider="jina", base_url="https://api.jina.ai/v1",
+                                   api_key="jina_abcdefghijklmn", model="jina-embeddings-v3"),
+    )
+    res = await tools["call"]("configure_embeddings", provider="jina",
+                              base_url="https://other.example/v1", api_key="", model="jina-embeddings-v3")
+    assert res["ok"] is False
+    assert "留空" in res["error"]
+    assert tools["llm"].saved_cfg is None, "改地址必须重填 key，不得把旧 key 打向新地址"
+
+
+async def test_configure_embeddings_rejects_unknown_provider(tools):
+    from app.llm.manager import LLMConfig
+    tools["llm"].load_return = LLMConfig(type="openai_compat", base_url="https://api.deepseek.com/v1",
+                                         api_key="sk-x", model="m")
+    res = await tools["call"]("configure_embeddings", provider="openai", base_url="https://x",
+                              api_key="sk-x", model="m")
+    assert res["ok"] is False
+    assert "Jina" in res["error"]

@@ -123,6 +123,10 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 - 每个工具 = 独立模块文件（files.py / system.py / analytics.py）
 - 工具注册表：spec(JSON Schema+doc) + fn + level + validator
 - 安全分级 green/yellow/red 由注册表统一管理
+- 配置入口对称：LLM = `set_llm_provider`；向量服务 = `configure_embeddings`
+  （与设置页 PUT /config/embeddings 同语义，key 留空沿用 + 保存后测连 + 成功入队重建）。
+  `get_system_status` 报告两类配置状态（密钥仅掩码前缀）——Agent-first 下
+  网页能配、Agent 不能配的断层会诱发模型幻觉（生产会话实证）
 
 ### 3.8 持久后台任务（tasks/）
 

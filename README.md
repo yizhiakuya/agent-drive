@@ -4,7 +4,7 @@
 
 ## ✨ 核心特性
 
-- **Agent 自管理**：LLM 配置存在网盘里（`backend/system/agent-config.json`），Agent 可以通过对话修改自己的配置
+- **Agent 自管理**：LLM 与向量服务（语义搜索 embedding）配置存在网盘里（`backend/system/agent-config.json`），Agent 可以通过对话修改自己的配置（`set_llm_provider` / `configure_embeddings`，改前测试连接，密钥落库前脱敏）
 - **三协议 LLM 支持**：OpenAI 兼容 (chat/completions) / OpenAI Responses / Anthropic (Claude)
 - **模型列表获取**：设置页一键拉取服务商可用模型（三协议 /models），下拉选择或手动填写
 - **Agentic Loop**：意图理解 → 规划 → 工具调用 → 观察 → 回复（含工具轨迹可视化）

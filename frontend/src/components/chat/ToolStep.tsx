@@ -62,6 +62,10 @@ export function ToolStep({ step }: { step: ToolStepData }) {
                 ))}
               </tbody>
             </table>
+          ) : parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (
+            // 对象型结果渲染完整结构化 JSON（output 字段按 500B 截断存储，
+            // 直接显示会从中间截断——get_system_status 等长输出此前就是半截原文）
+            <code className="text-xs whitespace-pre-wrap break-all">{JSON.stringify(parsed, null, 2)}</code>
           ) : (
             <code className="text-xs whitespace-pre-wrap break-all">{step.output}</code>
           )}

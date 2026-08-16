@@ -31,7 +31,13 @@ def _sign(nonce: str, tool: str, args_hash: str, ts: int) -> str:
 
 
 def issue_confirmation(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """签发确认请求（服务端签名，含一次性 nonce）。"""
+    """签发确认请求（服务端签名，含一次性 nonce）。
+
+    注意：arguments 原样返回——签名校验与确定性重放依赖完整参数，
+    含密钥的工具（如 configure_embeddings 的 api_key）会随 pending 存进会话 meta
+    （0600 服务端私有）；message 提示文案必须脱敏（会展示给前端）。
+    """
+    from ..core.logging import redact_text
     nonce = secrets.token_hex(16)
     ts = int(time.time())
     return {
@@ -40,7 +46,10 @@ def issue_confirmation(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         "nonce": nonce,
         "ts": ts,
         "signature": _sign(nonce, tool, _args_hash(arguments), ts),
-        "message": f"Agent 请求执行高风险操作：{tool}({json.dumps(arguments, ensure_ascii=False)})",
+        "message": (
+            f"Agent 请求执行高风险操作：{tool}"
+            f"({redact_text(json.dumps(arguments, ensure_ascii=False))})"
+        ),
     }
 
 
