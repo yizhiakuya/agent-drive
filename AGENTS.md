@@ -26,6 +26,7 @@ Agent-first 私人网盘：FastAPI 后端 + Next.js 16 前端（静态导出）+
 | `docs/frontend-architecture.md` | 历史存档 + 现状速览（勿当现行文档） |
 | `docs/agent-definition.md` | Agent 设计规范 |
 | `docs/quality-report*.md` / `review-*.md` | 历史快照，只读 |
+| `docs/quality-analysis.md` | 工程质量分析 Agent 协议（只读分析→先汇报→确认后修改） |
 
 ## 2. 常用命令
 
@@ -105,6 +106,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **Next viewport**：Next.js 16 在 `layout.tsx` 用独立 `export const viewport: Viewport`；勿放回 `metadata.viewport`（构建会警告并可能被忽略）
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
+- **工程质量分析 agent**：任何质量/可维护性分析按 `docs/quality-analysis.md` 协议执行——架构与技术栈属基线（记录在快照，不频繁重审），每次只做增量检查（风格一致性/耦合重复/门禁/测试缺口/复杂度热点/死代码/文档同步）；分析阶段只读，完成后先出报告等用户确认，只有用户明示“直接修”才动手。禁止“边分析边改”
 - **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:tasks-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
 
 ## 5. 安全红线（勿破坏）
