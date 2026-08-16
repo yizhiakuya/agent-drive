@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { chatStream } from "@/lib/api/chat";
@@ -129,7 +129,7 @@ export default function ChatPanel() {
         if (d.report && !isReportRead(d.report.date)) setAutoReport(d.report);
       } catch { /* 忽略 */ }
     })();
-  }, [messages.length === 0 ? sessionId : sessionId]);
+  }, [sessionId]);
 
   // 全局刷新（下拉刷新）：重载当前会话消息
   useEffect(() => {
@@ -157,7 +157,6 @@ export default function ChatPanel() {
         setContextUsage(null);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   function onScroll() {

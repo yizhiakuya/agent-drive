@@ -12,18 +12,16 @@ import { ServerConfig, currentServer } from "@/lib/native/server-config";
 export default function ConnectAppCard() {
   const [qr, setQr] = useState<string | null>(null);
   const [server, setServer] = useState("");
-  const [native, setNative] = useState(false);
+  const [native] = useState(() => Capacitor.isNativePlatform());
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [left, setLeft] = useState(0); // 二维码剩余秒数
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    setNative(Capacitor.isNativePlatform());
     currentServer().then(setServer);
     if (!Capacitor.isNativePlatform()) refresh();
     return () => { if (timer.current) clearInterval(timer.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refresh() {
@@ -56,7 +54,6 @@ export default function ConnectAppCard() {
       });
     }, 1000);
     return () => { if (timer.current) clearInterval(timer.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [left, native]);
 
   async function rescan() {

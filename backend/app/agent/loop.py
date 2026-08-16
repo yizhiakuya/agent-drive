@@ -156,7 +156,10 @@ class AgentLoop:
     # ---------- 自动标题 ----------
     async def _generate_title(self, sid: str) -> str | None:
         """用 LLM 为会话生成简短标题（首次问答后调用一次）。"""
-        msgs = self.sessions.messages(sid)[:4]
+        sessions = self.sessions
+        if sessions is None:
+            return None
+        msgs = sessions.messages(sid)[:4]
         transcript = "\n".join(
             f"{'用户' if m['role'] == 'user' else 'Agent'}: {str(m.get('content', ''))[:80]}"
             for m in msgs
@@ -168,7 +171,7 @@ class AgentLoop:
         title = (result.content or "").strip()
         title = title.strip('。！!？?""“”\' ')[:20]
         if title:
-            self.sessions.update_summary(sid, summary=None, title=title)
+            sessions.update_summary(sid, summary=None, title=title)
         return title or None
 
     # ---------- 消息组装 ----------
@@ -228,7 +231,7 @@ class AgentLoop:
         history: list[dict[str, Any]] | None,
         confirmations: list[dict[str, Any]] | None,
         session_id: str | None,
-        tool_groups: tuple[str, ...] | None = None,
+        tool_groups: tuple[str, ...] | list[str] | None = None,
     ):
         """统一执行核心（编排壳）。yields: ("text", c) | ("tool_start", e) | ("tool_trace", e) | ("done", m)
 
@@ -279,8 +282,8 @@ class AgentLoop:
         if self.sessions is not None and sid:
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
             self.sessions.append(sid, {"role": "assistant", "content": "".join(reply_parts), "ts": time.time()})
-            meta = self.sessions.get(sid)
-            if meta and (not meta.get("title") or meta.get("title") == "新会话"):
+            meta_now = self.sessions.get(sid)
+            if meta_now and (not meta_now.get("title") or meta_now.get("title") == "新会话"):
                 title = user_message.strip().replace("\n", " ")[:24] or "闲聊"
                 self.sessions.update_meta(sid, title=title)
         yield ("done", {
@@ -607,7 +610,7 @@ class AgentLoop:
         history: list[dict[str, Any]] | None = None,
         confirmations: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
-        tool_groups: tuple[str, ...] | None = None,
+        tool_groups: tuple[str, ...] | list[str] | None = None,
     ) -> dict[str, Any]:
         """聚合事件为单次响应。tool_groups 为外部指定工具组（自动化用）。"""
         reply_parts: list[str] = []
@@ -642,7 +645,7 @@ class AgentLoop:
         history: list[dict[str, Any]] | None = None,
         confirmations: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
-        tool_groups: tuple[str, ...] | None = None,
+        tool_groups: tuple[str, ...] | list[str] | None = None,
     ):
         """透传事件（SSE 用）。tool_groups 为外部指定工具组（自动化用）。"""
         async for event, payload in self._execute(user_message, history, confirmations, session_id, tool_groups):
@@ -651,12 +654,13 @@ class AgentLoop:
     # ---------- 会话摘要 ----------
     async def summarize_session(self, session_id: str) -> dict[str, Any]:
         """用 LLM 生成会话摘要（跨会话记忆核心）。"""
-        if self.sessions is None:
+        sessions = self.sessions
+        if sessions is None:
             return {"ok": False, "error": "未启用会话存储"}
-        meta = self.sessions.get(session_id)
+        meta = sessions.get(session_id)
         if meta is None:
             return {"ok": False, "error": "会话不存在"}
-        msgs = self.sessions.messages(session_id) if self.sessions is not None else []
+        msgs = sessions.messages(session_id)
         transcript = "\n".join(
             f"{'用户' if m['role'] == 'user' else 'Agent'}: {str(m.get('content', ''))[:300]}"
             for m in msgs[-30:]
@@ -670,7 +674,7 @@ class AgentLoop:
             result = await self.llm.chat([{"role": "user", "content": prompt}])
             summary = (result.content or "（摘要生成失败）").strip()
             title = summary[:20]
-            self.sessions.update_summary(session_id, summary, title=title)
+            sessions.update_summary(session_id, summary, title=title)
             return {"ok": True, "summary": summary, "title": title}
         except Exception as e:
             return {"ok": False, "error": str(e)}

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import ChatPanel from "@/components/chat/ChatPanel";
 import FilePanel from "@/components/files/FilePanel";
 import FilePage from "@/components/files/FilePage";
@@ -53,47 +53,7 @@ export default function Home() {
   const setModelName = useAppStore((s) => s.setModelName);
   const bumpSessions = useAppStore((s) => s.bumpSessions);
 
-  useEffect(() => {
-    // 会话过期（任意 API 返回 401）→ web 回登录页；原生 App 回重扫码页（令牌被吊销）
-    const onUnauthorized = () =>
-      setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
-    window.addEventListener(EV.unauthorized, onUnauthorized);
-    return () => window.removeEventListener(EV.unauthorized, onUnauthorized);
-  }, [setAuthMode]);
-
-  useEffect(() => {
-    // 原生 App：回前台/窗口聚焦时心跳，刷新服务器设备列表活跃时间
-    if (Capacitor.isNativePlatform()) {
-      const beat = () => { ServerConfig.heartbeat().catch(() => {}); };
-      window.addEventListener("visibilitychange", beat);
-      window.addEventListener("focus", beat);
-      return () => {
-        window.removeEventListener("visibilitychange", beat);
-        window.removeEventListener("focus", beat);
-      };
-    }
-  }, []);
-
-  useEffect(() => {
-    // 分享上传回跳提示
-    const shared = new URLSearchParams(window.location.search).get("shared");
-    if (shared) {
-      window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "ok", text: `已接收分享的文件：${shared}` } }));
-      window.history.replaceState(null, "", "/");
-    }
-    boot();
-  }, []);
-
-  // 全局刷新：重新走认证+状态 → 广播给各面板（会话/文件/设置/设备/同步卡片）
-  const refreshAllRef = useRef<() => Promise<void>>(async () => {});
-  refreshAllRef.current = async () => {
-    await boot();
-    bumpSessions();
-    emitFilesChanged();
-    emitRefresh();
-  };
-
-  async function boot() {
+  const boot = useCallback(async () => {
     try {
       await ensureBase(); // 原生 App：从扫码配置解析服务器地址与设备令牌
       const native = Capacitor.isNativePlatform();
@@ -156,7 +116,46 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [setAuthMode, setConfigured, setLoading, setModelName]);
+
+  // 全局刷新：重新走认证+状态 → 广播给各面板（会话/文件/设置/设备/同步卡片）
+  const refreshAll = useCallback(async () => {
+    await boot();
+    bumpSessions();
+    emitFilesChanged();
+    emitRefresh();
+  }, [boot, bumpSessions]);
+
+  useEffect(() => {
+    // 会话过期（任意 API 返回 401）→ web 回登录页；原生 App 回重扫码页（令牌被吊销）
+    const onUnauthorized = () =>
+      setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
+    window.addEventListener(EV.unauthorized, onUnauthorized);
+    return () => window.removeEventListener(EV.unauthorized, onUnauthorized);
+  }, [setAuthMode]);
+
+  useEffect(() => {
+    // 原生 App：回前台/窗口聚焦时心跳，刷新服务器设备列表活跃时间
+    if (Capacitor.isNativePlatform()) {
+      const beat = () => { ServerConfig.heartbeat().catch(() => {}); };
+      window.addEventListener("visibilitychange", beat);
+      window.addEventListener("focus", beat);
+      return () => {
+        window.removeEventListener("visibilitychange", beat);
+        window.removeEventListener("focus", beat);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    // 分享上传回跳提示
+    const shared = new URLSearchParams(window.location.search).get("shared");
+    if (shared) {
+      window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "ok", text: `已接收分享的文件：${shared}` } }));
+      window.history.replaceState(null, "", "/");
+    }
+    boot();
+  }, [boot]);
 
   if (loading) return <SkeletonScreen />;
   if (authMode === "rescan")
@@ -179,7 +178,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen">
-      <PullToRefresh onRefresh={() => refreshAllRef.current()} />
+      <PullToRefresh onRefresh={refreshAll} />
       <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 border-b border-border bg-panel gap-2">
         <div className="font-bold text-base sm:text-lg whitespace-nowrap">🦋 <span className="max-[359px]:sr-only">Agent Drive</span></div>
         <nav className="flex min-w-0 gap-0.5 sm:gap-1 flex-1 justify-center">

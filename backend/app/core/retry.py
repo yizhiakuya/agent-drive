@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
+from inspect import isawaitable
 from typing import Any
 
 # 瞬态错误特征（可重试）：超时/限流/网络/服务不可用
@@ -38,7 +39,7 @@ def is_retryable_error(error_text: str) -> bool:
 
 
 async def with_retry(
-    fn: Callable[[], Awaitable[Any]],
+    fn: Callable[[], Any],
     *,
     max_retries: int = 2,
     base_delay: float = 0.5,
@@ -49,12 +50,14 @@ async def with_retry(
 ) -> Any:
     """执行 fn，瞬态失败时指数退避重试。
 
+    fn 可返回协程/可等待对象或普通值（如 Anthropic 的 AsyncMessageStreamManager）。
     退避序列: base_delay * 2^attempt（上限 max_delay）+ 可选抖动。
     """
     last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):
         try:
-            return await fn()
+            result = fn()
+            return await result if isawaitable(result) else result
         except Exception as e:
             last_exc = e
             text = str(e)
@@ -66,4 +69,5 @@ async def with_retry(
             if on_retry:
                 on_retry(attempt + 1, e)
             await asyncio.sleep(delay)
+    assert last_exc is not None  # pragma: no cover - 循环至少执行一次
     raise last_exc  # pragma: no cover

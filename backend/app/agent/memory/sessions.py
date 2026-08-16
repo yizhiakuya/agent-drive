@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import builtins
 import json
 import time
 import uuid
@@ -34,7 +35,7 @@ class SessionStore:
         (self.dir / f"{sid}.jsonl").write_text("", encoding="utf-8")
         return meta
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self) -> builtins.list[dict[str, Any]]:
         sessions = []
         for f in self.dir.glob("*.meta.json"):
             try:
@@ -72,14 +73,14 @@ class SessionStore:
             meta["updated_at"] = time.time()
             (self.dir / f"{sid}.meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
-    def messages(self, sid: str, limit: int = 100) -> list[dict[str, Any]]:
+    def messages(self, sid: str, limit: int = 100) -> builtins.list[dict[str, Any]]:
         p = self.dir / f"{sid}.jsonl"
         if not p.exists():
             return []
         lines = p.read_text(encoding="utf-8").splitlines()
         return [json.loads(l) for l in lines[-limit:]]
 
-    def update_summary(self, sid: str, summary: str, title: str | None = None) -> None:
+    def update_summary(self, sid: str, summary: str | None, title: str | None = None) -> None:
         meta = self.get(sid)
         if not meta:
             return

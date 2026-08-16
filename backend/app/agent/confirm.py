@@ -65,7 +65,7 @@ def verify_confirmation(
             return False, "nonce 不匹配（伪造或过期确认）"
         if int(time.time()) - int(ts) > _NONCE_TTL:
             return False, "确认已过期（超过 10 分钟），请重新发起操作"
-        expected = _sign(nonce, tool, _args_hash(args), ts)
+        expected = _sign(str(nonce), str(tool), _args_hash(args), int(ts))
         if not hmac.compare_digest(sig, expected):
             return False, "签名校验失败（确认被伪造）"
         if nonce in consumed:

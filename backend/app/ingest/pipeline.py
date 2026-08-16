@@ -150,7 +150,8 @@ class IngestPipeline:
 
         doc = fitz.open(str(path))
         try:
-            return "\n".join(page.get_text() for page in doc)[:200_000], "pdf"
+            text = "\n".join(doc.load_page(i).get_text() for i in range(doc.page_count))
+            return text[:200_000], "pdf"
         finally:
             doc.close()
 
@@ -400,7 +401,7 @@ class IngestPipeline:
         query_norm = float(np.linalg.norm(query_array))
         if query_norm == 0:
             return []
-        results = []
+        results: list[dict[str, Any]] = []
         for vector_path in self.index_dir.rglob("*.npy"):
             rel = vector_path.relative_to(self.index_dir).as_posix()[:-4]
             if not self.is_vector_current(rel):

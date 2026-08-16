@@ -30,7 +30,7 @@ export default function FilePage() {
       setPath(r.path);
       pathRef.current = r.path;
     } catch (e) {
-      console.error(e);
+      emitToast({ kind: "error", text: `文件列表加载失败：${String(e)}` });
     }
   }, []);
 

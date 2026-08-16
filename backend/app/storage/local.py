@@ -373,6 +373,7 @@ class LocalStorage:
                 src_stat = self._lstat_at(src_fd, src_leaf)
                 src_is_dir = stat.S_ISDIR(src_stat.st_mode)
                 if dst_existed:
+                    assert dst_stat is not None
                     dst_is_dir = stat.S_ISDIR(dst_stat.st_mode)
                     if src_is_dir != dst_is_dir:
                         if src_is_dir:
@@ -701,7 +702,7 @@ class LocalStorage:
         d = self.resolve(rel_path)
         if not d.is_dir():
             raise NotADirectoryError(rel_path)
-        items = []
+        items: list[dict[str, Any]] = []
         with os.scandir(d) as it:
             entries = sorted(it, key=lambda entry: entry.name.lower())
             for e in entries:

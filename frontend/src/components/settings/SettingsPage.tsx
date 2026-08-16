@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getConfig, saveEmbeddings, configureLLM, testLLM } from "@/lib/api/config";
+import { getConfig, saveEmbeddings, configureLLM } from "@/lib/api/config";
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
@@ -163,7 +163,7 @@ export default function SettingsPage() {
       <div className="bg-panel border border-border rounded-xl p-4">
         <h3 className="font-bold text-sm mb-1">🎛️ 偏好与规则</h3>
         {!cfg?.preferences || Object.keys(cfg.preferences).length === 0 ? (
-          <p className="text-muted text-xs">暂无偏好。在对话里说"以后用中文回复"即可添加。</p>
+          <p className="text-muted text-xs">暂无偏好。在对话里说“以后用中文回复”即可添加。</p>
         ) : (
           <table className="w-full text-xs border-collapse">
             <thead><tr><th className="text-left p-1.5 border-b border-border">偏好</th><th className="text-left p-1.5 border-b border-border">值</th></tr></thead>

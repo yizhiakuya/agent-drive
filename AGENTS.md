@@ -79,7 +79,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **resolve 拒绝符号链接与内部路径**：组件级检查（业务从不产生 symlink），下载/预览/上传共用；`.index/.trash/.storage.lock` 与 `.upload/.copy` staging 的公共访问必须拒绝，不只是列表隐藏。内部流程使用显式 `allow_internal`，列表/摄入/任务变更必须跳过
 - **设备令牌加密存储**：现行数据只写独立 `agent_drive_secure` EncryptedSharedPreferences（AES256-GCM/SIV，MasterKey 在 Keystore）+ `allowBackup=false`。升级识别旧 `agent_drive` 明文和 1.0.27 同文件密文：同键以 1.0.27 持续写入的密文为现行值，明文只作更早来源/清理残留；独立新密文若与 legacy 现行值冲突则保留双方并失败关闭。新密文 commit 成功或逐键确认相等后才清理旧业务数据，AndroidX keyset 永不 clear，清理失败下次幂等重试；初始化/迁移/commit 失败必须弹窗或 reject/Log+retry，绝不能吞异常或降级明文
 - **显式编码**：backend/app 全部 read_text/write_text/open 显式 `encoding="utf-8"`；用户可编辑记忆文件用 `preferences._read_tolerant`（utf-8→gbk→latin-1）容错读；`write_text` 固定 `newline="\n"`（Windows 不转 CRLF）
-- **CI（GitHub Actions）**：backend = ruff + mypy(非阻断) + integration + unit(pytest) + 8 个遗留脚本直跑；frontend = vitest + build。新增测试一律 pytest 风格（自动被收集）
+- **CI（GitHub Actions）**：backend = ruff + mypy（阻断，保持 0 错误）+ integration + unit(pytest) + 8 个遗留脚本直跑；frontend = eslint + vitest + build；android = gradle testDebugUnitTest（JVM 单测）。新增测试一律 pytest 风格（自动被收集）；ESLint 配置忽略 android/ 构建产物，不得恢复全目录裸扫
 - **Vitest ESM 配置**：使用 `vitest.config.mts` + `import.meta.url` 解析别名；勿改回含 ESM 语法的 `.ts`/CommonJS 加载方式（未来 Vite native config loader 不支持）
 - **上传大小上限**：`max_upload_mb=300`（后端 413；公网闸门仍是 nginx 200m）——直连 8000 的滥用兜底
 - **健康检查**：`/api/v1/health` 公开豁免（探活用，不泄露业务信息）

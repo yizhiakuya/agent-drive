@@ -26,9 +26,8 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app/
 
-      - name: Type check (mypy, non-blocking)
-        run: 'mypy app/ || echo "mypy: 渐进收敛中（13 项已知）"'
-        continue-on-error: true
+      - name: Type check (mypy)
+        run: mypy app/
 
       - name: Integration tests (pytest)
         run: python -m pytest tests/integration -q
@@ -61,8 +60,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint (ESLint)
+        run: npm run lint
+
       - name: Unit tests (vitest)
         run: npm test
 
       - name: Build
         run: npm run build
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: JVM unit tests (migration/checkpoint/config)
+        run: ./gradlew testDebugUnitTest

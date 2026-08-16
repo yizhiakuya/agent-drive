@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -21,6 +22,10 @@ class OpenAIResponsesProvider:
     @property
     def name(self) -> str:
         return f"openai_responses({self.base_url})"
+
+    def stream_chat(self, messages, tools=None) -> AsyncIterator[str]:
+        """暂未实现流式；调用方捕获 NotImplementedError 回退到非流式 chat()。"""
+        raise NotImplementedError
 
     @staticmethod
     def _to_responses_tools(tools: list[ToolSpec]) -> list[dict]:

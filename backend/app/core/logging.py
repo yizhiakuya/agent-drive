@@ -98,7 +98,7 @@ class AuditLogger:
 
     def failures(self, recent: int = 50) -> list[dict[str, Any]]:
         """提取最近失败事件（供错误分析工具使用）"""
-        failures = []
+        failures: list[dict[str, Any]] = []
         if not self.path.exists():
             return failures
         for line in self.path.read_text(encoding="utf-8").splitlines()[-recent:]:

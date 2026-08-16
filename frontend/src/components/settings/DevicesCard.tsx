@@ -25,12 +25,15 @@ export default function DevicesCard() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // 渲染期禁止 Date.now()（非纯函数）；由 30s 轮询驱动 now，保证“在线”判定新鲜。
+  const [now, setNow] = useState(() => Date.now() / 1000);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function load() {
     try {
       const d = await getDevices();
       setDevices(d.devices);
+      setNow(Date.now() / 1000);
       setMsg(null);
     } catch {
       /* 保持旧列表 */
@@ -84,7 +87,7 @@ export default function DevicesCard() {
                 </td>
                 <td className="p-1.5 border-b border-border/50 text-muted hidden sm:table-cell">{d.app_version}</td>
                 <td className="p-1.5 border-b border-border/50">
-                  {Date.now() / 1000 - d.last_seen < 120
+                  {now - d.last_seen < 120
                     ? <span className="bg-success-soft text-success px-1.5 py-0.5 rounded-full">在线</span>
                     : <span className="text-muted">{relTime(d.last_seen)}</span>}
                 </td>
