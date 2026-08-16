@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getConfig, saveEmbeddings, configureLLM } from "@/lib/api/config";
+import { getConfig, saveEmbeddings, configureLLM, listModels } from "@/lib/api/config";
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
@@ -16,6 +16,8 @@ export default function SettingsPage() {
   const [llmForm, setLlmForm] = useState({ type: "openai_compat", base_url: "", model: "", api_key: "", temperature: "0.3" });
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
   const [saving, setSaving] = useState<"llm" | "emb" | null>(null);
+  const [modelList, setModelList] = useState<string[] | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
   const isNative = Capacitor.isNativePlatform();
 
@@ -86,6 +88,24 @@ export default function SettingsPage() {
     finally { setSaving(null); }
   }
 
+  async function fetchModels() {
+    setMsg(null);
+    setModelsLoading(true);
+    try {
+      const r = await listModels({ type: llmForm.type, base_url: llmForm.base_url, api_key: llmForm.api_key });
+      if (r.ok && r.models && r.models.length > 0) {
+        setModelList(r.models);
+      } else {
+        setModelList(null);
+        setMsg({ kind: "error", text: r.error || "获取模型列表失败" });
+      }
+    } catch (e) {
+      setMsg({ kind: "error", text: String(e) });
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
   async function saveEmb() {
     setMsg(null);
     setSaving("emb");
@@ -124,9 +144,40 @@ export default function SettingsPage() {
       <div className="bg-panel border border-border rounded-xl p-4 mb-4">
         <h3 className="font-bold text-sm mb-1">🧠 LLM 模型</h3>
         <p className="text-muted text-xs mb-3">Agent 的大脑。支持 OpenAI 兼容 / OpenAI Responses / Anthropic 三协议。</p>
-        {field("协议", llmForm.type, (v) => setLlmForm((f) => ({ ...f, type: v })), "openai_compat")}
-        {field("接口地址", llmForm.base_url, (v) => setLlmForm((f) => ({ ...f, base_url: v })), "https://...")}
-        {field("模型", llmForm.model, (v) => setLlmForm((f) => ({ ...f, model: v })), "如 deepseek-v4-flash")}
+        {field("协议", llmForm.type, (v) => { setLlmForm((f) => ({ ...f, type: v })); setModelList(null); }, "openai_compat")}
+        {field("接口地址", llmForm.base_url, (v) => { setLlmForm((f) => ({ ...f, base_url: v })); setModelList(null); }, "https://...")}
+        <label className="flex flex-col gap-1 mb-2.5 text-xs">
+          <span className="text-muted">模型</span>
+          {modelList && modelList.length > 0 && (
+            <select
+              value={modelList.includes(llmForm.model) ? llmForm.model : ""}
+              onChange={(e) => e.target.value && setLlmForm((f) => ({ ...f, model: e.target.value }))}
+              className="px-2.5 py-2 border border-border rounded-lg text-sm bg-panel focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent"
+            >
+              <option value="">— 从可用模型选择 —</option>
+              {modelList.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          )}
+          <input
+            type="text"
+            value={llmForm.model}
+            placeholder="如 deepseek-v4-flash"
+            onChange={(e) => setLlmForm((f) => ({ ...f, model: e.target.value }))}
+            className="px-2.5 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent-soft focus:border-accent"
+          />
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              className="border border-border text-muted px-2.5 py-1 rounded-md text-xs cursor-pointer disabled:opacity-60"
+              onClick={fetchModels}
+              disabled={modelsLoading || saving !== null}
+            >
+              {modelsLoading ? "获取中…" : "获取可用模型"}
+            </button>
+            <span className="text-muted text-[10px]">API Key 留空时使用已保存的 Key</span>
+          </div>
+        </label>
         {field("API Key", llmForm.api_key, (v) => setLlmForm((f) => ({ ...f, api_key: v })), cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-...", "password")}
         {field("温度", llmForm.temperature, (v) => setLlmForm((f) => ({ ...f, temperature: v })), "0.3", "number", "0.1")}
         <button className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60"

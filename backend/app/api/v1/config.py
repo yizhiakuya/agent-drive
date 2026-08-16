@@ -1,10 +1,13 @@
 """v1 配置路由（Onboarding 用）"""
 from __future__ import annotations
 
+import asyncio
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException
 
-from ...llm.manager import LLMConfig
-from ...schemas.config import LLMConfigIn
+from ...llm.manager import LLMConfig, ProviderType
+from ...schemas.config import LLMConfigIn, LLMModelsIn
 from ..deps import get_container
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -23,6 +26,45 @@ async def configure(cfg: LLMConfigIn, container=Depends(get_container)):
 @router.post("/test")
 async def test(cfg: LLMConfigIn, container=Depends(get_container)):
     return await container.llm.test(LLMConfig(**cfg.model_dump()))
+
+
+@router.post("/models")
+async def list_models(cfg: LLMModelsIn, container=Depends(get_container)):
+    """按表单值获取 Provider 可用模型列表（只读探测，不落盘）。
+
+    api_key 留空时回退已保存配置的 key，但仅当表单 type/base_url 与已存配置一致——
+    避免把已存 key 发给用户新填的陌生地址。
+    """
+    if cfg.type not in {"openai_compat", "openai_responses", "anthropic"}:
+        return {"ok": False, "error": f"未知 Provider 类型: {cfg.type}"}
+    key = cfg.api_key
+    if not key:
+        stored = container.llm.load()
+        if (
+            stored
+            and stored.api_key
+            and stored.type == cfg.type
+            and stored.base_url.rstrip("/") == cfg.base_url.rstrip("/")
+        ):
+            key = stored.api_key
+        if not key:
+            return {"ok": False, "error": "API Key 为空：请先填写（或先保存当前配置再获取）"}
+    llm_cfg = LLMConfig(
+        type=cast(ProviderType, cfg.type),
+        base_url=cfg.base_url,
+        api_key=key,
+        model="__models__",  # 探测用占位，不参与请求
+    )
+    try:
+        models = await asyncio.wait_for(container.llm.list_models(llm_cfg), timeout=20)
+        return {"ok": True, "models": models, "type": cfg.type}
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "获取模型列表超时（20s），请检查接口地址与网络"}
+    except Exception as e:  # 探测端点：错误语义化返回给设置页，不落 500
+        hint = ""
+        if cfg.type in ("openai_compat", "openai_responses"):
+            hint = "（提示：非 OpenAI 标准 /models 格式的服务如 Ollama，请手动填写模型名）"
+        return {"ok": False, "error": f"{e}{hint}"}
 
 
 def _mask(key: str) -> str:

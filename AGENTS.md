@@ -110,6 +110,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义
 - **工程质量分析 agent**：任何质量/可维护性分析按 `docs/quality-analysis.md` 协议执行——架构与技术栈属基线（记录在快照，不频繁重审），每次只做增量检查（风格一致性/耦合重复/门禁/测试缺口/复杂度热点/死代码/文档同步）；分析阶段只读，完成后先出报告等用户确认，只有用户明示“直接修”才动手。禁止“边分析边改”
+- **模型列表端点**：POST /api/v1/config/models 只读探测、不落盘；api_key 留空仅当表单 type+base_url 与已存配置一致才回退已存 key（不得把已存 key 发给新填的陌生地址）；20s 超时。Provider 统一实现 list_models()（OpenAI 系 GET /models、Anthropic GET /v1/models；Ollama 等非标准 /models 形状会返回错误提示，用户手动填写）
 - **事件总线**：`agent-drive:refresh`（下拉刷新）、`agent-drive:files-changed`、`agent-drive:tasks-changed`、`agent-drive:toast`、`agent-drive:unauthorized`（401 全局拦截）
 
 ## 5. 安全红线（勿破坏）

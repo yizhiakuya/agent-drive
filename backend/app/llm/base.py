@@ -57,3 +57,7 @@ class LLMProvider(Protocol):
     async def test_connection(self) -> dict[str, Any]:
         """返回诊断信息: {ok, model, context_window, supports_tools, latency_ms, error?}"""
         ...
+
+    async def list_models(self) -> list[str]:
+        """列出该 Provider 当前可用的模型 ID（去重排序）。"""
+        ...

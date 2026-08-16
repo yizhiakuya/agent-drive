@@ -6,6 +6,7 @@
 
 - **Agent 自管理**：LLM 配置存在网盘里（`backend/system/agent-config.json`），Agent 可以通过对话修改自己的配置
 - **三协议 LLM 支持**：OpenAI 兼容 (chat/completions) / OpenAI Responses / Anthropic (Claude)
+- **模型列表获取**：设置页一键拉取服务商可用模型（三协议 /models），下拉选择或手动填写
 - **Agentic Loop**：意图理解 → 规划 → 工具调用 → 观察 → 回复（含工具轨迹可视化）
 - **流式输出**：SSE 逐块渲染，支持 CRLF/跨分块 UTF-8/多行 data 与尾事件收束；401 统一触发未授权事件，Web/PWA 回登录页、原生 App 回重新扫码页
 - **技能包**：可插拔 Skills（周报生成器/文件整理器），read_skill 按需加载

@@ -100,6 +100,11 @@ class LLMManager:
             return AnthropicProvider(cfg.base_url, cfg.api_key, cfg.model)
         raise ValueError(f"未知 Provider 类型: {cfg.type}")
 
+    async def list_models(self, cfg: LLMConfig) -> list[str]:
+        """按给定配置列出 Provider 可用模型 ID（只读探测，不落盘）。"""
+        provider = self.build(cfg)
+        return await provider.list_models()
+
     async def test(self, cfg: LLMConfig) -> dict[str, Any]:
         try:
             provider = self.build(cfg)

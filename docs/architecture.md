@@ -85,7 +85,7 @@ AppError (基类)
 API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 
 ### 3.5 LLM 抽象（llm/）
-- `base.py`: Provider 协议（chat/test_connection）
+- `base.py`: Provider 协议（chat/test_connection/list_models——设置页模型列表探测用）
 - `providers/`: 每协议一个文件，互不感知
 - `manager.py`: 配置读写 + 工厂 + 测试
 - embedding provider 为独立工厂；任务执行前可热刷新配置，模型切换会改变索引指纹

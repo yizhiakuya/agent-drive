@@ -22,6 +22,11 @@ class AnthropicProvider:
     def name(self) -> str:
         return f"anthropic({self.base_url})"
 
+    async def list_models(self) -> list[str]:
+        """GET {base}/v1/models：Anthropic 模型列表（去重排序）。"""
+        resp = await self._client.models.list(limit=1000)
+        return sorted({m.id for m in resp.data})
+
     @staticmethod
     def _to_anthropic_tools(tools: list[ToolSpec]) -> list[dict]:
         return [

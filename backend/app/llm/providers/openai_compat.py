@@ -22,6 +22,11 @@ class OpenAICompatProvider:
     def name(self) -> str:
         return f"openai_compat({self.base_url})"
 
+    async def list_models(self) -> list[str]:
+        """GET {base}/models：OpenAI 兼容服务商模型列表（去重排序）。"""
+        resp = await self._client.models.list()
+        return sorted({m.id for m in resp.data})
+
     @staticmethod
     def _to_openai_tools(tools: list[ToolSpec]) -> list[dict]:
         return [

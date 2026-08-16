@@ -23,6 +23,11 @@ class OpenAIResponsesProvider:
     def name(self) -> str:
         return f"openai_responses({self.base_url})"
 
+    async def list_models(self) -> list[str]:
+        """GET {base}/models：Responses 协议服务商模型列表（去重排序）。"""
+        resp = await self._client.models.list()
+        return sorted({m.id for m in resp.data})
+
     def stream_chat(self, messages, tools=None) -> AsyncIterator[str]:
         """暂未实现流式；调用方捕获 NotImplementedError 回退到非流式 chat()。"""
         raise NotImplementedError
