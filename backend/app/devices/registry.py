@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -35,12 +37,29 @@ class DeviceRegistry:
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(list(self._devices.values()), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{self._path.name}.", suffix=".tmp", dir=self._path.parent,
         )
-        tmp.replace(self._path)  # 原子替换
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                fd = -1
+                json.dump(
+                    list(self._devices.values()),
+                    stream,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            tmp.chmod(0o600)
+            tmp.replace(self._path)  # 原子替换
+        except Exception:
+            if fd >= 0:
+                os.close(fd)
+            tmp.unlink(missing_ok=True)
+            raise
 
     # ---- 操作 ----
     def register(self, device_id: str, name: str = "", model: str = "",

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PhotoSync, PhotoSyncStatus, SyncProgress } from "@/lib/native/photo-sync";
 import { EV } from "@/lib/events";
+import { fmtTime } from "@/lib/format";
 
 const INTERVALS = [1, 6, 12, 24];
 
@@ -78,7 +79,7 @@ export default function PhotoSyncCard() {
 
   if (!native) return null;
 
-  const fmt = (ts: number | null) => (ts ? new Date(ts * 1000).toLocaleString() : "从未");
+  const fmt = (ts: number | null) => (ts ? fmtTime(ts) : "从未");
 
   return (
     <div className="bg-panel border border-border rounded-xl p-4 mb-4">

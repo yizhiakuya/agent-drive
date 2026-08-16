@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Capacitor } from "@capacitor/core";
 import { getPairing } from "@/lib/api/auth";
-import { ServerConfig, currentServer } from "@/lib/native/server-config";
+import { currentServer } from "@/lib/native/server-config";
+import { useRescan } from "@/lib/native/useRescan";
 
 /**
  * 连接手机 App：web 端展示带一次性授权码的二维码（扫码即授权，免密码）；
@@ -17,6 +18,7 @@ export default function ConnectAppCard() {
   const [msg, setMsg] = useState<string | null>(null);
   const [left, setLeft] = useState(0); // 二维码剩余秒数
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { busy: rescanBusy, msg: rescanMsg, rescan } = useRescan();
 
   useEffect(() => {
     currentServer().then(setServer);
@@ -56,17 +58,6 @@ export default function ConnectAppCard() {
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [left, native]);
 
-  async function rescan() {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await ServerConfig.rescan();
-    } catch (e) {
-      setMsg(String(e));
-    }
-    setBusy(false);
-  }
-
   return (
     <div className="bg-panel border border-border rounded-xl p-4 mb-4">
       <h3 className="font-bold text-sm mb-1">📱 连接手机 App</h3>
@@ -76,10 +67,10 @@ export default function ConnectAppCard() {
             当前服务器：<span className="text-text font-mono">{server || "未配置"}</span>
           </p>
           <button className="bg-accent text-white px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-60"
-                  onClick={rescan} disabled={busy}>
-            {busy ? "等待扫码…" : "重新扫码连接"}
+                  onClick={rescan} disabled={rescanBusy}>
+            {rescanBusy ? "等待扫码…" : "重新扫码连接"}
           </button>
-          {msg && <p className="text-danger text-xs mt-2">{msg}</p>}
+          {rescanMsg && <p className="text-danger text-xs mt-2">{rescanMsg}</p>}
         </div>
       ) : (
         <div className="flex flex-col items-center gap-2">

@@ -91,7 +91,7 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 - embedding provider 为独立工厂；任务执行前可热刷新配置，模型切换会改变索引指纹
 
 ### 3.6 存储抽象（storage/）
-- `base.py`: Storage 协议（list/read/write/move/delete/stat）
+- `base.py`: 仅历史说明 docstring（Storage 协议抽象已移除——全仓无消费者，勿重建死抽象）
 - `local.py`: 本地文件系统实现。路径拒绝穿越和任一 symlink 组件；临时文件 0600，发布用 `dirfd + O_NOFOLLOW + os.replace/os.link`，父组件校验与写入不再有 symlink TOCTOU；复合写由进程内锁 + Linux `flock` 串行化
 - 覆盖/创建/文本追加均先写临时文件、`fsync` 后原子发布；文件以 `link/replace` 为可见性提交点，提交后的目录 `fsync` 或临时链接清理失败不会把已发布内容伪报为失败。追加锁覆盖“读旧值→追加→替换”全过程，避免并发追加丢内容。目录复制先在隐藏 staging 目录完整构建并 fsync，再用 Linux `renameat2` 原子 no-replace/exchange 一次发布；不支持原子系统调用时仅在 mutation lock 内做 no-replace/可回滚重命名（协作进程间安全，对不遵守 flock 的外部写入者仍有竞态窗口；生产部署为 Linux renameat2），并在挪动旧目标前 durable 写 recovery marker：重启会恢复尚未提交的旧目录或清理已提交后的 backup。提交点后的清理失败不会伪报复制失败；无 marker 的 `.copy-old.*` 因无法证明可删而保守保留
 - `.index`、`.trash`、`.storage.lock` 和在途 `.upload/.copy` 命名空间在公共 `resolve`/文件 API 层直接拒绝，仅内部流程可显式访问
@@ -99,7 +99,7 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 - `upload_index.py`: 秒传去重索引（md5→path，双向映射）；sidecar `0600` 文件锁下每次 reload→modify→fsync→replace，支持 Linux 多进程实例。只有服务端实算 hash 的 `verified` 条目可用于免传，且必须绑定发布 revision，外部/并发覆盖后 lookup 自动失效
 - 索引生命周期自动同步：`container` 组装时 `storage.attach_index()` 反向注入，rename/move/删除/回收站/覆盖写等内容变更自动递归 `forget_path` 失效对应条目；存储与索引统一采用 storage→index 锁序，发布覆盖期间不会暴露陈旧秒传命中。上传发布成功后的 `record` 登记是优化项，登记失败只记 warning 不使上传报错（避免客户端重试经 noclobber 落成重复照片）；verified 查询靠 exists+revision 自愈陈旧条目
 - 搜索索引生命周期：`storage.attach_change_listener(tasks.handle_storage_change)` 在内容变更后同步失效旧 sidecar，再按文件/目录入队增量索引或批量重建；内部命名空间和 staging 永不触发递归任务
-- 业务代码只依赖 base，可平滑切换实现
+- 业务代码直接依赖 `local.LocalStorage`（当前唯一实现，由 container 统一组装）
 
 ### 3.7 Agent 工具注册（agent/tools/）
 - 每个工具 = 独立模块文件（files.py / system.py / analytics.py）
@@ -241,4 +241,4 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4）
 | 多用户 | 未做（个人项目） | 若需要：auth 层扩展 user 维度 |
 | **安卓原生壳** | ✅ 已落地 | frontend/android（Capacitor 7）：扫码配对、相册自动同步（WorkManager+秒传去重+整秒检查点+进度可视）、设备心跳、下拉刷新，详见 docs/android.md |
 | **上传去重（秒传）** | ✅ 已落地 | `/files/dedupe` verified-only 预检 + `/files/upload` 服务端流式实算 MD5；索引绑定文件 revision 并随内容变更自动失效 |
-| S3 存储 | 未做 | 若做：按 base 协议新增实现 + container 切换 |
+| S3 存储 | 未做 | 若做：新增实现类并在 container 切换组装点（业务直接依赖 LocalStorage，无协议抽象） |

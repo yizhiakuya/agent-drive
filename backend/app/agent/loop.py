@@ -319,14 +319,11 @@ class AgentLoop:
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
 
         # Dreaming 巩固（尽力而为）
+        # 超时保护：dreaming 最多 15s（失败/超时不阻塞首包）
         try:
-            # 超时保护：dreaming 最多 15s（失败/超时不阻塞首包）
-            try:
-                await asyncio.wait_for(self._dream(), timeout=15.0)
-            except (asyncio.TimeoutError, Exception):
-                pass  # dreaming 失败不影响任务
-        except Exception:
-            pass
+            await asyncio.wait_for(self._dream(), timeout=15.0)
+        except (asyncio.TimeoutError, Exception):
+            pass  # dreaming 失败不影响任务
 
         # 自动压缩（滚动摘要）
         eff_history = await self._maybe_compress(history, sid)
@@ -340,7 +337,6 @@ class AgentLoop:
                       or "同意" in user_message or "做吧" in user_message or "执行" in user_message
                       or user_message.strip().lower() in ("ok", "yes", "go"))
             if verbal:
-                from .confirm import issue_confirmation
                 new_pending = issue_confirmation(stored_pending["tool"], stored_pending["arguments"])
                 if self.sessions is not None and sid:
                     self.sessions.update_meta(sid, pending_confirmation=new_pending)

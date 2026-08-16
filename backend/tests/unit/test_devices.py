@@ -1,6 +1,8 @@
 """设备注册表单测：upsert / 列表排序 / 移除 / 持久化 / 坏文件容错。"""
 from __future__ import annotations
 
+import json
+import stat
 import time
 
 from app.devices.registry import DeviceRegistry
@@ -40,3 +42,23 @@ def test_bad_file_tolerated(tmp_path):
     assert reg.list() == []
     reg.register("dev-3")  # 坏文件后仍可正常写入
     assert len(reg.list()) == 1
+
+
+def test_save_atomic_writes_json_and_permissions(tmp_path):
+    path = tmp_path / "devices.json"
+    reg = DeviceRegistry(path)
+    reg.register("dev-a", name="A")
+    reg.register("dev-b", name="B")
+
+    # JSON 可读回，内容与内存一致
+    data = json.loads(path.read_text(encoding="utf-8"))
+    ids = {d["device_id"] for d in data}
+    assert ids == {"dev-a", "dev-b"}
+    assert all(d["device_id"] for d in data)  # 无空 device_id 条目
+
+    # 文件权限 0o600
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    # 无 .tmp 残留
+    leftovers = [p for p in tmp_path.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == []

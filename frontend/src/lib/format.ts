@@ -1,4 +1,21 @@
 // 展示工具函数（从 ChatPanel 拆出，独立测试）
+
+/** 秒级时间戳 → zh-CN 展示文案；dateOnly=仅日期，short=月/日 时:分（不含年/秒）。 */
+export function fmtTime(tsSeconds: number | null | undefined, opts?: { dateOnly?: boolean; short?: boolean }): string {
+  if (!tsSeconds) return "";
+  const d = new Date(tsSeconds * 1000);
+  if (opts?.dateOnly) return d.toLocaleDateString("zh-CN");
+  if (opts?.short) {
+    return d.toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+  return d.toLocaleString("zh-CN");
+}
+
 export function fmtSize(n: number): string {
   if (n > 1e9) return (n / 1e9).toFixed(1) + " GB";
   if (n > 1e6) return (n / 1e6).toFixed(1) + " MB";

@@ -1,10 +1,9 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { listFiles, uploadFile, getFileInfo, renameFile, moveFile, copyFile, mkdir,
-  deleteToTrash, listTrash, restoreFromTrash, emptyTrash, FileInfo, fileRawUrl, fileDownloadUrl } from "@/lib/api/files";
-import { fmtSize } from "@/lib/format";
+  deleteToTrash, listTrash, restoreFromTrash, emptyTrash, FileInfo, fileDownloadUrl } from "@/lib/api/files";
+import FilePreview from "./FilePreview";
+import { fmtSize, fmtTime } from "@/lib/format";
 import { EV, emitToast, emitFilesChanged, emitTasksChanged } from "@/lib/events";
 
 export default function FilePage() {
@@ -220,7 +219,7 @@ export default function FilePage() {
                     onDoubleClick={() => it.is_dir && load(it.path)}>
                   <td className="p-1.5 px-2 border-b border-border/50"><span className={it.is_dir ? "text-warn" : ""}>{it.is_dir ? "📂" : "📄"}</span> {it.name}</td>
                   <td className="p-1.5 px-2 border-b border-border/50">{it.is_dir ? "—" : fmtSize(it.size)}</td>
-                  <td className="hidden sm:table-cell p-1.5 px-2 border-b border-border/50 text-muted">{it.mtime ? new Date(it.mtime * 1000).toLocaleString() : ""}</td>
+                  <td className="hidden sm:table-cell p-1.5 px-2 border-b border-border/50 text-muted">{fmtTime(it.mtime)}</td>
                 </tr>
               ))}
             </tbody>
@@ -279,7 +278,7 @@ export default function FilePage() {
               <div key={t.trash_id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm hover:bg-card">
                 <span>{t.is_dir ? "📂" : "📄"}</span>
                 <span className="flex-1 truncate text-xs" title={t.path}>{t.path}</span>
-                <span className="text-muted text-xs">{new Date(t.deleted_at * 1000).toLocaleDateString()}</span>
+                <span className="text-muted text-xs">{fmtTime(t.deleted_at, { dateOnly: true })}</span>
                 <button className="text-accent text-xs cursor-pointer" onClick={() => doRestore(t)}>恢复</button>
               </div>
             ))}
@@ -305,29 +304,20 @@ export default function FilePage() {
             </div>
             {selected.info && (
               <div className="px-3 py-1 text-muted text-xs">
-                {fmtSize(selected.info.size)} · {new Date(selected.info.modified * 1000).toLocaleString()}
+                {fmtSize(selected.info.size)} · {fmtTime(selected.info.modified)}
                 {selected.info.indexed && ` · 已索引(${selected.info.indexed.method}, ${selected.info.indexed.chars}字)`}
               </div>
             )}
             <div className="flex-1 overflow-auto">
-              {selected.info?.preview_kind === "image" && <img src={fileRawUrl(selected.path)} alt={selected.path} className="max-w-full mx-auto" />}
-              {selected.info?.preview_kind === "video" && (
-                <video src={fileRawUrl(selected.path)} controls className="w-full max-h-full" />
+              {selected.info && (
+                <FilePreview
+                  info={selected.info}
+                  path={selected.path}
+                  text={selected.text}
+                  isMarkdown={isMarkdown}
+                  variant="page"
+                />
               )}
-              {selected.info?.preview_kind === "audio" && (
-                <div className="p-6 flex flex-col items-center gap-3">
-                  <span className="text-4xl">🎵</span>
-                  <div className="text-sm">{selected.path.split("/").pop()}</div>
-                  <audio src={fileRawUrl(selected.path)} controls className="w-full" />
-                </div>
-              )}
-              {selected.info?.preview_kind === "pdf" && <iframe src={fileRawUrl(selected.path)} title={selected.path} className="w-full h-full min-h-96" />}
-              {selected.info?.preview_kind === "text" && isMarkdown ? (
-                <div className="markdown-body px-3 py-2"><ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.text}</ReactMarkdown></div>
-              ) : (
-                <pre className="px-3 py-2 text-xs whitespace-pre-wrap break-all">{selected.text}</pre>
-              )}
-              {selected.info?.preview_kind === "binary" && <div className="p-4 text-muted text-sm">二进制文件不支持预览，可下载后查看</div>}
             </div>
           </>
         )}

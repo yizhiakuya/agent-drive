@@ -1,22 +1,9 @@
 "use client";
-import { useState } from "react";
-import { ServerConfig } from "@/lib/native/server-config";
+import { useRescan } from "@/lib/native/useRescan";
 
 /** 原生 App：无有效凭据时的重新扫码卡（主路径扫码；密码登录作逃生口）。 */
 export default function RescanCard({ hint, onPasswordFallback }: { hint?: string; onPasswordFallback: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  async function scan() {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await ServerConfig.rescan();
-    } catch (e) {
-      setMsg(String(e));
-    }
-    setBusy(false);
-  }
+  const { busy, msg, rescan: scan } = useRescan();
 
   return (
     <div className="h-screen flex items-center justify-center bg-panel p-4">

@@ -45,7 +45,7 @@ export interface TaskOverview {
   };
 }
 
-export interface TaskListResponse {
+interface TaskListResponse {
   items: TaskRecord[];
   overview: TaskOverview;
 }

@@ -1,4 +1,4 @@
-import { Capacitor, registerPlugin } from "@capacitor/core";
+import { registerPlugin } from "@capacitor/core";
 
 export interface PhotoSyncStatus {
   enabled: boolean;
@@ -26,14 +26,14 @@ export interface SyncProgress {
   total: number;
 }
 
-export interface PhotoSyncOptions {
+interface PhotoSyncOptions {
   enabled?: boolean;
   wifiOnly?: boolean;
   intervalHours?: number;
   targetFolder?: string;
 }
 
-export interface PhotoSyncPlugin {
+interface PhotoSyncPlugin {
   getStatus(): Promise<PhotoSyncStatus>;
   configure(options: PhotoSyncOptions): Promise<PhotoSyncStatus>;
   syncNow(): Promise<{ started: boolean }>;
@@ -46,5 +46,3 @@ export interface PhotoSyncPlugin {
 }
 
 export const PhotoSync = registerPlugin<PhotoSyncPlugin>("PhotoSync");
-
-export const isPhotoSyncAvailable = () => Capacitor.isNativePlatform();

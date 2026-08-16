@@ -1,11 +1,6 @@
 // 对话 API：聚合 + SSE 流式（含跨 chunk 缓冲）
 import { api, authenticatedFetch, ApiError, apiErrorMessage } from "./client";
 
-export interface ChatEvent {
-  event: "text" | "tool_start" | "tool_trace" | "done" | "error";
-  data: Record<string, unknown>;
-}
-
 export const chat = (
   message: string,
   history: { role: string; content: string }[],

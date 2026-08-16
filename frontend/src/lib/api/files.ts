@@ -1,7 +1,7 @@
 // 文件 API（补全：info/raw 走封装，组件不再绕层）
 import { api, apiPath, authenticatedFetch, ApiError, apiErrorMessage, getDeviceToken } from "./client";
 
-export interface FileItem {
+interface FileItem {
   name: string;
   path: string;
   is_dir: boolean;
@@ -19,7 +19,7 @@ export interface FileInfo {
   indexed: { method: string; chars: number } | null;
 }
 
-export interface UploadResponse {
+interface UploadResponse {
   uploaded: { path: string; size: number; deduped?: boolean };
   indexed: { task_id: string; status: string } | null;
 }

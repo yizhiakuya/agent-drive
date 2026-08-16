@@ -258,7 +258,6 @@ public final class SyncEngine {
         CheckpointTracker checkpoint = new CheckpointTracker(lastSync, pendingSecond, pendingMaxId);
         int count = 0;
         int failures = 0;
-        int skips = 0;
         int processed = 0;
         boolean truncated = false;
         long truncatedSecond = -1;
@@ -330,7 +329,6 @@ public final class SyncEngine {
                     emitProgress();          // JS 实时进度
                     notifyProgress(ctx);      // 通知栏进度（节流）
                 } catch (PermanentSkipException e) {
-                    skips++;                  // 永久被拒：跳过并推进水位，绝不冻结检查点
                     checkpoint.skip(id);
                     currentFile = name;
                     emitProgress();
@@ -338,7 +336,7 @@ public final class SyncEngine {
                     aborted = true;           // 连接级失败：中止整批
                     checkpoint.failure();     // 当前秒挂 pending，检查点不能越过
                     break;
-                } catch (Exception e) {
+                } catch (Exception ignored) {
                     failures++;               // 单张失败不阻塞整批；同秒下轮重试
                     checkpoint.failure();
                 }

@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-export interface DeviceSyncState {
+interface DeviceSyncState {
   enabled: boolean;
   wifi_only: boolean;
   interval_hours: number;

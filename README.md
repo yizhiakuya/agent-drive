@@ -42,7 +42,7 @@ npm install
 # 生产: 构建静态导出(backend 单服务托管 out/)
 npm run build
 # 开发: 直连后端
-NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # :3000
+NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # :3333
 ```
 
 ### 3. 首次使用
@@ -77,10 +77,10 @@ agent-drive/
 │   │   │   ├── tools/           # files/system/analytics/plan/memory
 │   │   │   └── memory/          # preferences/sessions
 │   │   ├── llm/                 # base/manager/embeddings/providers(3协议)
-│   │   ├── storage/             # base/local（回收站 .trash）+ upload_index（秒传去重）
+│   │   ├── storage/             # local（回收站 .trash）+ upload_index（秒传去重）
 │   │   ├── ingest/              # pipeline（PDF/OCR 摄入+版本化向量索引）
 │   │   └── tasks/               # SQLite 队列/store、runner、handler、任务服务与独立 Worker
-│   ├── tests/                   # unit 13 套（pytest 收集 5 + 脚本直跑 8）+ integration pytest
+│   ├── tests/                   # unit 15 套（pytest 收集 9 + 脚本直跑 6；retry/bugfixes 双轨）+ integration pytest
 │   ├── scripts/                 # benchmark_real.py / mock_llm.py / backup.sh
 │   └── pyproject.toml           # 依赖唯一真相源
 ├── frontend/                    # Next.js 16 + Tailwind + TS + zustand
@@ -114,9 +114,9 @@ make bench          # 真实 LLM 可靠性基准
 ```bash
 cd backend
 ruff check app/                              # lint
-python -m pytest tests/unit -q               # pytest 单测（auth/设备/存储/ingest/任务队列）
+python -m pytest tests/unit -q               # pytest 单测（auth/设备/存储/ingest/任务队列等 9 文件）
 python -m pytest tests/integration -q        # API 集成测试
-# 遗留脚本式单测（8 套，逐一直跑；CI 同款）
+# 遗留脚本式单测（8 套逐一直跑；其中 retry/bugfixes 亦被 pytest 收集；CI 同款）
 for t in test_agent test_critic test_reliability test_retry \
          test_compress test_write_tools test_memory test_bugfixes; do
   python tests/unit/$t.py || exit 1

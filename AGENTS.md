@@ -34,7 +34,7 @@ Agent-first 私人网盘：FastAPI 后端 + Next.js 16 前端（静态导出）+
 # 后端（依赖：pip install -e ".[dev]" —— pyproject 含 build-system，dev 组带 pytest/ruff/mypy）
 cd backend && ruff check app/
 python -m pytest tests/unit -q && python -m pytest tests/integration -q
-# 遗留脚本式单测（pytest 不收集，CI 逐一直跑；bash 写法，Windows 用 foreach 等价）
+# 遗留脚本式单测（CI 逐一直跑；其中 test_retry/test_bugfixes 兼具 pytest 可收集写法、属双轨；bash 写法，Windows 用 foreach 等价）
 for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python tests/unit/$t.py || exit 1; done
 
 # 前端
@@ -55,7 +55,8 @@ cd frontend/android && gradlew.bat assembleRelease
    ⚠️ 不要用 PowerShell 通配符 `out\*` scp——会漏掉点开头的目录（.well-known/assetlinks.json）；tar 全量打包是安全做法
 4. **发布 APK**：拷贝 app-release.apk → `out/app/agent-drive.apk` → 随前端一起部署。
    下载地址恒定：https://home.rainaki.top:13311/app/agent-drive.apk；
-   ⚠️ APK 不要放进 public/（会被 cap sync 嵌套打包进 App 自身资源）
+   ⚠️ APK 不要放进 public/（会被 cap sync 嵌套打包进 App 自身资源）；
+   ⚠️ 在服务器原地 `npm run build` 会清空 out/ 并丢掉手工拷入的 out/app/——重建后必须从 `/root/agent-drive-rollbacks/` 恢复 agent-drive.apk，并 `chmod -R a+rX out/`（build 产物默认 0600）
 5. **数据备份**：deploy/agent-drive-backup.{service,timer} 已在服务器安装启用（每日 04:00，/root/backups 轮转 7 份）；`tasks.sqlite3` 必须经 Python sqlite3 backup API 生成一致快照，禁止直接打包活动中的 WAL 三件套
 
 ## 4. 关键约定与坑位（改动前必读）
@@ -76,11 +77,12 @@ cd frontend/android && gradlew.bat assembleRelease
 - **向量有效性**：全文元数据记录 source_revision + extractor_version；向量元数据记录 source_revision + embedding fingerprint + chunk_version。文档用 `retrieval.passage`、查询用 `retrieval.query`；`.npy` 与 metadata 分别原子发布，读取必须同时校验，旧格式/模型切换自动视为失效
 - **同步检查点**：整秒完成后才推进 `lastSyncAt`；失败不阻塞整批但不得让更晚秒越过最早失败秒，Worker 按 lastError 退避重试；MediaStore query/Cursor/字段读取和 checkpoint commit 异常也必须保留当前/已有 pending，不能把部分成功当成已提交。每行先读 DATE_ADDED 并以此真实秒 `begin`，再读 _ID 等其余字段——字段异常必须落在该真实秒的 pending 上，不得把已完成的上一组误标失败。`lastSyncAt/pending*` 必须同一次加密 prefs commit。周期/快速/手动任务可能使用不同 unique work 名，`SyncEngine.sync()` 必须保持进程内串行
 - **noclobber 原子独占**：`save_bytes(..., exclusive=True)` 用 os.link 原子不覆盖 + 端点重试改名；web 覆盖上传走原子 replace。发布父目录使用 dirfd/O_NOFOLLOW；link/replace 是可见性提交点，之后的目录 fsync/临时链接清理失败不得把已发布文件伪报为失败。覆盖移动拒绝文件↔目录混型（IsADirectory/NotADirectory），非空目录整体覆盖报 FileExists（409）。非 Linux 的 no-replace fallback 仅在 mutation lock 内安全（对不遵守 flock 的外部写入者仍有窗口；生产为 Linux renameat2）。勿退回“先 exists 再普通写”的 TOCTOU
+- **设备注册表写入**：`system/devices.json` 与 auth/upload-index 同原子规范——0600 临时文件 + flush/fsync + 原子 replace，失败清理 .tmp；勿退回无 fsync 的 write_text+replace
 - **原子文本、目录复制与回收站**：write/append 都是 temp+fsync+replace；append 的读-改-写由 RLock/flock 包围。目录复制先在隐藏 staging 完整构建，Linux 用 `renameat2` no-replace/exchange 一次发布；fallback 在挪旧目标前 durable 写 `.copy.*.txn.json`，启动恢复未提交旧目录或清理已提交 backup。无 marker 的 `.copy-old.*` 无法证明可删，必须保守保留。回收站每次删除有唯一 `trash_id`，恢复传 trash_id（兼容旧 path），孤儿 metadata 不展示并可清理
 - **resolve 拒绝符号链接与内部路径**：组件级检查（业务从不产生 symlink），下载/预览/上传共用；`.index/.trash/.storage.lock` 与 `.upload/.copy` staging 的公共访问必须拒绝，不只是列表隐藏。内部流程使用显式 `allow_internal`，列表/摄入/任务变更必须跳过
 - **设备令牌加密存储**：现行数据只写独立 `agent_drive_secure` EncryptedSharedPreferences（AES256-GCM/SIV，MasterKey 在 Keystore）+ `allowBackup=false`。升级识别旧 `agent_drive` 明文和 1.0.27 同文件密文：同键以 1.0.27 持续写入的密文为现行值，明文只作更早来源/清理残留；独立新密文若与 legacy 现行值冲突则保留双方并失败关闭。新密文 commit 成功或逐键确认相等后才清理旧业务数据，AndroidX keyset 永不 clear，清理失败下次幂等重试；初始化/迁移/commit 失败必须弹窗或 reject/Log+retry，绝不能吞异常或降级明文
 - **显式编码**：backend/app 全部 read_text/write_text/open 显式 `encoding="utf-8"`；用户可编辑记忆文件用 `preferences._read_tolerant`（utf-8→gbk→latin-1）容错读；`write_text` 固定 `newline="\n"`（Windows 不转 CRLF）
-- **CI（GitHub Actions）**：backend = ruff + mypy（阻断，保持 0 错误）+ integration + unit(pytest) + 8 个遗留脚本直跑；frontend = eslint + vitest + build；android = gradle testDebugUnitTest（JVM 单测）。新增测试一律 pytest 风格（自动被收集）；ESLint 配置忽略 android/ 构建产物，不得恢复全目录裸扫
+- **CI（GitHub Actions）**：backend = ruff + mypy（阻断，保持 0 错误）+ integration + unit(pytest) + 8 个遗留脚本直跑；frontend = eslint + vitest + build；android = gradle testDebugUnitTest（JVM 单测）。CI Python 与生产对齐 3.10（勿升 3.11：3.10 特有的 asyncio.TimeoutError 兼容问题 CI 才测得出来）；gradlew 可执行位已入库，本地可直接 ./gradlew。新增测试一律 pytest 风格（自动被收集）；ESLint 配置忽略 android/ 构建产物，不得恢复全目录裸扫
 - **Vitest ESM 配置**：使用 `vitest.config.mts` + `import.meta.url` 解析别名；勿改回含 ESM 语法的 `.ts`/CommonJS 加载方式（未来 Vite native config loader 不支持）
 - **上传大小上限**：`max_upload_mb=300`（后端 413；公网闸门仍是 nginx 200m）——直连 8000 的滥用兜底
 - **健康检查**：`/api/v1/health` 公开豁免（探活用，不泄露业务信息）
@@ -101,6 +103,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **原生登出语义**：先清 EncryptedSharedPreferences 再清进程令牌；安全存储清理失败必须停留并报错。离线/5xx 本地退出后只提示“服务端吊销状态未知”，401/403 视为凭据已不可用，勿误报旧令牌仍有效
 - **chat SSE 解析**：chatStream 必须处理 LF/CRLF/CR、换行跨 chunk、UTF-8 码点跨 chunk、多行 data 和无终止空行的尾事件；401 与普通 API/上传共用 `EV.unauthorized`，错误保留后端 detail
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
+- **前端复用单元**：文件预览六分支统一用 `FilePreview`（variant=panel/page），时间格式化统一用 `lib/format.fmtTime`（勿再内联 toLocaleString），原生重扫统一用 `lib/native/useRescan`（勿各自维护 busy/msg）；新增同类重复先查这些单元
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
 - **移动端文件工具栏**：`<640px` 保持 3×2、44px 高触控网格；`<360px` 顶栏只视觉隐藏 Agent Drive 文字（保留无障碍文本），320/407px 必须无横向滚动
 - **Next viewport**：Next.js 16 在 `layout.tsx` 用独立 `export const viewport: Viewport`；勿放回 `metadata.viewport`（构建会警告并可能被忽略）

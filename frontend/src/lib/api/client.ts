@@ -1,11 +1,11 @@
-// API 基座：fetch 封装（唯一真相源，无死导出）
+// API 基座：fetch 封装（唯一真相源）
 // web 生产(out 静态托管)同源 /api/v1（HttpOnly Cookie 鉴权）；dev(next dev 3000)可配 NEXT_PUBLIC_API_BASE 直连后端
 // 原生 App(Capacitor)：启动时经 ServerConfig 插件读取扫码配置的服务器地址与设备令牌（Bearer 鉴权）
 import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { EV } from "@/lib/events";
 
-export let V1 = process.env.NEXT_PUBLIC_API_BASE || "/api/v1";
+let V1 = process.env.NEXT_PUBLIC_API_BASE || "/api/v1";
 let baseReady = !Capacitor.isNativePlatform();
 let basePromise: Promise<void> | null = null;
 let deviceToken: string | null = null;
@@ -59,9 +59,6 @@ export function setDeviceToken(t: string | null) {
   }
 }
 
-export function invalidateGetCache() {
-  clearGetState();
-}
 export function getDeviceToken() {
   return deviceToken;
 }
@@ -95,11 +92,6 @@ export async function ensureBase(): Promise<void> {
     basePromise = null;
   });
   return basePromise;
-}
-
-/** 原生 App：所有 API 请求带设备令牌（无 Cookie 的跨域场景）。 */
-export function authHeaders(): Record<string, string> {
-  return deviceToken ? { Authorization: `Bearer ${deviceToken}` } : {};
 }
 
 function headersFor(token: string | null): Record<string, string> {
@@ -232,11 +224,4 @@ export interface LLMConfigPayload {
   api_key: string;
   model: string;
   temperature?: number;
-}
-
-export interface StatusPayload {
-  configured: boolean;
-  provider_types?: Record<string, string>;
-  current?: { type: string; base_url: string; model: string } | null;
-  preferences?: Record<string, string>;
 }

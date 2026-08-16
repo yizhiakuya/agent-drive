@@ -165,6 +165,16 @@ public class SyncEngineTest {
     }
 
     @Test
+    public void finishGroupWithoutOpenSecondIsANoOp() {
+        SyncEngine.CheckpointTracker tracker = new SyncEngine.CheckpointTracker(99);
+        tracker.finishGroup(true); // 无 begin 的组：不得改动检查点或产生 pending
+
+        assertEquals(99, tracker.lastDrained());
+        assertEquals(-1, tracker.pendingSecond());
+        assertEquals(0, tracker.pendingMaxId());
+    }
+
+    @Test
     public void permanentClientErrorsAreClassifiedApartFromRetryableOnes() {
         assertTrue(SyncEngine.isPermanentClientError(400));
         assertTrue(SyncEngine.isPermanentClientError(413));

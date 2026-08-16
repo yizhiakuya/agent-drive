@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 /** 原生端服务器连接配置（扫码获得，存 SharedPreferences）。 */
-export interface ServerConfigPlugin {
+interface ServerConfigPlugin {
   getServer(): Promise<{ server: string | null }>;
   setServer(options: { server: string }): Promise<{ server: string }>;
   hasServer(): Promise<{ has: boolean }>;

@@ -26,6 +26,7 @@ import {
   type TaskStatus,
 } from "@/lib/api/tasks";
 import { EV, emitTasksChanged, emitToast } from "@/lib/events";
+import { fmtTime } from "@/lib/format";
 
 type Filter = "all" | "active" | "failed" | "done";
 
@@ -68,13 +69,7 @@ function StatusIcon({ status }: { status: TaskStatus }) {
 }
 
 function formatTime(value: number | null) {
-  if (!value) return "";
-  return new Date(value * 1000).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return fmtTime(value, { short: true });
 }
 
 function TaskRow({ task, pending, onCancel, onRetry }: {

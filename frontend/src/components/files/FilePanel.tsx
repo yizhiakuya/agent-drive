@@ -1,8 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { listFiles, uploadFile, getFileInfo, FileInfo, fileRawUrl, fileDownloadUrl } from "@/lib/api/files";
+import { listFiles, uploadFile, getFileInfo, FileInfo, fileDownloadUrl } from "@/lib/api/files";
+import FilePreview from "./FilePreview";
 import { fmtSize } from "@/lib/format";
 import { EV, emitToast, emitTasksChanged } from "@/lib/events";
 
@@ -122,18 +121,15 @@ export default function FilePanel() {
                 <div className="px-2.5 py-0.5 text-muted text-xs">已索引({selected.info.indexed.method}, {selected.info.indexed.chars}字)</div>
               )}
               <div className="flex-1 overflow-auto">
-                {selected.info?.preview_kind === "image" && <img src={fileRawUrl(selected.path)} alt="" className="max-w-full mx-auto" />}
-                {selected.info?.preview_kind === "video" && <video src={fileRawUrl(selected.path)} controls className="w-full max-h-56" />}
-                {selected.info?.preview_kind === "audio" && (
-                  <div className="p-3"><audio src={fileRawUrl(selected.path)} controls className="w-full" /></div>
+                {selected.info && (
+                  <FilePreview
+                    info={selected.info}
+                    path={selected.path}
+                    text={selected.text}
+                    isMarkdown={isMarkdown}
+                    variant="panel"
+                  />
                 )}
-                {selected.info?.preview_kind === "pdf" && <iframe src={fileRawUrl(selected.path)} title="pdf" className="w-full h-56" />}
-                {selected.info?.preview_kind === "text" && isMarkdown ? (
-                  <div className="markdown-body px-3 py-2 text-xs"><ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.text}</ReactMarkdown></div>
-                ) : (
-                  <pre className="px-3 py-2 text-xs whitespace-pre-wrap break-all">{selected.text}</pre>
-                )}
-                {selected.info?.preview_kind === "binary" && <div className="p-3 text-muted text-xs">二进制文件，下载查看</div>}
               </div>
             </div>
           )}

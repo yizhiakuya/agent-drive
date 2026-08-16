@@ -52,9 +52,14 @@ class Settings(BaseSettings):
 
     # CORS：显式 origin（credentials 模式不允许 *）
     # - https://localhost：Capacitor App WebView 跨域（Bearer 鉴权）
-    # - http://localhost:3000：next dev 直连后端（Cookie 鉴权）
+    # - http://localhost:3000 / :3333：next dev 直连后端（Cookie 鉴权）
     # web/PWA 同源部署不经过 CORS
-    cors_origins: list[str] = ["https://localhost", "http://localhost:3000", "http://localhost"]
+    cors_origins: list[str] = [
+        "https://localhost",
+        "http://localhost:3000",
+        "http://localhost:3333",
+        "http://localhost",
+    ]
 
     @property
     def system_path(self) -> Path:

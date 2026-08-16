@@ -9,6 +9,5 @@ export const getConfig = () => api<{
   preferences?: Record<string, string>;
 }>("/config");
 export const configureLLM = (cfg: LLMConfigPayload) => api("/config", { method: "POST", body: JSON.stringify(cfg) });
-export const testLLM = (cfg: LLMConfigPayload) => api("/config/test", { method: "POST", body: JSON.stringify(cfg) });
 export const saveEmbeddings = (body: Record<string, string>) =>
   api("/config/embeddings", { method: "PUT", body: JSON.stringify(body) });

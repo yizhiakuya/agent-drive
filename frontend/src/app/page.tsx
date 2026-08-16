@@ -60,7 +60,7 @@ export default function Home() {
       if (native) {
         const { server } = await ServerConfig.getServer();
         if (!server) {
-          window.dispatchEvent(new CustomEvent("agent-drive:toast", {
+          window.dispatchEvent(new CustomEvent(EV.toast, {
             detail: { kind: "error", text: "未连接服务器：请扫码连接" },
           }));
           setAuthMode("rescan");
@@ -76,7 +76,7 @@ export default function Home() {
       const a = await ares.json() as { initialized: boolean };
       if (!a.initialized) {
         if (native) {
-          window.dispatchEvent(new CustomEvent("agent-drive:toast", {
+          window.dispatchEvent(new CustomEvent(EV.toast, {
             detail: { kind: "error", text: "请先在网页端设置密码，再扫码连接" },
           }));
           setAuthMode("rescan");
@@ -151,7 +151,7 @@ export default function Home() {
     // 分享上传回跳提示
     const shared = new URLSearchParams(window.location.search).get("shared");
     if (shared) {
-      window.dispatchEvent(new CustomEvent("agent-drive:toast", { detail: { kind: "ok", text: `已接收分享的文件：${shared}` } }));
+      window.dispatchEvent(new CustomEvent(EV.toast, { detail: { kind: "ok", text: `已接收分享的文件：${shared}` } }));
       window.history.replaceState(null, "", "/");
     }
     boot();
