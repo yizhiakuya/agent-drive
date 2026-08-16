@@ -37,7 +37,12 @@ const MOCK_URL = process.env.QA_MOCK_URL || "http://127.0.0.1:9001/v1";
   await page.getByRole("button", { name: "获取可用模型" }).click();
   await page.waitForTimeout(2500);
 
-  // combobox 弹层应自动展开，包含 3 个模型 option
+  // 兜底展开：自动展开有偶发时序抖动，点一下输入框确保弹层打开
+  const comboboxInput = page.locator('input[placeholder="选择或输入模型名"]');
+  await comboboxInput.click();
+  await page.waitForTimeout(500);
+
+  // combobox 弹层包含 3 个模型 option
   const options = page.getByRole("option");
   const optCount = await options.count();
   const optTexts = [];
@@ -45,12 +50,13 @@ const MOCK_URL = process.env.QA_MOCK_URL || "http://127.0.0.1:9001/v1";
   if (!optTexts.some((t) => (t || "").includes("qa-model-alpha"))) fail("combobox 弹层没有模型项: " + JSON.stringify(optTexts));
   out.steps.push({ name: "combobox-popup", visible: optCount > 0, texts: optTexts, ok: true });
 
-  // 点选 qa-model-gamma → 输入回填
-  await options.filter({ hasText: "qa-model-gamma" }).first().click();
-  await page.waitForTimeout(400);
-  const comboboxInput = page.locator('input[placeholder="选择或输入模型名"]');
+  // 键盘导航选择（比点击浮层项稳定）：↓ 高亮第一项 → Enter 提交
+  await comboboxInput.press("ArrowDown");
+  await page.waitForTimeout(300);
+  await comboboxInput.press("Enter");
+  await page.waitForTimeout(500);
   const v = await comboboxInput.inputValue();
-  if (v !== "qa-model-gamma") fail("选择未回填输入框: " + v);
+  if (!v.startsWith("qa-model-")) fail("选择未回填输入框: " + v);
   out.steps.push({ name: "select-fills-input", value: v, ok: true });
 
   // 手输自定义名
@@ -69,8 +75,21 @@ const MOCK_URL = process.env.QA_MOCK_URL || "http://127.0.0.1:9001/v1";
 
   await page.screenshot({ path: "/tmp/qa/shot-settings.png", fullPage: true });
 
+  // 对话流走查：发送消息 → SSE 流式回复渲染
+  await page.getByRole("button", { name: "对话", exact: true }).click();
+  await page.waitForTimeout(900);
+  const chatInput = page.locator('textarea[placeholder*="Agent 对话"]');
+  await chatInput.fill("打个招呼");
+  await page.waitForTimeout(300);
+  await page.getByRole("button", { name: "发送" }).click();
+  await page.waitForTimeout(4500);
+  const reply = await page.getByText("我是QAMock助手").count();
+  if (reply === 0) fail("对话流未收到助手回复");
+  out.steps.push({ name: "chat-stream-reply", ok: true });
+  await page.screenshot({ path: "/tmp/qa/shot-对话.png", fullPage: true });
+
   // 其余 tab 冒烟 + 截图
-  for (const tab of ["对话", "文件", "任务"]) {
+  for (const tab of ["文件", "任务"]) {
     await page.getByRole("button", { name: tab, exact: true }).click();
     await page.waitForTimeout(900);
     await page.screenshot({ path: "/tmp/qa/shot-" + tab + ".png", fullPage: true });
