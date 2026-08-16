@@ -75,6 +75,8 @@ cd frontend/android && gradlew.bat assembleRelease
 - **任务状态机**：只经 `JobStore` 做 queued/running/retry_wait/cancelling/terminal 迁移；领取使用租约+心跳，租约过期必须遵守 max_attempts；停机 release 遇到 cancel_requested 必须落为 cancelled，勿留下不可领取的 queued 任务
 - **Python 3.10 Worker 兼容**：`asyncio.wait_for` 的空闲超时必须捕获 `asyncio.TimeoutError`（同时兼容内置 `TimeoutError`），否则生产 Worker 每轮空闲轮询都会误报异常
 - **任务去重与进度**：活跃 dedupe_key 由 SQLite 部分唯一索引保证；相同进度不重复写事件；无游标 SSE 从事件尾部订阅，勿回放全库。终态历史每日保留至少最近 2000 条并清理 30 天前旧记录；子任务仍保留时不得先删父任务
+- **任务会话续接路由**：`AgentLoop._execute` 在 classify 判 chat 后仍检查会话 `meta.last_routed`（旧会话回退 `last_trace`）——上一轮走过任务路径的会话里，短消息（"继续/确认/随便"等 <10 字）强制走任务路径（全量工具）；`_chat_path`/`_task_path` 各自写 `last_routed`。勿改回"短消息一律 classify 判 chat"（生产实测：模型纯文本假装调工具、零工具执行、配置未写入、前端无工具卡片；回归见 tests/unit/test_session_routing.py）
+- **对话面板常驻挂载**：page.tsx 对话主区用 CSS hidden 切换而非条件渲染——ChatPanel 卸载即丢消息流/工具步骤（remount 不自动重载会话）。工具步骤后追加回复/流结束/停止三处都要清掉发送时挂的空助手占位气泡，勿留空白气泡（回归见 ChatPanel.test.tsx）
 - **索引任务链**：文件写/移动/删除先同步失效旧全文与向量，再由 `storage.attach_change_listener` 入队 `index.file`；全量重建是 `index.rebuild` 父任务 + index lane 子任务，禁止在上传请求或 Agent 工具内串行跑 OCR/embedding
 - **任务中心口径**：列表/状态计数只算顶层任务，子任务汇总进父任务；`vector_stats` 是全盘扫描，任务总览必须保留 15 秒缓存，文件变更或 embedding 指纹变化时在本进程失效
 - **向量有效性**：全文元数据记录 source_revision + extractor_version；向量元数据记录 source_revision + embedding fingerprint + chunk_version。文档用 `retrieval.passage`、查询用 `retrieval.query`；`.npy` 与 metadata 分别原子发布，读取必须同时校验，旧格式/模型切换自动视为失效

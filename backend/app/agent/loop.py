@@ -248,7 +248,13 @@ class AgentLoop:
             if self.sessions is not None and session_id:
                 meta = self.sessions.get(session_id)
                 has_pending = bool(meta and meta.get("pending_confirmation"))
-            if not has_pending:
+            # 任务会话续接：上一轮走过任务路径的会话里，短消息（"继续/确认/随便"）
+            # 不能被 classify 降级为 chat——chat 路径无工具，模型会"假装"调工具
+            # （生产实测：零工具执行、配置未写入、前端无工具卡片）。
+            # 原则：chat 误判 = 能力归零；task 误判只是多花 token。
+            if not has_pending and tool_groups is None and self._last_routed_task(session_id):
+                mode, tool_groups = "task", None
+            elif not has_pending:
                 async for ev in self._chat_path(user_message, history, session_id):
                     yield ev
                 return
@@ -291,6 +297,7 @@ class AgentLoop:
         if self.sessions is not None and sid:
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
             self.sessions.append(sid, {"role": "assistant", "content": "".join(reply_parts), "ts": time.time()})
+            self.sessions.update_meta(sid, last_routed="chat")
             meta_now = self.sessions.get(sid)
             if meta_now and (not meta_now.get("title") or meta_now.get("title") == "新会话"):
                 title = user_message.strip().replace("\n", " ")[:24] or "闲聊"
@@ -314,6 +321,21 @@ class AgentLoop:
             "percent": round(used / self.context_window * 100, 1) if self.context_window else 0,
         }
 
+    def _last_routed_task(self, sid: str | None) -> bool:
+        """会话上一轮是否走过任务路径（短消息续接路由用）。
+
+        新格式看 meta.last_routed；旧会话（升级前）无该字段时回退 last_trace：
+        有过工具轨迹即视为任务会话（见 tests/unit/test_session_routing.py）。
+        """
+        if self.sessions is None or not sid:
+            return False
+        meta = self.sessions.get(sid)
+        if not meta:
+            return False
+        if meta.get("last_routed") == "task":
+            return True
+        return bool(meta.get("last_trace"))
+
     # ---------- 任务路径 ----------
     async def _task_path(self, user_message: str, history, confirmed, session_id: str | None, tool_groups):
         """任务：会话初始化 + dreaming + 压缩 + 确认重放 + 进入工具循环。"""
@@ -326,6 +348,8 @@ class AgentLoop:
                 meta = self.sessions.create()
                 sid = meta["id"]
             self.sessions.append(sid, {"role": "user", "content": user_message, "ts": time.time()})
+            # 标记本轮路径：短消息续接路由依赖（chat/task 均写，见 _execute）
+            self.sessions.update_meta(sid, last_routed="task")
 
         # Dreaming 巩固（尽力而为）
         # 超时保护：dreaming 最多 15s（失败/超时不阻塞首包）

@@ -197,14 +197,13 @@ export default function Home() {
         <div className="hidden md:block bg-success-soft text-success px-3 py-1 rounded-full text-xs whitespace-nowrap" title={modelName}>🟢 {modelName || "Agent 已就绪"}</div>
       </header>
 
-      {tab === "chat" && (
-        <main className="flex flex-1 overflow-hidden">
-          <SessionList />
-          <ChatPanel />
-          {/* 移动端隐藏：文件管理走"文件"tab；平板(768-1100)也隐藏防挤压 */}
-          <div className="hidden xl:flex h-full"><FilePanel /></div>
-        </main>
-      )}
+      {/* 对话面板常驻挂载（CSS 隐藏）——切 tab 再回来不丢消息流/工具步骤 */}
+      <main className={`${tab === "chat" ? "flex" : "hidden"} flex-1 overflow-hidden`}>
+        <SessionList />
+        <ChatPanel />
+        {/* 移动端隐藏：文件管理走"文件"tab；平板(768-1100)也隐藏防挤压 */}
+        <div className="hidden xl:flex h-full"><FilePanel /></div>
+      </main>
       {tab === "files" && <main className="flex flex-1 overflow-hidden"><FilePage /></main>}
       {tab === "tasks" && <main className="flex flex-1 overflow-hidden"><TaskPage /></main>}
       {tab === "settings" && <main className="flex flex-1 overflow-hidden"><SettingsPage /></main>}

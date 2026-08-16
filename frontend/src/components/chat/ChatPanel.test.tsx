@@ -95,6 +95,35 @@ describe("ChatPanel 主流程", () => {
     expect(screen.getByText(/完成/)).toBeInTheDocument();
   });
 
+  it("工具步骤后文本回复不残留空助手占位气泡", async () => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("tool_start", { tool: "list_files", arguments: {} });
+      onEvent("tool_trace", { tool: "list_files", output: "[]", parsed: [] });
+      onEvent("text", { text: "已列出文件" });
+      return Promise.resolve(null);
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("看看有什么文件");
+    expect(screen.getByText("list_files")).toBeInTheDocument();
+    expect(screen.getByText("已列出文件")).toBeInTheDocument();
+    // 空占位气泡被清掉：markdown-body 只剩最终回复一个
+    expect(document.querySelectorAll(".markdown-body").length).toBe(1);
+  });
+
+  it("仅工具调用无文本回复时移除空占位气泡", async () => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("tool_start", { tool: "list_files", arguments: {} });
+      onEvent("tool_trace", { tool: "list_files", output: "[]", parsed: [] });
+      return Promise.resolve(null);
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("看看有什么文件");
+    expect(screen.getByText("list_files")).toBeInTheDocument();
+    expect(document.querySelectorAll(".markdown-body").length).toBe(0);
+  });
+
   it("done 返回 pending_confirmation 时弹确认框", async () => {
     chatStream.mockResolvedValue({
       pending_confirmation: {

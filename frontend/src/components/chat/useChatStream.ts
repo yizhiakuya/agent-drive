@@ -107,13 +107,16 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     let replyRef = "";
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
     // 流式节流：token 高频到达时每 80ms 批量刷一帧 UI（长回复不再逐 token 全量重渲染）
+    // 工具步骤之后追加回复气泡时，先清掉发送时挂的空助手占位，避免残留空白气泡
     const applyReply = () => {
       setMessages((m) => {
-        const copy = [...m];
+        let copy = [...m];
         if (copy.length && copy[copy.length - 1].type === "tool_step") {
-          copy.push({ type: "assistant", content: "" });
+          copy = copy.filter((x) => !(x.type === "assistant" && !x.content));
+          copy.push({ type: "assistant", content: replyRef });
+        } else {
+          copy[copy.length - 1] = { type: "assistant", content: replyRef };
         }
-        copy[copy.length - 1] = { type: "assistant", content: replyRef };
         return copy;
       });
     };
@@ -158,6 +161,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         clearTimeout(streamTimerRef.current);
         streamTimerRef.current = null;
         applyReply();
+      } else {
+        // 无文本事件（仅工具调用）：清掉空助手占位气泡，只留工具步骤
+        setMessages((m) =>
+          m.some((x) => x.type === "assistant" && !x.content)
+            ? m.filter((x) => !(x.type === "assistant" && !x.content))
+            : m
+        );
       }
       if (sendSid !== sessionIdRef.current) return;
       const rPlan = (r?.plan ?? []) as PlanStep[];
@@ -205,12 +215,9 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     }
     applyBusy(false);
     setMessages((m) => {
-      const copy = [...m];
-      if (copy.length && copy[copy.length - 1].type === "assistant" && copy[copy.length - 1].content === "") {
-        copy[copy.length - 1] = { type: "system", content: "⏹️ 已停止本次任务" };
-      } else {
-        copy.push({ type: "system", content: "⏹️ 已停止本次任务" });
-      }
+      // 清掉空助手占位气泡后追加停止提示（工具步骤保留）
+      const copy = m.filter((x) => !(x.type === "assistant" && !x.content));
+      copy.push({ type: "system", content: "⏹️ 已停止本次任务" });
       return copy;
     });
   }, [applyBusy, setMessages]);

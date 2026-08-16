@@ -180,7 +180,7 @@ backend/
 │   │   ├── prompt.py         #   提示词工程
 │   │   ├── context.py        #   上下文管理（token 预算截断）
 │   │   ├── confirm.py        #   高风险操作确认判定
-│   │   ├── router.py         #   意图路由（闲聊/任务）
+│   │   ├── router.py         #   意图路由（闲聊/任务；任务会话短消息续接由 loop._execute 按会话 last_routed 裁决）
 │   │   ├── skills.py         #   技能包注册表
 │   │   ├── tools/  registry.py  files.py  system.py  analytics.py
 │   │   ├── memory/  preferences.py  sessions.py
