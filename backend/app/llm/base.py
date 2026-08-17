@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+
+ThinkingLevel = Literal["auto", "low", "medium", "high"]
+THINKING_LEVELS = ("auto", "low", "medium", "high")
+
+
+def normalize_thinking_level(level: str | None) -> str:
+    return level if level in THINKING_LEVELS else "auto"
 
 
 @dataclass
@@ -27,11 +34,20 @@ class ToolCall:
 
 
 @dataclass
+class LLMStreamChunk:
+    """统一流式片段：正文与模型原生 reasoning 分开传递。"""
+
+    text: str = ""
+    reasoning: str = ""
+
+
+@dataclass
 class LLMResult:
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+    reasoning: str = ""
 
 
 class LLMProvider(Protocol):
@@ -44,13 +60,15 @@ class LLMProvider(Protocol):
         self,
         messages: list[dict[str, Any]],
         tools: list[ToolSpec] | None = None,
+        thinking_level: str = "auto",
     ) -> LLMResult: ...
 
     def stream_chat(
         self,
         messages: list[dict[str, Any]],
         tools: list[ToolSpec] | None = None,
-    ) -> AsyncIterator[str]:
+        thinking_level: str = "auto",
+    ) -> AsyncIterator[str | LLMStreamChunk]:
         """流式生成（异步迭代文本块）。默认退化为非流式。"""
         raise NotImplementedError
 

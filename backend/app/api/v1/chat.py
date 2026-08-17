@@ -16,7 +16,9 @@ async def chat(req: ChatRequest, container=Depends(get_container)):
         loop = container.build_agent()
     except ConfigError as e:
         raise HTTPException(400, e.message)
-    result = await loop.run(req.message, req.history, req.confirmations, req.session_id)
+    result = await loop.run(
+        req.message, req.history, req.confirmations, req.session_id, thinking_level=req.thinking_level
+    )
     return ChatResponse(**result)
 
 
@@ -35,7 +37,11 @@ async def chat_stream(req: ChatRequest, container=Depends(get_container)):
     async def event_stream():
         try:
             async for event, payload in loop.run_stream(
-                req.message, req.history, req.confirmations, req.session_id
+                req.message,
+                req.history,
+                req.confirmations,
+                req.session_id,
+                thinking_level=req.thinking_level,
             ):
                 # 线上契约：SSE 每个 data 必须是 JSON 对象（前端解析器拒绝裸字符串）
                 if event == "text" and isinstance(payload, str):

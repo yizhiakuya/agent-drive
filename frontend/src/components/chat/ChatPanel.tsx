@@ -12,8 +12,16 @@ import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
 import { maskSecretsJson } from "@/lib/format";
+import { Brain, ChevronDown } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useChatStream, chatTextDelta } from "./useChatStream";
-import type { Message, PendingConfirmation } from "./useChatStream";
+import type { Message, PendingConfirmation, ThinkingLevel } from "./useChatStream";
 
 export { chatTextDelta };
 
@@ -23,6 +31,17 @@ const QUICK_ACTIONS = [
   { icon: "📁", label: "整理文件", msg: "帮我整理一下网盘里的文件" },
   { icon: "📝", label: "写一份周报", msg: "根据最近的会话写一份周报" },
 ];
+
+const THINKING_OPTIONS: { value: ThinkingLevel; label: string; description: string }[] = [
+  { value: "auto", label: "自动", description: "由模型决定" },
+  { value: "low", label: "快速", description: "更快响应" },
+  { value: "medium", label: "标准", description: "速度与深度平衡" },
+  { value: "high", label: "深度", description: "复杂任务优先" },
+];
+
+function isThinkingLevel(value: string): value is ThinkingLevel {
+  return THINKING_OPTIONS.some((option) => option.value === value);
+}
 
 function greet() {
   const h = new Date().getHours();
@@ -46,6 +65,20 @@ export default function ChatPanel() {
   const [showJump, setShowJump] = useState(false);
   const [autoReport, setAutoReport] = useState<{ date: string; text: string } | null>(null);
   const [reportDismissed, setReportDismissed] = useState(false);
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("auto");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("agent-drive-thinking-level");
+      if (saved && isThinkingLevel(saved)) setThinkingLevel(saved);
+    } catch { /* 忽略 */ }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("agent-drive-thinking-level", thinkingLevel);
+    } catch { /* 忽略 */ }
+  }, [thinkingLevel]);
 
   function markReportRead(date: string) {
     try {
@@ -69,7 +102,7 @@ export default function ChatPanel() {
 
   async function loadSession(sid: string) {
     try {
-      const r = await getSession(sid) as { messages?: { role: string; content: string; tool?: string; arguments?: Record<string, unknown>; output?: string; parsed?: Record<string, unknown> }[] };
+      const r = await getSession(sid) as { messages?: { role: string; content: string; reasoning?: string; tool?: string; arguments?: Record<string, unknown>; output?: string; parsed?: Record<string, unknown> }[] };
       const msgs: Message[] = (r.messages || [])
         .filter((m) => ["user", "assistant", "tool_call"].includes(m.role))
         .map((m) => {
@@ -85,7 +118,11 @@ export default function ChatPanel() {
               content: "",
             };
           }
-          return { type: m.role as "user" | "assistant", content: m.content || "" };
+          return {
+            type: m.role as "user" | "assistant",
+            content: m.content || "",
+            ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+          };
         });
       setMessages(msgs);
       setPlan([]);
@@ -111,14 +148,18 @@ export default function ChatPanel() {
   });
 
   // 封装发送：无显式消息时清空输入框并复位高度（原 send() 的内联行为）。
-  async function handleSend(message?: string, confirmations: Record<string, unknown>[] = []) {
+  async function handleSend(
+    message?: string,
+    confirmations: Record<string, unknown>[] = [],
+    selectedThinkingLevel: ThinkingLevel = thinkingLevel,
+  ) {
     const msg = message ?? input.trim();
     if (!msg || busy) return;
     if (!message) {
       setInput("");
       if (taRef.current) taRef.current.style.height = "auto";
     }
-    await send(msg, confirmations);
+    await send(msg, confirmations, selectedThinkingLevel);
   }
 
   // 主动汇报：空会话时拉取最近一次自动化报告
@@ -186,7 +227,11 @@ export default function ChatPanel() {
     }];
     setMessages((m) => [...m, { type: "user", content: `✅ 我确认执行：${pending.tool}` }]);
     setPending(null);
-    handleSend(`请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`, confirmed);
+    handleSend(
+      `请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`,
+      confirmed,
+      thinkingLevel,
+    );
   }
 
   function confirmNo() {
@@ -230,7 +275,8 @@ export default function ChatPanel() {
         )}
         {messages.map((m, i) => {
           if (m.type === "tool_step") return <ToolStep key={i} step={{ tool: m.tool || "", arguments: m.arguments, status: m.status || "done", output: m.output, parsed: m.parsed }} />;
-          const isThinking = busy && m.type === "assistant" && m.content === "" && i === messages.length - 1;
+          const isThinking = busy && m.type === "assistant" && m.content === "" && !m.reasoning && i === messages.length - 1;
+          const isLatestReasoning = busy && m.type === "assistant" && i === messages.length - 1;
           return (
             <div key={i} className={`flex ${m.type === "user" ? "justify-end" : "justify-start"} animate-slide-in`}>
               <div className={`max-w-[75%] px-3.5 py-2.5 rounded-2xl whitespace-pre-wrap leading-relaxed text-sm shadow-sm ${
@@ -245,7 +291,28 @@ export default function ChatPanel() {
                     <span className="text-xs whitespace-nowrap">{hasRunningTool ? "正在执行操作…" : "Agent 思考中…"}</span>
                   </div>
                 ) : m.type === "assistant" ? (
-                  <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown></div>
+                  <>
+                    {m.reasoning && (
+                      <details
+                        data-testid="reasoning-block"
+                        className="mb-2 overflow-hidden rounded-lg border border-border/70 bg-panel/60 text-xs"
+                      >
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-2.5 py-2 text-muted transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+                          <span className="flex items-center gap-1.5">
+                            <Brain className="size-3.5" aria-hidden="true" />
+                            <span>思考过程{isLatestReasoning ? " · 进行中" : ""}</span>
+                          </span>
+                          <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+                        </summary>
+                        <div className="markdown-body border-t border-border/70 px-2.5 py-2 text-muted">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.reasoning}</ReactMarkdown>
+                        </div>
+                      </details>
+                    )}
+                    {m.content && (
+                      <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown></div>
+                    )}
+                  </>
                 ) : (
                   m.content
                 )}
@@ -273,25 +340,48 @@ export default function ChatPanel() {
       {plan.length > 0 && <div className="px-4 pb-2"><PlanCard plan={plan} /></div>}
       {contextUsage && <ContextBar usage={contextUsage} />}
 
-      <div className="input-bar-safe flex gap-2.5 px-5 py-3.5 mb-2 border-t border-border bg-panel">
-        <textarea
-          ref={taRef}
-          value={input}
-          rows={1}
-          onChange={(e) => { setInput(e.target.value); autoGrow(); }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
-          }}
-          placeholder="和你的 Agent 对话…"
-          className="flex-1 bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none resize-none text-sm leading-relaxed max-h-40 focus:border-accent focus:bg-panel focus:ring-2 focus:ring-accent-soft"
-        />
-        {busy ? (
-          <Button variant="destructive" onClick={stop}>⏹ 停止</Button>
-        ) : (
-          <Button onClick={() => handleSend()} disabled={!input.trim()}>
-            {input.trim() ? "发送" : "✈"}
-          </Button>
-        )}
+      <div className="input-bar-safe px-5 py-3.5 mb-2 border-t border-border bg-panel">
+        <div className="flex items-end gap-2.5">
+          <textarea
+            ref={taRef}
+            value={input}
+            rows={1}
+            onChange={(e) => { setInput(e.target.value); autoGrow(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+            }}
+            placeholder="和你的 Agent 对话…"
+            className="flex-1 bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none resize-none text-sm leading-relaxed max-h-40 focus:border-accent focus:bg-panel focus:ring-2 focus:ring-accent-soft"
+          />
+          {busy ? (
+            <Button variant="destructive" onClick={stop}>⏹ 停止</Button>
+          ) : (
+            <Button onClick={() => handleSend()} disabled={!input.trim()}>
+              {input.trim() ? "发送" : "✈"}
+            </Button>
+          )}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-xs text-muted">思考</span>
+          <Select
+            value={thinkingLevel}
+            onValueChange={(value) => { if (isThinkingLevel(value)) setThinkingLevel(value); }}
+            disabled={busy}
+          >
+            <SelectTrigger size="sm" aria-label="思考等级" className="h-7 min-w-[104px] rounded-md bg-card text-xs">
+              <Brain className="size-3.5 text-accent" aria-hidden="true" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {THINKING_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  <span>{option.label}</span>
+                  <span className="ml-1.5 text-xs text-muted">{option.description}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       {showJump && (
         <Button onClick={jumpBottom} title="回到底部" variant="ghost"

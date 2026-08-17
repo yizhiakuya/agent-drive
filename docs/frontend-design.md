@@ -22,6 +22,7 @@
 | 状态标签 | `ui/badge` | 任务状态/设备/索引等；variant default/secondary/destructive/outline |
 | 开关 | `ui/switch` | 布尔设置（PhotoSync 等） |
 | 骨架屏 | `ui/skeleton` | 加载态 |
+| 折叠内容 | 原生 `<details>` | 思考过程、长内容等默认收叠；summary 提供明确标题与展开入口 |
 | 就地反馈 | `ui/alert` | 卡片内成功/失败细条：成功 `className="bg-success-soft text-success border-success/30"`、失败 `bg-danger-soft text-danger border-danger/30` |
 | 分隔线 | `ui/separator` | 区块分隔 |
 
@@ -36,6 +37,7 @@
 - 轻量信息：就地小字（字段旁/卡片底部）；跨页事件才走全局 ToastStack（事件总线 `EV.toast` 不变）。
 - 状态色语义：danger=失败/破坏性操作；success=成功；warn=警示；muted=次要文本。**禁止错位**（红底选中、蓝字错误等）。
 - 操作后必须有反馈：保存/获取/删除/恢复都要就地提示或 toast。
+- 对话思考等级放在输入区，使用 `ui/select`，默认 `auto`；模型 reasoning 单独显示在助手气泡内的原生 `<details>`，默认收叠，展开后使用现有 markdown 样式。
 
 ## 5. 移动端（沿用 AGENTS.md 坑位 + 新增）
 

@@ -6,7 +6,6 @@ import json
 from app.llm.base import ToolSpec
 from app.llm.providers.openai_compat import OpenAICompatProvider
 
-
 # ---------- _convert_messages ----------
 
 def test_convert_tool_message():
@@ -77,6 +76,16 @@ def test_convert_unknown_keys_dropped():
 
 def test_to_openai_tools_empty():
     assert OpenAICompatProvider._to_openai_tools([]) == []
+
+
+def test_apply_thinking_level_uses_reasoning_effort():
+    kwargs = {}
+    OpenAICompatProvider._apply_thinking(kwargs, "high")
+    assert kwargs["reasoning_effort"] == "high"
+
+    auto_kwargs = {}
+    OpenAICompatProvider._apply_thinking(auto_kwargs, "auto")
+    assert auto_kwargs == {}
 
 
 def test_to_openai_tools_shape():

@@ -1,7 +1,7 @@
 """对话相关数据模型"""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
         description="用户已确认的高风险操作 [{tool, arguments}]",
     )
     session_id: str | None = None
+    thinking_level: Literal["auto", "low", "medium", "high"] = "auto"
 
 
 class ChatResponse(BaseModel):

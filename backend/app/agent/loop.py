@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import Callable
@@ -19,7 +20,7 @@ from typing import Any
 
 from ..core.logging import redact_text, redact_value
 from ..core.retry import is_retryable_error
-from ..llm.base import LLMProvider, ToolSpec
+from ..llm.base import LLMProvider, LLMStreamChunk, ToolSpec
 from .confirm import issue_confirmation, verify_confirmation
 from .context import (
     build_history,
@@ -73,6 +74,7 @@ class AgentLoop:
         self.roundtrip_compress_threshold = roundtrip_compress_threshold
         self.plan_state: dict[str, Any] = {"steps": []}
         self.usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+        self._reasoning_parts: list[str] = []
         register_plan_tools(self.tools, self.plan_state)
         if skills is not None:
             self._register_skill_tool()
@@ -113,6 +115,45 @@ class AgentLoop:
         if stream_text:
             self.usage["completion_tokens"] += estimate_tokens(stream_text)
         self.usage["total_tokens"] = self.usage["prompt_tokens"] + self.usage["completion_tokens"]
+
+    @staticmethod
+    def _stream_parts(chunk: Any) -> tuple[str, str]:
+        if isinstance(chunk, str):
+            return chunk, ""
+        if isinstance(chunk, LLMStreamChunk):
+            return chunk.text, chunk.reasoning
+        if isinstance(chunk, dict):
+            return str(chunk.get("text") or ""), str(chunk.get("reasoning") or "")
+        return str(getattr(chunk, "text", "") or ""), str(getattr(chunk, "reasoning", "") or "")
+
+    @staticmethod
+    def _accepts_kwarg(method: Any, name: str) -> bool:
+        try:
+            return name in inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            return True
+
+    async def _chat_with_thinking(self, messages, tools=None, thinking_level="auto"):
+        kwargs: dict[str, Any] = {}
+        if tools is not None:
+            kwargs["tools"] = tools
+        if self._accepts_kwarg(self.llm.chat, "thinking_level"):
+            kwargs["thinking_level"] = thinking_level
+        return await self.llm.chat(messages, **kwargs)
+
+    def _stream_with_thinking(self, messages, tools=None, thinking_level="auto"):
+        kwargs: dict[str, Any] = {}
+        if tools is not None:
+            kwargs["tools"] = tools
+        if self._accepts_kwarg(self.llm.stream_chat, "thinking_level"):
+            kwargs["thinking_level"] = thinking_level
+        return self.llm.stream_chat(messages, **kwargs)
+
+    def _reasoning_event(self, text: str):
+        if not text:
+            return None
+        self._reasoning_parts.append(text)
+        return "reasoning", {"text": text}
 
     def _context_usage(self, messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """当前上下文占用（发给 LLM 的 messages 总量），供前端进度条显示。"""
@@ -239,12 +280,14 @@ class AgentLoop:
         confirmations: list[dict[str, Any]] | None,
         session_id: str | None,
         tool_groups: tuple[str, ...] | list[str] | None = None,
+        thinking_level: str = "auto",
     ):
         """统一执行核心（编排壳）。yields: ("text", c) | ("tool_start", e) | ("tool_trace", e) | ("done", m)
 
         职责：意图路由 → 分发到闲聊/任务路径。具体逻辑在 _chat_path/_task_path。
         tool_groups: 外部指定工具组（自动化执行受限组）；None 时走 router 分类。
         """
+        self._reasoning_parts = []
         confirmed = confirmations or []
         mode, tool_groups = classify(user_message) if tool_groups is None else ("task", tool_groups)
         if mode == "chat" and not confirmed:
@@ -261,14 +304,16 @@ class AgentLoop:
             if not has_pending and tool_groups is None and self._last_routed_task(session_id):
                 mode, tool_groups = "task", None
             elif not has_pending:
-                async for ev in self._chat_path(user_message, history, session_id):
+                async for ev in self._chat_path(user_message, history, session_id, thinking_level):
                     yield ev
                 return
-        async for ev in self._task_path(user_message, history, confirmed, session_id, tool_groups):
+        async for ev in self._task_path(
+            user_message, history, confirmed, session_id, tool_groups, thinking_level
+        ):
             yield ev
 
     # ---------- 闲聊轻量路径 ----------
-    async def _chat_path(self, user_message: str, history, session_id: str | None):
+    async def _chat_path(self, user_message: str, history, session_id: str | None, thinking_level: str):
         """闲聊：精简提示 + 无工具 + 少量历史。也持久化为会话（用户视角：聊了就有记录）。"""
         started = time.time()
         sid = session_id
@@ -283,9 +328,14 @@ class AgentLoop:
         ]
         stripper = ToolMarkupStripper()  # 剔除模型正文里模拟工具调用的 DSML/XML 标记
         try:
-            async for chunk in self.llm.stream_chat(chat_messages):
-                self._add_usage(None, chunk)
-                clean = stripper.feed(chunk)
+            async for chunk in self._stream_with_thinking(chat_messages, thinking_level=thinking_level):
+                text, reasoning = self._stream_parts(chunk)
+                if reasoning:
+                    event = self._reasoning_event(reasoning)
+                    if event:
+                        yield event
+                self._add_usage(None, text + reasoning)
+                clean = stripper.feed(text)
                 if clean:
                     reply_parts.append(clean)
                     yield ("text", clean)
@@ -294,15 +344,25 @@ class AgentLoop:
                 reply_parts.append(tail)
                 yield ("text", tail)
         except (NotImplementedError, TypeError):
-            result = await self.llm.chat(chat_messages)
-            self._add_usage(result.usage)
+            result = await self._chat_with_thinking(chat_messages, thinking_level=thinking_level)
+            self._add_usage(result.usage, result.reasoning)
+            event = self._reasoning_event(result.reasoning)
+            if event:
+                yield event
             clean = sanitize_tool_markup(result.content or "")
             reply_parts.append(clean)
             yield ("text", clean)
         # 持久化（标题取首句，会话恢复时可回看；密钥脱敏后落库）
         if self.sessions is not None and sid:
             self.sessions.append(sid, {"role": "user", "content": redact_text(user_message), "ts": time.time()})
-            self.sessions.append(sid, {"role": "assistant", "content": redact_text("".join(reply_parts)), "ts": time.time()})
+            assistant_message = {
+                "role": "assistant",
+                "content": redact_text("".join(reply_parts)),
+                "ts": time.time(),
+            }
+            if self._reasoning_parts:
+                assistant_message["reasoning"] = redact_text("".join(self._reasoning_parts))
+            self.sessions.append(sid, assistant_message)
             self.sessions.update_meta(sid, last_routed="chat")
             meta_now = self.sessions.get(sid)
             if meta_now and (not meta_now.get("title") or meta_now.get("title") == "新会话"):
@@ -343,7 +403,9 @@ class AgentLoop:
         return bool(meta.get("last_trace"))
 
     # ---------- 任务路径 ----------
-    async def _task_path(self, user_message: str, history, confirmed, session_id: str | None, tool_groups):
+    async def _task_path(
+        self, user_message: str, history, confirmed, session_id: str | None, tool_groups, thinking_level: str
+    ):
         """任务：会话初始化 + dreaming + 压缩 + 确认重放 + 进入工具循环。"""
         started = time.time()
 
@@ -401,7 +463,7 @@ class AgentLoop:
 
         async for ev in self._task_loop(
             messages, sid, confirmed, started, tool_trace,
-            stored_pending, consumed_nonces, prev_trace, user_message, tool_groups,
+            stored_pending, consumed_nonces, prev_trace, user_message, tool_groups, thinking_level,
         ):
             yield ev
 
@@ -479,16 +541,24 @@ class AgentLoop:
 
     # ---------- 工具循环 ----------
     async def _task_loop(self, messages, sid, confirmed, started, tool_trace,
-                         stored_pending, consumed_nonces, prev_trace, user_message, tool_groups):
+                         stored_pending, consumed_nonces, prev_trace, user_message, tool_groups, thinking_level):
         """工具循环：LLM 决策 → 工具执行 → 观察，直到最终回复或步数耗尽。"""
         for step in range(self.max_steps):
-            result = await self.llm.chat(messages, tools=self.tools.specs(tool_groups))
-            self._add_usage(result.usage)
+            result = await self._chat_with_thinking(
+                messages, tools=self.tools.specs(tool_groups), thinking_level=thinking_level
+            )
+            self._add_usage(result.usage, result.reasoning)
 
             if not result.tool_calls:
-                async for ev in self._final_reply(messages, result, sid, started, tool_trace, consumed_nonces, user_message, step):
+                async for ev in self._final_reply(
+                    messages, result, sid, started, tool_trace, consumed_nonces, user_message, step, thinking_level
+                ):
                     yield ev
                 return
+
+            event = self._reasoning_event(result.reasoning)
+            if event:
+                yield event
 
             messages.append({
                 "role": "assistant",
@@ -591,14 +661,21 @@ class AgentLoop:
         return await self._execute_tool(tc.name, tc.arguments, step + 1)
 
     # ---------- 最终回复 ----------
-    async def _final_reply(self, messages, result, sid, started, tool_trace, consumed_nonces, user_message, step):
+    async def _final_reply(
+        self, messages, result, sid, started, tool_trace, consumed_nonces, user_message, step, thinking_level
+    ):
         """流式最终回复 + 持久化（工具轨迹/会话/笔记/标题）+ done。"""
         full_reply = ""
         stripper = ToolMarkupStripper()  # 剔除模型正文里模拟工具调用的 DSML/XML 标记
         try:
-            async for chunk in self.llm.stream_chat(messages):
-                self._add_usage(None, chunk)
-                clean = stripper.feed(chunk)
+            async for chunk in self._stream_with_thinking(messages, thinking_level=thinking_level):
+                text, reasoning = self._stream_parts(chunk)
+                if reasoning:
+                    event = self._reasoning_event(reasoning)
+                    if event:
+                        yield event
+                self._add_usage(None, text + reasoning)
+                clean = stripper.feed(text)
                 if clean:
                     full_reply += clean
                     yield ("text", clean)
@@ -607,6 +684,9 @@ class AgentLoop:
                 full_reply += tail
                 yield ("text", tail)
         except (NotImplementedError, TypeError):
+            event = self._reasoning_event(result.reasoning)
+            if event:
+                yield event
             full_reply = sanitize_tool_markup(result.content or "")
             self._add_usage(None, full_reply)
             yield ("text", full_reply)
@@ -614,7 +694,14 @@ class AgentLoop:
         needs_summary = False
         if self.sessions is not None and sid:
             self._persist_tool_trace(sid, tool_trace)
-            self.sessions.append(sid, {"role": "assistant", "content": redact_text(full_reply), "ts": time.time()})
+            assistant_message = {
+                "role": "assistant",
+                "content": redact_text(full_reply),
+                "ts": time.time(),
+            }
+            if self._reasoning_parts:
+                assistant_message["reasoning"] = redact_text("".join(self._reasoning_parts))
+            self.sessions.append(sid, assistant_message)
             try:
                 # last_trace 落库同样脱敏（含 api_key 的工具轨迹不留明文）。
                 # 仅 yellow 工具依赖 last_trace 做确定性重放，而 yellow 工具不带密钥
@@ -659,12 +746,15 @@ class AgentLoop:
         confirmations: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
         tool_groups: tuple[str, ...] | list[str] | None = None,
+        thinking_level: str = "auto",
     ) -> dict[str, Any]:
         """聚合事件为单次响应。tool_groups 为外部指定工具组（自动化用）。"""
         reply_parts: list[str] = []
         trace: list[dict[str, Any]] = []
         done: dict[str, Any] = {}
-        async for event, payload in self._execute(user_message, history, confirmations, session_id, tool_groups):
+        async for event, payload in self._execute(
+            user_message, history, confirmations, session_id, tool_groups, thinking_level
+        ):
             if event == "text":
                 reply_parts.append(payload)
             elif event == "tool_trace":
@@ -694,9 +784,12 @@ class AgentLoop:
         confirmations: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
         tool_groups: tuple[str, ...] | list[str] | None = None,
+        thinking_level: str = "auto",
     ):
         """透传事件（SSE 用）。tool_groups 为外部指定工具组（自动化用）。"""
-        async for event, payload in self._execute(user_message, history, confirmations, session_id, tool_groups):
+        async for event, payload in self._execute(
+            user_message, history, confirmations, session_id, tool_groups, thinking_level
+        ):
             yield event, payload
 
     # ---------- 会话摘要 ----------

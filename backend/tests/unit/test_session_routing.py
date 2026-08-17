@@ -64,6 +64,21 @@ async def test_short_message_in_fresh_session_stays_chat(env):
     assert provider.tool_rounds == 0
 
 
+class ReasoningProvider(ScriptedProvider):
+    async def stream_chat(self, messages, tools=None):
+        yield {"reasoning": "先判断用户意图。"}
+        yield "这是最终回复。"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_stream_is_separate_event(env):
+    _, sessions, memory, reg = env
+    loop = make_loop(ReasoningProvider(), sessions, memory, reg)
+    events = [event async for event in loop.run_stream("你好", thinking_level="high")]
+    assert ("reasoning", {"text": "先判断用户意图。"}) in events
+    assert ("text", "这是最终回复。") in events
+
+
 @pytest.mark.asyncio
 async def test_short_continuation_in_task_session_runs_tools(env):
     """任务会话中"继续"必须走任务路径并执行工具（生产回归）。"""

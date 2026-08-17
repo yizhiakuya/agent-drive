@@ -257,7 +257,7 @@ frontend/（Next.js 16 App Router + TS + Tailwind v4 + shadcn/ui，设计规范�
 | 影音在线播放 | ✅ 已落地 | preview_kind video/audio + raw 端点 media_type + 前端 <video>/<audio> |
 | 分享到网盘 | ✅ 已落地 | Web Share Target(manifest share_target) + /files/upload-share 端点 |
 | 文件页人工操作 | ✅ 已落地 | /files/rename|move|copy|delete|mkdir API + 前端工具栏/回收站面板 |
-| 流式输出 | ✅ 已落地 | SSE /chat/stream + 前端 chatStream |
+| 流式输出与思考过程 | ✅ 已落地 | SSE `/chat/stream` + `text/reasoning/tool_*` 事件 + 前端 `chatStream/useChatStream`；思考等级 `auto/low/medium/high` 透传至 Provider，reasoning 默认收叠并可恢复 |
 | 向量库迁移 | 待规模需求 | db/(pgvector, compose 已备) |
 | 音视频转写 | 未做（资源评估后） | ingest 加 whisper 解析器 |
 | **认证（单用户）** | ✅ 已落地 | auth/store.py（纯标准库 PBKDF2/HMAC）+ api/v1/auth.py + deps.get_owner 统一鉴权（Cookie/Bearer/?token=）；扫码配对免密，详见 docs/security.md |

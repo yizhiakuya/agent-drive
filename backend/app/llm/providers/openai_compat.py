@@ -8,7 +8,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from ...core.retry import with_retry
-from ..base import LLMResult, ToolCall, ToolSpec
+from ..base import LLMResult, LLMStreamChunk, ToolCall, ToolSpec, normalize_thinking_level
 
 
 class OpenAICompatProvider:
@@ -40,6 +40,21 @@ class OpenAICompatProvider:
             }
             for t in tools
         ]
+
+    @staticmethod
+    def _apply_thinking(kwargs: dict[str, Any], thinking_level: str) -> None:
+        level = normalize_thinking_level(thinking_level)
+        if level != "auto":
+            # OpenAI-compatible reasoning models and gateways use this standard field.
+            kwargs["reasoning_effort"] = level
+
+    @staticmethod
+    def _reasoning_from_message(message: Any) -> str:
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = getattr(message, key, None)
+            if isinstance(value, str):
+                return value
+        return ""
 
     @staticmethod
     def _convert_messages(messages: list[dict]) -> list[dict]:
@@ -74,8 +89,9 @@ class OpenAICompatProvider:
                 out.append({"role": role, "content": m.get("content", "")})
         return out
 
-    async def chat(self, messages, tools=None) -> LLMResult:
+    async def chat(self, messages, tools=None, thinking_level="auto") -> LLMResult:
         kwargs: dict[str, Any] = {"model": self.model, "messages": self._convert_messages(messages)}
+        self._apply_thinking(kwargs, thinking_level)
         if tools:
             kwargs["tools"] = self._to_openai_tools(tools)
             kwargs["tool_choice"] = "auto"
@@ -94,11 +110,13 @@ class OpenAICompatProvider:
             tool_calls=tool_calls,
             finish_reason=resp.choices[0].finish_reason or "",
             usage=resp.usage.model_dump() if resp.usage else {},
+            reasoning=self._reasoning_from_message(msg),
         )
 
-    async def stream_chat(self, messages, tools=None):
-        """流式生成文本块（不支持工具调用时由调用方保证）。"""
+    async def stream_chat(self, messages, tools=None, thinking_level="auto"):
+        """流式生成正文与 reasoning 片段（不支持工具调用时由调用方保证）。"""
         kwargs: dict[str, Any] = {"model": self.model, "messages": self._convert_messages(messages), "stream": True}
+        self._apply_thinking(kwargs, thinking_level)
         if tools:
             kwargs["tools"] = self._to_openai_tools(tools)
         stream = await with_retry(lambda: self._client.chat.completions.create(**kwargs))
@@ -106,8 +124,20 @@ class OpenAICompatProvider:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
-            if delta and delta.content:
-                yield delta.content
+            if not delta:
+                continue
+            text = getattr(delta, "content", None) or ""
+            reasoning = (
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
+                or getattr(delta, "thinking", None)
+                or ""
+            )
+            if isinstance(text, str) or isinstance(reasoning, str):
+                yield LLMStreamChunk(
+                    text=text if isinstance(text, str) else "",
+                    reasoning=reasoning if isinstance(reasoning, str) else "",
+                )
 
     async def test_connection(self) -> dict[str, Any]:
         t0 = time.time()

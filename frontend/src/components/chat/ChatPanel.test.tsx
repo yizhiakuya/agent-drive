@@ -170,4 +170,31 @@ describe("ChatPanel 主流程", () => {
     expect(abortSpy).toHaveBeenCalled();
     expect(screen.getByText("⏹️ 已停止本次任务")).toBeInTheDocument();
   });
+
+  it("reasoning 默认收叠并支持展开", async () => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("reasoning", { text: "先判断文件范围。" });
+      onEvent("text", { text: "结果如下。" });
+      return Promise.resolve(null);
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("帮我分析文件");
+
+    const details = screen.getByTestId("reasoning-block");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("思考过程"));
+    expect(details).toHaveAttribute("open");
+    expect(screen.getByText("先判断文件范围。")).toBeInTheDocument();
+  });
+
+  it("选择思考等级后随请求发送", async () => {
+    chatStream.mockResolvedValue(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("combobox", { name: "思考等级" }));
+    fireEvent.click(screen.getByText("深度", { exact: true }));
+    await typeAndSend("复杂任务");
+    expect(chatStream.mock.calls[0][6]).toBe("high");
+  });
 });

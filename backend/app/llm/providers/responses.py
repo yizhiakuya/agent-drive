@@ -9,7 +9,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from ...core.retry import with_retry
-from ..base import LLMResult, ToolCall, ToolSpec
+from ..base import LLMResult, ToolCall, ToolSpec, normalize_thinking_level
 
 
 class OpenAIResponsesProvider:
@@ -44,23 +44,33 @@ class OpenAIResponsesProvider:
             for t in tools
         ]
 
-    async def chat(self, messages, tools=None) -> LLMResult:
+    async def chat(self, messages, tools=None, thinking_level="auto") -> LLMResult:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "input": self._convert_messages(messages),
         }
         if tools:
             kwargs["tools"] = self._to_responses_tools(tools)
+        level = normalize_thinking_level(thinking_level)
+        if level != "auto":
+            kwargs["reasoning"] = {"effort": level}
         resp = await with_retry(lambda: self._client.responses.create(**kwargs))
 
         content_parts = []
+        reasoning_parts = []
         tool_calls = []
         for item in getattr(resp, "output", []) or []:
-            if item.type == "message":
+            item_type = getattr(item, "type", "")
+            if item_type == "message":
                 for c in item.content:
                     if getattr(c, "type", "") == "output_text":
                         content_parts.append(c.text)
-            elif item.type == "function_call":
+            elif item_type == "reasoning":
+                for summary in getattr(item, "summary", []) or []:
+                    value = getattr(summary, "text", None)
+                    if isinstance(value, str):
+                        reasoning_parts.append(value)
+            elif item_type == "function_call":
                 try:
                     args = json.loads(item.arguments or "{}")
                 except Exception:
@@ -70,6 +80,7 @@ class OpenAIResponsesProvider:
             content="\n".join(content_parts) or None,
             tool_calls=tool_calls,
             finish_reason=getattr(resp, "status", "") or "",
+            reasoning="\n".join(reasoning_parts),
         )
 
     @staticmethod

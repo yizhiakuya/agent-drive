@@ -5,9 +5,12 @@ import { emitFilesChanged } from "@/lib/events";
 import { summarizeSession } from "@/lib/api/sessions";
 import type { PlanStep } from "./PlanCard";
 
+export type ThinkingLevel = "auto" | "low" | "medium" | "high";
+
 export interface Message {
   type: "user" | "assistant" | "tool_step" | "system";
   content: string;
+  reasoning?: string;
   tool?: string;
   arguments?: Record<string, unknown>;
   status?: "running" | "done" | "error";
@@ -49,7 +52,7 @@ interface UseChatStreamOptions {
 
 interface UseChatStreamReturn {
   /** 发送一条消息（可选自定义消息与确认信息）。发送前 UI 输入框清空由调用方负责。 */
-  send: (message?: string, confirmations?: Record<string, unknown>[]) => Promise<void>;
+  send: (message?: string, confirmations?: Record<string, unknown>[], thinkingLevel?: ThinkingLevel) => Promise<void>;
   /** 中止当前进行中的流，并追加「已停止」提示。 */
   stop: () => void;
   /** 静默中止（会话切换/卸载），不追加提示。 */
@@ -88,7 +91,11 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     setBusy(value);
   }, [setBusy]);
 
-  async function send(message?: string, confirmations: Record<string, unknown>[] = []) {
+  async function send(
+    message?: string,
+    confirmations: Record<string, unknown>[] = [],
+    thinkingLevel: ThinkingLevel = "auto",
+  ) {
     const msg = message ?? "";
     if (!msg || busy) return;
     const history = messages
@@ -105,20 +112,34 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     const sendSid = sessionIdRef.current;
 
     let replyRef = "";
+    let reasoningRef = "";
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
     // 流式节流：token 高频到达时每 80ms 批量刷一帧 UI（长回复不再逐 token 全量重渲染）
     // 工具步骤之后追加回复气泡时，先清掉发送时挂的空助手占位，避免残留空白气泡
     const applyReply = () => {
       setMessages((m) => {
         let copy = [...m];
+        const assistant = {
+          type: "assistant" as const,
+          content: replyRef,
+          ...(reasoningRef ? { reasoning: reasoningRef } : {}),
+        };
         if (copy.length && copy[copy.length - 1].type === "tool_step") {
           copy = copy.filter((x) => !(x.type === "assistant" && !x.content));
-          copy.push({ type: "assistant", content: replyRef });
+          copy.push(assistant);
         } else {
-          copy[copy.length - 1] = { type: "assistant", content: replyRef };
+          copy[copy.length - 1] = assistant;
         }
         return copy;
       });
+    };
+    const scheduleReply = () => {
+      if (!streamTimerRef.current) {
+        streamTimerRef.current = setTimeout(() => {
+          streamTimerRef.current = null;
+          applyReply();
+        }, 80);
+      }
     };
 
     try {
@@ -127,12 +148,12 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
           const delta = chatTextDelta(data);
           if (!delta) return;
           replyRef += delta;
-          if (!streamTimerRef.current) {
-            streamTimerRef.current = setTimeout(() => {
-              streamTimerRef.current = null;
-              applyReply();
-            }, 80);
-          }
+          scheduleReply();
+        } else if (event === "reasoning") {
+          const delta = chatTextDelta(data);
+          if (!delta) return;
+          reasoningRef += delta;
+          scheduleReply();
         } else if (event === "tool_start") {
           setMessages((m) => [...m, { type: "tool_step", status: "running", content: "", ...(data as object) } as Message]);
         } else if (event === "tool_trace") {
@@ -154,7 +175,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
             setPlan(d.parsed.plan as PlanStep[]);
           }
         }
-      }, controller.signal);
+      }, controller.signal, thinkingLevel);
 
       // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
       if (streamTimerRef.current) {
@@ -164,8 +185,8 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       } else {
         // 无文本事件（仅工具调用）：清掉空助手占位气泡，只留工具步骤
         setMessages((m) =>
-          m.some((x) => x.type === "assistant" && !x.content)
-            ? m.filter((x) => !(x.type === "assistant" && !x.content))
+          m.some((x) => x.type === "assistant" && !x.content && !x.reasoning)
+            ? m.filter((x) => !(x.type === "assistant" && !x.content && !x.reasoning))
             : m
         );
       }
@@ -216,7 +237,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     applyBusy(false);
     setMessages((m) => {
       // 清掉空助手占位气泡后追加停止提示（工具步骤保留）
-      const copy = m.filter((x) => !(x.type === "assistant" && !x.content));
+      const copy = m.filter((x) => !(x.type === "assistant" && !x.content && !x.reasoning));
       copy.push({ type: "system", content: "⏹️ 已停止本次任务" });
       return copy;
     });

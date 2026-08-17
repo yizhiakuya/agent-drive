@@ -6,9 +6,10 @@ export const chat = (
   history: { role: string; content: string }[],
   sessionId: string | null,
   confirmations: Record<string, unknown>[] = [],
+  thinkingLevel = "auto",
 ) => api("/chat", {
   method: "POST",
-  body: JSON.stringify({ message, history, session_id: sessionId, confirmations }),
+  body: JSON.stringify({ message, history, session_id: sessionId, confirmations, thinking_level: thinkingLevel }),
 });
 
 export async function chatStream(
@@ -18,11 +19,12 @@ export async function chatStream(
   confirmations: Record<string, unknown>[],
   onEvent: (event: string, data: Record<string, unknown>) => void,
   signal: AbortSignal,
+  thinkingLevel = "auto",
 ): Promise<Record<string, unknown> | null> {
   const res = await authenticatedFetch("/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history, session_id: sessionId, confirmations }),
+    body: JSON.stringify({ message, history, session_id: sessionId, confirmations, thinking_level: thinkingLevel }),
     signal,
   });
   if (!res.ok) {
