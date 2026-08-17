@@ -45,6 +45,8 @@ App：设备令牌（Bearer）──▶ 全部 API（WebView / 后台 Worker）�
 
 公开豁免：`/api/v1/health`（探活）、`/api/v1/auth/*` 中的 status/setup/login/logout/pair-exchange、静态资源、`/.well-known/assetlinks.json`。
 其余全部 `GET/POST/... /api/v1/*` 均需鉴权；合法 query token 也不能访问列表、状态或写接口。普通 API、上传和 Chat SSE 共用身份快照感知的 401 处理：只有当前凭据的响应才派发 `agent-drive:unauthorized`，旧 token 的迟到 401 不会踢掉新登录。
+
+Agent 的 `backend_api` 只允许从 OpenAPI 目录调用 `/api/v1` 业务路由，并排除 auth、chat 和 health；尚未暴露 HTTP 的既有内部能力只能通过预先登记的 `INTERNAL name` 兼容 operation 调用。模型不能传任意 URL、Python 入口或请求头。聊天调用在进程内 ASGI 传递当前请求的 Cookie/Bearer，不把凭据暴露给模型。没有用户 HTTP 请求的 Worker 使用每个 Container 随机生成的 `x-agent-internal-token`，该 token 只在进程内 gateway 上校验，不能作为公网登录凭据。
 登出会删除 Cookie，并在服务端吊销请求携带的有效 Cookie session / Bearer session 或设备令牌；复制出的旧凭据不可重放。原生端离线/5xx 时仍先可靠清除本机加密令牌，并明确提示“服务端吊销状态未知”；401/403 表示当前凭据已经不可用，可直接完成本地退出，不误报仍有有效令牌。
 
 ## 四、暴露面加固（服务器）

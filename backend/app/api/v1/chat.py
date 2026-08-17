@@ -1,7 +1,7 @@
 """v1 对话路由"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ...core.errors import ConfigError
 from ...schemas.chat import ChatRequest, ChatResponse
@@ -11,9 +11,9 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, container=Depends(get_container)):
+async def chat(req: ChatRequest, request: Request, container=Depends(get_container)):
     try:
-        loop = container.build_agent()
+        loop = container.build_agent(request)
     except ConfigError as e:
         raise HTTPException(400, e.message)
     result = await loop.run(
@@ -23,14 +23,14 @@ async def chat(req: ChatRequest, container=Depends(get_container)):
 
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest, container=Depends(get_container)):
+async def chat_stream(req: ChatRequest, request: Request, container=Depends(get_container)):
     """SSE 流式对话：text 事件逐块推送，tool_trace 事件推送工具调用，done 事件汇总。"""
     import json as _json
 
     from fastapi.responses import StreamingResponse
 
     try:
-        loop = container.build_agent()
+        loop = container.build_agent(request)
     except ConfigError as e:
         raise HTTPException(400, e.message)
 

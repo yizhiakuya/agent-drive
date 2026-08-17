@@ -21,12 +21,17 @@ from ...llm.base import ToolSpec
 
 class Tool:
     def __init__(self, spec: ToolSpec, fn: Callable[..., Awaitable[Any]], level: str = "green",
-                 validator: Callable[[dict, Any], str | None] | None = None, group: str = "general"):
+                 validator: Callable[[dict, Any], str | None] | None = None, group: str = "general",
+                 risk_fn: Callable[[dict], str] | None = None):
         self.spec = spec
         self.fn = fn
-        self.level = level  # green / yellow / red
+        self.level = level  # green / yellow / red / dynamic
         self.validator = validator  # Critic: (arguments, result) -> None 或错误信息
         self.group = group  # 工具分组（files/system/analytics/plan/skills）
+        self.risk_fn = risk_fn
+
+    def level_for(self, arguments: dict[str, Any]) -> str:
+        return self.risk_fn(arguments) if self.risk_fn is not None else self.level
 
     def manual(self) -> str:
         """生成工具手册条目（系统提示用，按 API 文档标准）"""
@@ -39,8 +44,9 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
 
     def register(self, spec: ToolSpec, fn: Callable[..., Awaitable[Any]], level: str = "green",
-                 validator: Callable[[dict, Any], str | None] | None = None, group: str = "general") -> None:
-        self._tools[spec.name] = Tool(spec, fn, level, validator, group)
+                 validator: Callable[[dict, Any], str | None] | None = None, group: str = "general",
+                 risk_fn: Callable[[dict], str] | None = None) -> None:
+        self._tools[spec.name] = Tool(spec, fn, level, validator, group, risk_fn)
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)

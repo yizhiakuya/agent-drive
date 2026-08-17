@@ -9,7 +9,7 @@ import time
 from datetime import date
 from typing import Any
 
-AUTO_GROUPS = ("files", "analytics")
+AUTO_GROUPS = ("backend_api", "plan", "skills")
 
 
 class AutomationScheduler:
@@ -59,11 +59,11 @@ class AutomationScheduler:
             "你是网盘的自动化执行器，现在执行用户设定的自动化规则。\n"
             f"规则清单:\n{rules_text}\n\n"
             "任务:\n"
-            "1. 用工具查看网盘现状\n"
+            "1. 先用 backend_api action=discover 查找查看网盘的 operation，再调用它\n"
             "2. 执行每条规则能完成的部分（只做整理类动作：移动/重命名/复制/"
             "创建文件夹/写文件；严禁删除任何文件）\n"
             "3. 无法完成的部分说明原因\n"
-            f"4. 写执行报告到 Agent/notes/自动化报告-{today}.md（用 write_file），"
+            f"4. 先 discover 文件写入 operation，再把执行报告保存到 Agent/notes/自动化报告-{today}.md，"
             "内容: 每条规则的执行情况、做了什么、为什么没做\n"
             "5. 用一句话总结本次执行结果"
         )

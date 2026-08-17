@@ -57,11 +57,11 @@ L0 对话与自管理 ✅      L1 文件理解 ✅          L2 主动服务 ✅(
 ```
 
 ### 4.3 工具设计规范（ACI）
-- 核心工具 ≤ 10 个，粒度一致
-- 每工具 ≤ 3 参数，类型严格（path/query 等明确语义）
-- **幂等优先**：`rename` 可重复、`create_folder` 已存在则成功返回
-- 工具文档含：用途、参数、输出格式、前置条件、错误情况
-- 安全分级：🟢查询自动 / 🟡低写自动 / 🔴高写确认
+- 核心公开工具保持少量、粒度一致；业务能力统一收敛到 `backend_api`，避免为每个 REST 路由重复设计 Agent 包装层。
+- `backend_api` 只有稳定的 discover/call 外壳参数；HTTP operation 的 path/query/body/file 参数由 OpenAPI Schema 按需发现，调用前必须先 discover；未暴露 HTTP 的既有能力使用同一 envelope 的 `INTERNAL name` 兼容 operation。
+- HTTP operation 使用 `METHOD /api/v1/path` 稳定标识，兼容 operation 使用 `INTERNAL name`；HTTP 调用由 FastAPI 路由再次执行类型、路径和权限校验。
+- 工具文档含：发现流程、参数语义、输出格式、前置条件、错误情况；结果统一结构化并截断/脱敏。
+- 安全分级按实际 operation 动态计算：🟢查询自动 / 🟡低风险内部整理 / 🔴写入和破坏性操作确认。
 
 ### 4.4 循环设计（Actor-Critic）
 ```

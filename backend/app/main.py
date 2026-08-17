@@ -53,6 +53,7 @@ def create_app(container: Container | None = None) -> FastAPI:
 
     app = FastAPI(title="Agent Drive", version="0.1.0",
                   description="以 AI 为中心的私人网盘", lifespan=lifespan)
+    container.app = app
     app.add_middleware(
         CORSMiddleware,
         allow_origins=container.settings.cors_origins,

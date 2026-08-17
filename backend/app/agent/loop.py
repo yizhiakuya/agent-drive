@@ -605,7 +605,7 @@ class AgentLoop:
 
     async def _check_red_tool(self, tc, tool, stored_pending, confirmed, consumed_nonces, sid, step, started, tool_trace):
         """red 级工具确认检查。返回 None=放行执行；返回 done 负载=需要暂停。"""
-        if tool is None or tool.level != "red":
+        if tool is None or tool.level_for(tc.arguments) != "red":
             return None
         done_base = {
             "steps": step + 1,
@@ -644,7 +644,7 @@ class AgentLoop:
     async def _execute_or_replay_tool(self, tc, tool, prev_trace, step):
         """执行工具；确认后重放场景复用上次结果（防 yellow 双写）。"""
         prev = None
-        if tool is not None and tool.level != "red":
+        if tool is not None and tool.level_for(tc.arguments) != "red":
             for t in prev_trace:
                 if t.get("tool") == tc.name and t.get("arguments") == tc.arguments:
                     prev = t

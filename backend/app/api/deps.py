@@ -1,6 +1,8 @@
 """API 依赖：从 app.state 获取 Container 的服务 + 统一鉴权。"""
 from __future__ import annotations
 
+import hmac
+
 from fastapi import HTTPException, Request
 
 from ..auth.store import SESSION_COOKIE
@@ -20,7 +22,13 @@ def get_owner(request: Request) -> None:
     媒体元素无法附加 Authorization Header，因此原生 App 的 raw/download GET
     保留 ``?token=`` 兼容通道；其他路径即便携带合法设备令牌也不得借 URL 放行。
     """
-    auth = request.app.state.container.auth
+    container = request.app.state.container
+    internal_token = getattr(container, "internal_api_token", "")
+    provided_internal = request.headers.get("x-agent-internal-token", "")
+    if internal_token and provided_internal and hmac.compare_digest(provided_internal, internal_token):
+        return
+
+    auth = container.auth
     token = request.cookies.get(SESSION_COOKIE)
     if token and auth.verify_session(token):
         return

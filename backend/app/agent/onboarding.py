@@ -1,7 +1,7 @@
 """Onboarding 引导流程：Agent 驱动首次配置。
 
 流程：前端收集 LLM 配置 → 保存 → Agent 自检 → 设置默认偏好 → 就绪。
-之后所有配置修改都走对话（system_tools.set_llm_provider）。
+之后所有配置修改都走对话（backend_api 发现并调用配置接口）。
 """
 from __future__ import annotations
 

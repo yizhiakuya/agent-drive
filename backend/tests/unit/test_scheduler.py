@@ -1,11 +1,9 @@
 """scheduler.py 测试：execute_once 的 GC（cleanup_trash）与无规则短路路径、last_run 派生。"""
 from __future__ import annotations
 
-import time
+from typing import ClassVar
 
-import pytest
-
-from app.agent.scheduler import AutomationScheduler, AUTO_GROUPS
+from app.agent.scheduler import AUTO_GROUPS, AutomationScheduler
 
 
 class _FakeTasks:
@@ -68,8 +66,8 @@ class _FakeContainer:
 
 
 def test_AUTO_GROUPS_only_organizing_files():
-    """自动执行分组只含 files/analytics（整理类，不含删除）。"""
-    assert AUTO_GROUPS == ("files", "analytics")
+    """自动执行只暴露通用 API、计划和技能工具，不含删除专用工具。"""
+    assert AUTO_GROUPS == ("backend_api", "plan", "skills")
 
 
 async def test_execute_once_gc_and_no_rules_short_circuit():
@@ -127,7 +125,7 @@ def test_last_run_empty_when_no_job():
 
 def test_last_run_uses_job_result_when_present():
     class _Job:
-        result = {"ts": 123, "rules": 2}
+        result: ClassVar = {"ts": 123, "rules": 2}
         finished_at = None
         updated_at = None
         error = None
@@ -150,7 +148,7 @@ def test_last_run_fallback_to_ts_and_ok_false():
 def asyncio_run(coro):
     import asyncio
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
     # 已在事件循环内：新建线程不够安全，这里仅用于简单场景

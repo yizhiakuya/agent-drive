@@ -1,7 +1,7 @@
 """LLM 配置管理与 Provider 工厂。
 
 配置存于 system/agent-config.json —— 这是 agent 自管理的核心：
-agent 自己可以读写这份配置（通过 system_tools.set_llm_provider）。
+agent 自己可以读写这份配置（通过 backend_api 发现并调用配置接口）。
 """
 from __future__ import annotations
 

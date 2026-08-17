@@ -119,14 +119,14 @@ API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
 - 搜索索引生命周期：`storage.attach_change_listener(tasks.handle_storage_change)` 在内容变更后同步失效旧 sidecar，再按文件/目录入队增量索引或批量重建；内部命名空间和 staging 永不触发递归任务
 - 业务代码直接依赖 `local.LocalStorage`（当前唯一实现，由 container 统一组装）
 
-### 3.7 Agent 工具注册（agent/tools/）
-- 每个工具 = 独立模块文件（files.py / system.py / analytics.py）
-- 工具注册表：spec(JSON Schema+doc) + fn + level + validator
-- 安全分级 green/yellow/red 由注册表统一管理
-- 配置入口对称：LLM = `set_llm_provider`；向量服务 = `configure_embeddings`
-  （与设置页 PUT /config/embeddings 同语义，key 留空沿用 + 保存后测连 + 成功入队重建）。
-  `get_system_status` 报告两类配置状态（密钥仅掩码前缀）——Agent-first 下
-  网页能配、Agent 不能配的断层会诱发模型幻觉（生产会话实证）
+### 3.7 Agent 通用后端工具（agent/tools/）
+- 运行时只向 LLM 注册一个业务工具 `backend_api`，另保留 `plan`/`skills` 这类 Agent 辅助工具；文件、配置、任务、设备、会话等能力不再逐个暴露为 Agent 工具。
+- `backend_api` 从当前 FastAPI 应用的 `openapi()` 构建 HTTP 目录：`action=discover` 按意图搜索最多 6 个紧凑 operation，返回 `METHOD /api/v1/path` 标识、参数和请求体 Schema；`action=call` 只能调用目录中的 operation。
+- 尚未暴露 HTTP 路由的既有内部能力由同一目录以 `INTERNAL name` 兼容 operation 提供，仍只能调用预先登记的函数；模型看不到兼容注册表，也不能访问任意 Python 入口。
+- HTTP 目录只允许 `/api/v1/*` 业务路由，排除认证、聊天递归和 health；不接受模型提供的任意 URL、Authorization、Cookie 或其他请求头。FastAPI 本身继续负责 Pydantic/参数校验。
+- 聊天请求只复制当前请求的 Cookie/Bearer 到进程内 ASGI 调用，凭据不进入工具 Schema、提示词、operation 结果或模型上下文；Worker 使用仅存在于进程内的随机 gateway token。
+- 工具风险按实际 operation 动态计算：GET 与模型探测为 green，低风险探测为 yellow，写入/删除默认 red；`AgentLoop` 在确认前按调用参数计算等级，red 仍走签名确认和确定性重放。
+- 返回值统一 JSON 化、密钥脱敏、二进制响应只返回元数据；响应和 discovery 受 Agent 输出预算限制。旧 `files.py`/`system.py` 等实现仅作为无 HTTP 路由能力的隐藏兼容适配，不会以独立工具注册给模型。
 
 ### 3.8 持久后台任务（tasks/）
 

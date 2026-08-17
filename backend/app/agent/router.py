@@ -25,8 +25,8 @@ TASK_VERBS = ("分析", "生成", "设计", "处理", "实现", "开发", "比�
 CHAT_GREETINGS = ("你好", "嗨", "hi", "hello", "在吗", "早上好", "晚上好", "谢谢", "你是谁", "你能做什么")
 
 # 意图 → 工具组（工具检索）
-GROUPS_FILES = ["files", "plan", "skills", "memory"]
-GROUPS_SYSTEM = ["system", "analytics", "plan", "memory"]
+GROUPS_FILES = ["backend_api", "plan", "skills"]
+GROUPS_SYSTEM = ["backend_api", "plan", "skills"]
 GROUPS_ALL = None  # 全量
 
 

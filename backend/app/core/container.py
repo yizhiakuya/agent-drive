@@ -6,12 +6,16 @@
 """
 from __future__ import annotations
 
+import secrets
+from typing import Any
+
 from ..agent.loop import AgentLoop
 from ..agent.memory.preferences import MemoryStore
 from ..agent.memory.sessions import SessionStore
 from ..agent.onboarding import Onboarding
 from ..agent.skills import SkillsRegistry
 from ..agent.tools.analytics import register_analytics_tools
+from ..agent.tools.api import BackendApiClient, build_internal_app, register_backend_api_tool
 from ..agent.tools.files import register_file_tools
 from ..agent.tools.memory import register_memory_tools
 from ..agent.tools.registry import ToolRegistry
@@ -35,6 +39,8 @@ class Container:
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
+        self.app: Any | None = None
+        self.internal_api_token = secrets.token_urlsafe(32)
         self.logger = setup_logging(self.settings.app_env)
         self.logger.info(
             "container init: env=%s data=%s system=%s",
@@ -85,23 +91,43 @@ class Container:
         self.tasks.ensure_default_schedules()
 
     # ---- 工厂 ----
-    def build_tool_registry(self) -> ToolRegistry:
+    def build_tool_registry(self, request: Any | None = None) -> ToolRegistry:
+        if self.app is None:
+            self.app = build_internal_app(self)
         reg = ToolRegistry()
         self.ingest.embedder = self.llm.get_embedding_provider()  # 热刷新（对话改配置后生效）
+
+        # 兼容尚未暴露为 HTTP 路由的内部能力；只把统一 backend_api 注册给模型。
+        legacy = ToolRegistry()
+        register_file_tools(legacy, self.storage, self.ingest, tasks=self.tasks)
         register_system_tools(
-            reg, self.llm, self.memory, audit_fn=self.audit.tail,
-            scheduler=self.scheduler, tasks=self.tasks,
+            legacy,
+            self.llm,
+            self.memory,
+            audit_fn=self.audit.record,
+            scheduler=self.scheduler,
+            tasks=self.tasks,
         )
-        register_file_tools(reg, self.storage, self.ingest, tasks=self.tasks)
-        register_memory_tools(reg, self.memory)
-        register_analytics_tools(reg, self.llm.get_provider, self.audit, self.sessions)
+        register_memory_tools(legacy, self.memory)
+        register_analytics_tools(legacy, self.llm.get_provider, self.audit, self.sessions)
+
+        register_backend_api_tool(
+            reg,
+            BackendApiClient(
+                self.app,
+                request,
+                self.storage,
+                internal=request is None,
+                legacy_registry=legacy,
+            ),
+        )
         return reg
 
-    def build_agent(self) -> AgentLoop:
+    def build_agent(self, request: Any | None = None) -> AgentLoop:
         """每次对话构造一个新 Agent（历史由会话持久化）"""
         self.skills.reload()  # 技能热加载：新增 SKILL.md 无需重启
         provider = self.llm.get_provider()  # 未配置时抛 ConfigError
-        reg = self.build_tool_registry()
+        reg = self.build_tool_registry(request)
         return AgentLoop(
             provider, reg, self.memory,
             audit=lambda msg: self.audit.record(msg),

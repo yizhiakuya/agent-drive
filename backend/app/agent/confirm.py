@@ -86,7 +86,7 @@ def verify_confirmation(
 
 def needs_confirmation(tool, tool_call, confirmed: list[dict[str, Any]]) -> bool:
     """red 级工具且不在已确认列表 → 需要确认。"""
-    if tool is None or tool.level != "red":
+    if tool is None or tool.level_for(tool_call.arguments) != "red":
         return False
     already = any(
         c.get("tool") == tool_call.name and c.get("arguments") == tool_call.arguments
