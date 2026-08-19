@@ -199,7 +199,7 @@ describe("FilePage 核心操作", () => {
       // 单击选中后出现操作条
       fireEvent.click(screen.getByText("合同.txt"));
       await act(async () => {});
-      fireEvent.click(screen.getByText("✏️ 重命名"));
+      fireEvent.click(screen.getByText("重命名"));
       const input = screen.getByPlaceholderText("新名称");
       fireEvent.change(input, { target: { value: "合同2.txt" } });
       fireEvent.click(screen.getByText("确定"));
@@ -218,7 +218,7 @@ describe("FilePage 核心操作", () => {
     await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
     fireEvent.click(screen.getByText("合同.txt"));
     await act(async () => {});
-    fireEvent.click(screen.getByText("🗑️ 删除"));
+    fireEvent.click(screen.getByText("删除"));
     // 二次确认按钮
     fireEvent.click(screen.getByText("确认删除"));
     await waitFor(() => expect(deleteToTrash).toHaveBeenCalledWith("合同.txt"));

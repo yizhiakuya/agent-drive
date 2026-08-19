@@ -26,6 +26,8 @@ const eslintConfig = defineConfig([
     // Capacitor 工程：android/** 是构建产物与 cap sync 拷贝的打包 JS（非源码），
     // 不应被 ESLint 扫描（Java 侧由 Gradle 编译把关）。
     "android/**",
+    // 用户提供的 JSX 原型只作设计参考，不进入生产 bundle 或运行时。
+    "prototypes/**",
   ]),
 ]);
 

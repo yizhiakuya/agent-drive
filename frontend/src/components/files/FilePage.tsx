@@ -17,7 +17,30 @@ import { enqueueEmbedIndex, enqueueVisionIndex } from "@/lib/api/tasks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Download, Eye, FileText, Info, RefreshCw, Search, X } from "lucide-react";
+import {
+  ArchiveRestore,
+  ArrowLeft,
+  Camera,
+  ChevronRight,
+  Copy,
+  Download,
+  Eye,
+  File,
+  FilePlus2,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Home,
+  Info,
+  MoveRight,
+  Pencil,
+  RefreshCw,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 
 /** 把后端返回的 cosine 相似度转换成适合文件列表展示的百分比。 */
 function searchScoreLabel(score: number | null | undefined) {
@@ -372,23 +395,27 @@ export default function FilePage() {
         if (file) doUpload(file);
       }}
     >
-      <div className="flex-1 flex flex-col min-w-0 p-3 gap-2">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <b className="text-sm whitespace-nowrap">📁 文件</b>
+      <div className="flex-1 flex flex-col min-w-0 gap-3 bg-bg p-3 sm:p-4">
+        <div className="flex flex-col gap-3 border-b border-border pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Folder className="size-4 text-muted" aria-hidden="true" />
+            <span>文件</span>
+            {path && <span className="text-xs font-normal text-muted">/ {path}</span>}
+          </div>
           <span className="grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center">
             <Button variant="outline" size="sm" className="min-w-0 whitespace-nowrap"
-                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}><span aria-hidden="true">⬆</span> 上级</Button>
+                    onClick={() => load(path ? crumbs.slice(0, -1).join("/") : "")} disabled={!path} title={path ? "返回上级" : "已在根目录"}><ArrowLeft className="size-3.5" /> <span>上级</span></Button>
             <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap"
                     onClick={() => fileRef.current?.click()} disabled={uploading}>
-              {uploading ? <><span className="inline-block w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow align-middle" /> 上传中</> : <><span aria-hidden="true">⬆</span> 上传</>}
+              {uploading ? <><span className="inline-block size-3 border-2 border-white/40 border-t-white rounded-full animate-spin-slow" /> 上传中</> : <><Upload className="size-3.5" /> 上传</>}
             </Button>
-            <Button variant="ghost" size="sm" className="min-w-0 whitespace-nowrap" onClick={() => load(path)} title="刷新" aria-label="刷新"><span aria-hidden="true">🔄</span><span className="sm:hidden">刷新</span></Button>
-            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap sm:hidden" title="拍照上传" aria-label="拍照上传"
-                    onClick={() => cameraRef.current?.click()}><span aria-hidden="true">📷</span><span>拍照</span></Button>
-            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap" title="新建文件夹" aria-label="新建文件夹"
-                    onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}><span aria-hidden="true">📁+</span><span className="sm:hidden">新建</span></Button>
-            <Button variant="default" size="sm" className="min-w-0 whitespace-nowrap" title="回收站" aria-label="回收站"
-                    onClick={openTrash}><span aria-hidden="true">♻️</span><span className="sm:hidden">回收站</span></Button>
+            <Button variant="ghost" size="sm" className="min-w-0 whitespace-nowrap" onClick={() => load(path)} title="刷新" aria-label="刷新"><RefreshCw className="size-3.5" /><span className="sm:hidden">刷新</span></Button>
+            <Button variant="outline" size="sm" className="min-w-0 whitespace-nowrap sm:hidden" title="拍照上传" aria-label="拍照上传"
+                    onClick={() => cameraRef.current?.click()}><Camera className="size-3.5" /><span>拍照</span></Button>
+            <Button variant="outline" size="sm" className="min-w-0 whitespace-nowrap" title="新建文件夹" aria-label="新建文件夹"
+                    onClick={() => { setAction({ type: "mkdir", item: { name: "", path: "", is_dir: true } }); setActionValue(""); }}><FolderPlus className="size-3.5" /><span className="sm:hidden">新建</span></Button>
+            <Button variant="outline" size="sm" className="min-w-0 whitespace-nowrap" title="回收站" aria-label="回收站"
+                    onClick={openTrash}><ArchiveRestore className="size-3.5" /><span className="sm:hidden">回收站</span></Button>
           </span>
           <input ref={fileRef} type="file" style={{ display: "none" }}
                  onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
@@ -396,13 +423,13 @@ export default function FilePage() {
                  onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
         </div>
 
-        <form className="flex flex-col gap-1.5 sm:flex-row sm:items-center" onSubmit={submitSearch} role="search">
-          <div className="flex shrink-0 items-center gap-1" role="group" aria-label="搜索方式">
-            <span className="text-xs text-muted mr-0.5">搜索方式</span>
-            <Button type="button" variant={searchMode === "name" ? "default" : "outline"} size="sm"
-                    onClick={() => changeSearchMode("name")}>名称</Button>
-            <Button type="button" variant={searchMode === "semantic" ? "default" : "outline"} size="sm"
-                    onClick={() => changeSearchMode("semantic")}>语义</Button>
+        <form className="flex flex-col gap-2 sm:flex-row sm:items-center" onSubmit={submitSearch} role="search">
+          <div className="inline-flex shrink-0 items-center self-start rounded-md border border-border bg-card p-0.5" role="group" aria-label="搜索方式">
+            <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">搜索</span>
+            <Button type="button" variant={searchMode === "name" ? "default" : "ghost"} size="xs"
+                    className="h-6" onClick={() => changeSearchMode("name")}>名称</Button>
+            <Button type="button" variant={searchMode === "semantic" ? "default" : "ghost"} size="xs"
+                    className="h-6" onClick={() => changeSearchMode("semantic")}>语义</Button>
           </div>
           <div className="relative flex-1 min-w-0">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
@@ -428,8 +455,8 @@ export default function FilePage() {
         </div>}
 
         {selected && (
-          <div className="flex items-center gap-1.5 text-xs flex-wrap">
-            <span className="text-muted mr-1 truncate max-w-40" title={selected.path}>已选: {selected.path.split("/").pop()}</span>
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2 text-xs">
+            <span className="mr-1 max-w-40 truncate font-medium text-text" title={selected.path}>已选: {selected.path.split("/").pop()}</span>
             {selected.info && <Button variant="outline" size="sm" disabled={indexing !== null}
                     onClick={() => void enqueueSelectedIndex("embed")} title="为当前文件创建文本向量索引">
               <RefreshCw className={`size-3.5 ${indexing === "embed" ? "animate-spin" : ""}`} /> 向量化
@@ -439,47 +466,47 @@ export default function FilePage() {
               <Eye className={`size-3.5 ${indexing === "vision" ? "animate-pulse" : ""}`} /> 视觉索引
             </Button>}
             <Button variant="outline" size="sm"
-                    onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}>✏️ 重命名</Button>
+                    onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}><Pencil className="size-3.5" /> 重命名</Button>
             <Button variant="outline" size="sm"
-                    onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}>🚚 移动</Button>
+                    onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}><MoveRight className="size-3.5" /> 移动</Button>
             <Button variant="outline" size="sm"
-                    onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}>📄 复制到</Button>
+                    onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}><Copy className="size-3.5" /> 复制到</Button>
             <Button variant="destructive" size="sm"
-                    onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}>🗑️ 删除</Button>
+                    onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}><Trash2 className="size-3.5" /> 删除</Button>
           </div>
         )}
-        <div className="flex items-center text-xs flex-wrap gap-0.5">
-          <Button variant="ghost" size="sm" className={`px-1 ${!path ? "font-bold" : "text-accent"}`} onClick={() => load("")}>🏠 根目录</Button>
+        <div className="flex items-center gap-0.5 text-xs flex-wrap" aria-label="当前位置">
+          <Button variant="ghost" size="sm" className={`px-1.5 ${!path ? "font-semibold text-text" : "text-muted"}`} onClick={() => load("")}><Home className="size-3.5" /> 根目录</Button>
           {crumbs.map((c, i) => (
             <span key={i}>
-              <span className="text-muted mx-0.5">/</span>
-              <Button variant="ghost" size="sm" className={`px-1 ${i === crumbs.length - 1 ? "font-bold" : "text-accent"}`}
+              <ChevronRight className="mx-0.5 inline size-3 text-muted" aria-hidden="true" />
+              <Button variant="ghost" size="sm" className={`px-1.5 ${i === crumbs.length - 1 ? "font-semibold text-text" : "text-muted"}`}
                       onClick={() => load(crumbs.slice(0, i + 1).join("/"))}>{c}</Button>
             </span>
           ))}
         </div>
 
-        <div className="flex-1 overflow-auto border border-border rounded-lg bg-panel">
+        <div className="flex-1 overflow-auto border-y border-border bg-panel">
           <table className="w-full text-xs border-collapse">
             <thead>
-              <tr><th className="text-left p-2 border-b border-border bg-card sticky top-0">名称</th><th className="text-left p-2 border-b border-border bg-card sticky top-0 w-20 sm:w-24">大小</th><th className="text-left p-2 border-b border-border bg-card sticky top-0 w-28">索引</th><th className="hidden sm:table-cell text-left p-2 border-b border-border bg-card sticky top-0 w-44">修改时间</th></tr>
+              <tr><th className="sticky top-0 border-b border-border bg-card/80 p-3 text-left font-semibold">名称</th><th className="sticky top-0 w-20 border-b border-border bg-card/80 p-3 text-left font-semibold sm:w-24">大小</th><th className="sticky top-0 w-28 border-b border-border bg-card/80 p-3 text-left font-semibold">索引</th><th className="hidden sticky top-0 w-44 border-b border-border bg-card/80 p-3 text-left font-semibold sm:table-cell">修改时间</th></tr>
             </thead>
             <tbody>
               {items.length === 0 && (
                 <tr><td colSpan={4} className="p-8">
                   <div className="text-center text-muted text-sm">
-                    <span className="text-4xl block mb-2">{dragOver ? "📥" : "📂"}</span>
+                    {dragOver ? <Upload className="mx-auto mb-2 size-7" /> : <FolderOpen className="mx-auto mb-2 size-7" />}
                     {dragOver ? "松开鼠标上传文件" : "目录为空 — 拖文件到这里，或点「上传」"}
                   </div>
                 </td></tr>
               )}
               {items.map((it) => (
                 <tr key={it.path}
-                    className={`cursor-pointer hover:bg-card ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
+                    className={`cursor-pointer border-b border-border/60 transition-colors hover:bg-card/60 ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
                     onClick={() => openItem(it)}
                     onDoubleClick={() => it.is_dir && openFolderPath(it.path)}>
-                  <td className="p-1.5 px-2 border-b border-border/50">
-                    <div><span className={it.is_dir ? "text-warn" : ""}>{it.is_dir ? "📂" : "📄"}</span> {it.name}</div>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2"><span className={it.is_dir ? "text-text" : "text-muted"}>{it.is_dir ? <FolderOpen className="size-4" /> : <File className="size-4" />}</span> <span className="min-w-0 break-words">{it.name}</span></div>
                     {activeSearchMode === "semantic" && !it.is_dir && (it.search_snippet || searchScoreLabel(it.search_score)) && (
                       <div className="mt-1 flex items-start gap-1.5 pl-5 text-[11px]">
                         {searchScoreLabel(it.search_score) && <Badge variant="secondary" className="shrink-0">相关度 {searchScoreLabel(it.search_score)}</Badge>}
@@ -487,13 +514,13 @@ export default function FilePage() {
                       </div>
                     )}
                   </td>
-                  <td className="p-1.5 px-2 border-b border-border/50">{it.is_dir ? "—" : fmtSize(it.size)}</td>
-                  <td className="p-1.5 px-2 border-b border-border/50">{!it.is_dir && (
+                  <td className="px-3 py-2.5 text-muted">{it.is_dir ? "—" : fmtSize(it.size)}</td>
+                  <td className="px-3 py-2.5">{!it.is_dir && (
                     activeSearchMode === "semantic"
                       ? <Badge variant="default">已向量化</Badge>
                       : <Badge variant={it.index?.vectorized ? "default" : "outline"}>{indexStatusLabel(it.index)}</Badge>
                   )}</td>
-                  <td className="hidden sm:table-cell p-1.5 px-2 border-b border-border/50 text-muted">{fmtTime(it.mtime)}</td>
+                  <td className="hidden px-3 py-2.5 text-muted sm:table-cell">{fmtTime(it.mtime)}</td>
                 </tr>
               ))}
             </tbody>
@@ -505,7 +532,7 @@ export default function FilePage() {
         )}
 
         {action && (
-          <div className="border border-accent/40 bg-panel rounded-lg p-3 text-sm animate-slide-in">
+          <div className="animate-slide-in rounded-md border border-text/25 bg-card/50 p-3 text-sm">
             <div className="font-semibold mb-2">
               {action.type === "rename" && `重命名: ${action.item.name}`}
               {action.type === "move" && `移动: ${action.item.name} → 目标目录`}
@@ -519,7 +546,7 @@ export default function FilePage() {
                        onKeyDown={(e) => { if (e.key === "Enter") execAction(); if (e.key === "Escape") { setAction(null); setActionValue(""); } }}
                        placeholder={action.type === "rename" ? "新名称" : "目标目录（如 资料/合同）"}
                        className="flex-1" />
-                <Button variant="default" size="sm" onClick={execAction}>确定</Button>
+                <Button variant="default" size="sm" onClick={execAction}><FilePlus2 className="size-3.5" /> 确定</Button>
                 <Button variant="ghost" size="sm" onClick={() => { setAction(null); setActionValue(""); }}>取消</Button>
               </div>
             ) : (
@@ -535,22 +562,22 @@ export default function FilePage() {
       {/* 回收站面板：移动端为全屏覆盖层，桌面端固定侧栏 */}
       {showTrash && (
         <div className="fixed inset-0 z-40 flex flex-col bg-panel animate-fade-in lg:static lg:z-auto lg:w-[42%] lg:min-w-72 lg:border-l lg:border-border">
-          <div className="flex justify-between items-center px-3 py-2.5 border-b border-border">
-            <b className="text-sm">♻️ 回收站</b>
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
+            <b className="flex items-center gap-2 text-sm"><ArchiveRestore className="size-4 text-muted" /> 回收站</b>
             <span className="flex gap-1.5">
               <Button variant="destructive" size="sm" onClick={doEmptyTrash}>清空</Button>
-              <Button variant="ghost" size="sm" onClick={openTrash} aria-label="关闭回收站">✕</Button>
+             <Button variant="ghost" size="sm" onClick={openTrash} aria-label="关闭回收站" title="关闭"><X className="size-4" /></Button>
             </span>
           </div>
           <div className="flex-1 overflow-auto p-2">
             {trashItems.length === 0 && (
               <div className="py-8 text-center text-muted text-xs">
-                <span className="text-3xl block mb-2">♻️</span>回收站为空
+                <ArchiveRestore className="mx-auto mb-2 size-7" />回收站为空
               </div>
             )}
             {trashItems.map((t) => (
-              <div key={t.trash_id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm hover:bg-card">
-                <span>{t.is_dir ? "📂" : "📄"}</span>
+              <div key={t.trash_id} className="flex items-center gap-2 border-b border-border/60 px-2.5 py-2.5 text-sm transition-colors hover:bg-card/60">
+                <span className="text-muted">{t.is_dir ? <FolderOpen className="size-4" /> : <File className="size-4" />}</span>
                 <span className="flex-1 truncate text-xs" title={t.path}>{t.path}</span>
                 <span className="text-muted text-xs">{fmtTime(t.deleted_at, { dateOnly: true })}</span>
                 <Button variant="link" size="sm" onClick={() => doRestore(t)}>恢复</Button>
@@ -564,7 +591,7 @@ export default function FilePage() {
       <div className={`${selected ? "fixed inset-0 z-40" : "hidden"} flex flex-col bg-panel lg:static lg:z-auto lg:flex lg:w-[42%] lg:min-w-72 lg:border-l lg:border-border`}>
         {!selected && (
           <div className="p-5 text-sm flex flex-col items-center gap-2 text-center">
-            <span className="text-3xl">👁️</span>
+            <Eye className="size-7 text-muted" />
             <div className="text-muted">点击左侧文件进行预览</div>
             <div className="text-muted text-xs">支持：文本 · Markdown · 图片 · PDF</div>
           </div>

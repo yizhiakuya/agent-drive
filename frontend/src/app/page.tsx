@@ -9,6 +9,7 @@ import TaskPage from "@/components/tasks/TaskPage";
 import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
 import PullToRefresh from "@/components/PullToRefresh";
+import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { getStatus, getConfig } from "@/lib/api/config";
 import LoginCard from "@/components/auth/LoginCard";
 import RescanCard from "@/components/auth/RescanCard";
@@ -18,14 +19,14 @@ import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
 import { EV, emitFilesChanged, emitRefresh } from "@/lib/events";
-import { Folder, ListChecks, MessageSquare, Settings } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { HardDrive } from "lucide-react";
 
 function SkeletonScreen() {
   return (
     <div className="flex flex-col h-screen">
       <header className="flex items-center justify-between px-5 py-3 border-b border-border bg-panel">
-        <div className="font-bold text-lg">🦋 Agent Drive</div>
+        <div className="flex items-center gap-2 text-lg font-bold"><span className="grid size-7 place-items-center bg-text text-panel"><HardDrive className="size-4" /></span> Agent Drive</div>
         <Skeleton className="w-24 h-6 rounded-full" />
       </header>
       <main className="flex flex-1 overflow-hidden">
@@ -185,32 +186,10 @@ export default function Home() {
       <ToastStack />
     </>;
 
-  const NAV = [
-    { key: "chat", label: "对话", icon: MessageSquare },
-    { key: "files", label: "文件", icon: Folder },
-    { key: "tasks", label: "任务", icon: ListChecks },
-    { key: "settings", label: "设置", icon: Settings },
-  ] as const;
-
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex h-screen flex-col bg-panel text-text">
       <PullToRefresh onRefresh={refreshAll} />
-      <header className="flex items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 border-b border-border bg-panel gap-2">
-        <div className="font-bold text-base sm:text-lg whitespace-nowrap">🦋 <span className="max-[359px]:sr-only">Agent Drive</span></div>
-        <nav className="flex min-w-0 gap-0.5 sm:gap-1 flex-1 justify-center">
-          {NAV.map((n) => (
-            <button key={n.key}
-                    title={n.label}
-                    aria-label={n.label}
-                    className={`h-10 min-w-10 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm cursor-pointer transition-all whitespace-nowrap inline-flex items-center justify-center gap-1.5 ${tab === n.key ? "bg-accent text-white font-semibold" : "text-muted hover:bg-card"}`}
-                    onClick={() => setTab(n.key)}>
-              <n.icon className="size-4" />
-              <span className="hidden min-[430px]:inline">{n.label}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="hidden md:block bg-success-soft text-success px-3 py-1 rounded-full text-xs whitespace-nowrap" title={modelName}>🟢 {modelName || "Agent 已就绪"}</div>
-      </header>
+      <WorkspaceHeader tab={tab} modelName={modelName} onTabChange={setTab} />
 
       {/* 对话面板常驻挂载（CSS 隐藏）——切 tab 再回来不丢消息流/工具步骤 */}
       <main className={`${tab === "chat" ? "flex" : "hidden"} flex-1 overflow-hidden`}>

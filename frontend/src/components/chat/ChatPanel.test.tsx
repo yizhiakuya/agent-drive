@@ -91,7 +91,7 @@ describe("ChatPanel 主流程", () => {
     await typeAndSend("看看有什么文件");
     // tool_start 挂起 running 步骤，tool_trace 将其置为 done。
     expect(screen.getByText("list_files")).toBeInTheDocument();
-    // ToolStep 完成态徽标：✅ + 完成（内含空白，用正则匹配文字节点）
+    // ToolStep 完成态徽标包含“完成”（内含图标与空白，用正则匹配文字节点）
     expect(screen.getByText(/完成/)).toBeInTheDocument();
   });
 
@@ -162,7 +162,7 @@ describe("ChatPanel 主流程", () => {
     await act(async () => {});
     await typeAndSend("删除 a.txt");
     await waitFor(() => {
-      expect(screen.getByText("⚠️ 高风险操作确认")).toBeInTheDocument();
+      expect(screen.getByText("高风险操作确认")).toBeInTheDocument();
     });
     expect(screen.getByText("delete_file")).toBeInTheDocument();
   });
@@ -188,11 +188,11 @@ describe("ChatPanel 主流程", () => {
     render(<ChatPanel />);
     await act(async () => {});
     await typeAndSend("长时间任务");
-    const stopBtn = await screen.findByText("⏹ 停止");
+    const stopBtn = await screen.findByText("停止");
     fireEvent.click(stopBtn);
     await act(async () => {});
     expect(abortSpy).toHaveBeenCalled();
-    expect(screen.getByText("⏹️ 已停止本次任务")).toBeInTheDocument();
+    expect(screen.getByText("已停止本次任务。")).toBeInTheDocument();
   });
 
   it("reasoning 默认收叠并支持展开", async () => {

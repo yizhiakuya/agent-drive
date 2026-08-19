@@ -12,7 +12,8 @@ import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
 import { maskSecretsJson } from "@/lib/format";
-import { Brain, ChevronDown } from "lucide-react";
+import { ArrowUp, Brain, ChevronDown, FileSearch, FileText, FolderOpen, ListChecks, ShieldAlert, Square, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -25,11 +26,11 @@ import type { Message, PendingConfirmation, ThinkingLevel } from "./useChatStrea
 
 export { chatTextDelta };
 
-const QUICK_ACTIONS = [
-  { icon: "📂", label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
-  { icon: "🔍", label: "按内容找文件", msg: "帮我按内容搜索文件（用语义搜索）" },
-  { icon: "📁", label: "整理文件", msg: "帮我整理一下网盘里的文件" },
-  { icon: "📝", label: "写一份周报", msg: "根据最近的会话写一份周报" },
+const QUICK_ACTIONS: { icon: LucideIcon; label: string; msg: string }[] = [
+  { icon: FolderOpen, label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
+  { icon: FileSearch, label: "按内容找文件", msg: "帮我按内容搜索文件（用语义搜索）" },
+  { icon: ListChecks, label: "整理文件", msg: "帮我整理一下网盘里的文件" },
+  { icon: FileText, label: "写一份周报", msg: "根据最近的会话写一份周报" },
 ];
 
 const THINKING_OPTIONS: { value: ThinkingLevel; label: string; description: string }[] = [
@@ -45,10 +46,10 @@ function isThinkingLevel(value: string): value is ThinkingLevel {
 
 function greet() {
   const h = new Date().getHours();
-  if (h < 6) return "夜深了 🌙";
-  if (h < 12) return "早上好 ☀️";
-  if (h < 18) return "下午好 🌤️";
-  return "晚上好 🌆";
+  if (h < 6) return "夜深了";
+  if (h < 12) return "早上好";
+  if (h < 18) return "下午好";
+  return "晚上好";
 }
 
 export default function ChatPanel() {
@@ -225,7 +226,7 @@ export default function ChatPanel() {
       ts: pending.ts,
       signature: pending.signature,
     }];
-    setMessages((m) => [...m, { type: "user", content: `✅ 我确认执行：${pending.tool}` }]);
+    setMessages((m) => [...m, { type: "user", content: `我确认执行：${pending.tool}` }]);
     setPending(null);
     handleSend(
       `请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`,
@@ -235,38 +236,39 @@ export default function ChatPanel() {
   }
 
   function confirmNo() {
-    setMessages((m) => [...m, { type: "assistant", content: "好的，已取消该高风险操作 ✅" }]);
+    setMessages((m) => [...m, { type: "assistant", content: "好的，已取消该高风险操作。" }]);
     setPending(null);
   }
 
   const hasRunningTool = messages.some((x) => x.type === "tool_step" && x.status === "running");
 
   return (
-    <section className="flex-1 flex flex-col min-w-0 relative">
-      <div ref={listRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-5 pb-8 flex flex-col gap-3">
+    <section className="relative flex min-w-0 flex-1 flex-col bg-panel">
+      <div ref={listRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-4 pb-8 pt-6 sm:px-6">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         {messages.length === 0 && !busy && autoReport && !reportDismissed && (
-          <div className="border border-accent/40 bg-accent-soft/40 rounded-xl p-4 text-sm animate-slide-in">
+           <div className="animate-slide-in rounded-lg border border-border bg-card/60 p-4 text-sm">
             <div className="flex justify-between items-start gap-2">
-              <b>🌙 昨夜自动化报告（{autoReport.date}）</b>
-              <button className="text-muted text-xs cursor-pointer hover:text-text" onClick={() => markReportRead(autoReport.date)}>✕</button>
+              <b className="font-semibold">昨夜自动化报告 · {autoReport.date}</b>
+              <button className="text-muted cursor-pointer hover:text-text" onClick={() => markReportRead(autoReport.date)} aria-label="关闭自动化报告"><X className="size-3.5" /></button>
             </div>
             <div className="markdown-body mt-1 max-h-56 overflow-auto">{autoReport.text}</div>
-            <Button size="sm" className="mt-2"
+            <Button size="sm" variant="outline" className="mt-3"
                     onClick={() => { markReportRead(autoReport.date); handleSend("详细说说昨晚的自动化执行结果"); }}>
               让 Agent 总结一下
             </Button>
           </div>
         )}
         {messages.length === 0 && !busy && (
-          <div className="flex flex-col items-center gap-3 py-14 text-center animate-fade-in">
-            <div className="text-5xl animate-float">🦋</div>
-            <div className="text-xl font-bold">{greet()}，我是你的文件管家</div>
-            <div className="text-muted text-sm mb-3">用对话管理你的网盘：搜索、整理、理解、自动化</div>
-            <div className="flex flex-wrap gap-2.5 justify-center max-w-md">
+          <div className="flex flex-col items-center gap-3 py-16 text-center animate-fade-in">
+            <div className="grid size-10 place-items-center rounded-lg bg-text text-panel font-mono text-sm">AD</div>
+            <div className="text-xl font-semibold tracking-tight">{greet()}，Agent Drive 已就绪</div>
+            <div className="max-w-md text-sm text-muted">从文件搜索、整理到后台索引，直接用自然语言开始。</div>
+            <div className="mt-2 flex max-w-2xl flex-wrap justify-center gap-2">
               {QUICK_ACTIONS.map((a) => (
                 <Button key={a.label} variant="outline" onClick={() => handleSend(a.msg)}
-                        className="h-auto rounded-xl px-4 py-2.5 text-sm shadow-sm hover:border-accent hover:text-accent hover:-translate-y-0.5 transition-all">
-                  <span className="text-base">{a.icon}</span>
+                        className="h-9 rounded-md border-border bg-panel px-3 text-xs shadow-none hover:border-text hover:bg-card hover:text-text">
+                  <a.icon className="size-3.5 text-muted" aria-hidden="true" />
                   <span>{a.label}</span>
                 </Button>
               ))}
@@ -279,10 +281,12 @@ export default function ChatPanel() {
           const isLatestReasoning = busy && m.type === "assistant" && i === messages.length - 1;
           return (
             <div key={i} className={`flex ${m.type === "user" ? "justify-end" : "justify-start"} animate-slide-in`}>
-              <div className={`max-w-[75%] px-3.5 py-2.5 rounded-2xl whitespace-pre-wrap leading-relaxed text-sm shadow-sm ${
-                m.type === "user" ? "bg-accent text-white" : m.type === "system"
-                  ? "bg-warn-soft text-warn border border-warn/30"
-                  : "bg-card border border-border"
+              <div className={`whitespace-pre-wrap text-sm leading-relaxed ${
+                m.type === "user"
+                  ? "max-w-[min(85%,42rem)] rounded-md rounded-tr-sm bg-text px-4 py-3 text-panel shadow-sm"
+                  : m.type === "system"
+                    ? "max-w-3xl border-l-2 border-warn pl-3 text-warn"
+                    : "w-full max-w-3xl border-l-2 border-border pl-3 text-text"
               } ${isThinking ? "text-muted animate-pulse-soft" : ""}`}>
                 {isThinking ? (
                   <div className="flex items-center gap-2 text-muted" aria-live="polite">
@@ -295,16 +299,16 @@ export default function ChatPanel() {
                     {m.reasoning && (
                       <details
                         data-testid="reasoning-block"
-                        className="mb-2 overflow-hidden rounded-lg border border-border/70 bg-panel/60 text-xs"
+                         className="mb-2 max-w-2xl overflow-hidden rounded-md border border-border bg-card/50 text-xs"
                       >
-                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-2.5 py-2 text-muted transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-muted transition-colors hover:bg-card hover:text-text [&::-webkit-details-marker]:hidden">
                           <span className="flex items-center gap-1.5">
                             <Brain className="size-3.5" aria-hidden="true" />
                             <span>思考过程{isLatestReasoning ? " · 进行中" : ""}</span>
                           </span>
                           <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
                         </summary>
-                        <div className="markdown-body border-t border-border/70 px-2.5 py-2 text-muted">
+                        <div className="markdown-body border-t border-border px-3 py-2 text-muted">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.reasoning}</ReactMarkdown>
                         </div>
                       </details>
@@ -321,55 +325,44 @@ export default function ChatPanel() {
           );
         })}
         {pending && !busy && (
-          <div className="border border-danger bg-danger-soft rounded-xl p-4 max-w-[75%] animate-slide-in">
-            <div className="text-danger font-bold mb-2">⚠️ 高风险操作确认</div>
-            <div className="text-sm leading-relaxed mb-3">
-              Agent 请求执行：<code className="bg-danger/15 px-2 py-0.5 rounded text-danger">{pending.tool}</code>{" "}
-              <code className="bg-danger/15 px-2 py-0.5 rounded text-danger">{maskSecretsJson(pending.arguments)}</code>
-              <br />此操作<b>不可撤销</b>，是否继续？
+           <div className="max-w-xl overflow-hidden rounded-lg border border-danger/50 bg-panel shadow-sm animate-slide-in">
+            <div className="flex items-center gap-2 bg-text px-4 py-2.5 text-xs font-semibold tracking-wide text-panel">
+              <span className="grid size-5 place-items-center rounded-full bg-danger text-panel">!</span>
+              <span className="flex items-center gap-1.5"><ShieldAlert className="size-3.5" /> 高风险操作确认</span>
             </div>
-            <div className="flex gap-2.5">
-              <Button variant="destructive" onClick={confirmYes}>确认执行</Button>
-              <Button variant="default" onClick={confirmNo}>取消</Button>
+            <div className="space-y-3 p-4">
+              <div className="text-sm leading-relaxed text-text">
+                Agent 请求执行：<code className="bg-danger-soft px-1.5 py-0.5 font-mono text-xs text-danger">{pending.tool}</code>{" "}
+                <code className="break-all bg-danger-soft px-1.5 py-0.5 font-mono text-xs text-danger">{maskSecretsJson(pending.arguments)}</code>
+                <div className="mt-2 text-xs text-muted">此操作不可撤销，请确认目标和参数后继续。</div>
+              </div>
+              <div className="flex gap-2 border-t border-border pt-3">
+                <Button variant="default" onClick={confirmYes}>确认执行</Button>
+                <Button variant="outline" onClick={confirmNo}>取消</Button>
+              </div>
             </div>
           </div>
         )}
         <div ref={bottomRef} />
+        </div>
       </div>
 
-      {plan.length > 0 && <div className="px-4 pb-2"><PlanCard plan={plan} /></div>}
+      {plan.length > 0 && <div className="px-4 pb-2 sm:px-6"><div className="mx-auto max-w-4xl"><PlanCard plan={plan} /></div></div>}
       {contextUsage && <ContextBar usage={contextUsage} />}
 
-      <div className="input-bar-safe px-5 py-3.5 mb-2 border-t border-border bg-panel">
-        <div className="flex items-end gap-2.5">
-          <textarea
-            ref={taRef}
-            value={input}
-            rows={1}
-            onChange={(e) => { setInput(e.target.value); autoGrow(); }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
-            }}
-            placeholder="和你的 Agent 对话…"
-            className="flex-1 bg-card border border-border text-text px-3.5 py-2.5 rounded-lg outline-none resize-none text-sm leading-relaxed max-h-40 focus:border-accent focus:bg-panel focus:ring-2 focus:ring-accent-soft"
-          />
-          {busy ? (
-            <Button variant="destructive" onClick={stop}>⏹ 停止</Button>
-          ) : (
-            <Button onClick={() => handleSend()} disabled={!input.trim()}>
-              {input.trim() ? "发送" : "✈"}
-            </Button>
-          )}
-        </div>
-        <div className="mt-2 flex items-center gap-2">
-          <span className="text-xs text-muted">思考</span>
+      <div className="input-bar-safe shrink-0 border-t border-border bg-panel px-4 py-3 sm:px-6">
+        <div className="mx-auto max-w-4xl">
+           <div className="overflow-hidden rounded-md border border-border bg-panel shadow-sm focus-within:border-text">
+            <div className="flex items-center justify-between gap-3 border-b border-border bg-card/60 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <Brain className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
+                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">推理层级</span>
           <Select
             value={thinkingLevel}
             onValueChange={(value) => { if (isThinkingLevel(value)) setThinkingLevel(value); }}
             disabled={busy}
           >
-            <SelectTrigger size="sm" aria-label="思考等级" className="h-7 min-w-[104px] rounded-md bg-card text-xs">
-              <Brain className="size-3.5 text-accent" aria-hidden="true" />
+            <SelectTrigger size="sm" aria-label="思考等级" className="h-7 min-w-[104px] rounded-md border-transparent bg-panel text-xs shadow-none">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -377,16 +370,52 @@ export default function ChatPanel() {
                 <SelectItem key={option.value} value={option.value}>
                   <span>{option.label}</span>
                   <span className="ml-1.5 text-xs text-muted">{option.description}</span>
-                </SelectItem>
+              </SelectItem>
               ))}
             </SelectContent>
           </Select>
+              </div>
+              <span className="hidden shrink-0 font-mono text-[10px] text-muted sm:inline">{busy ? "STREAMING" : "READY"}</span>
+            </div>
+            <div className="flex items-end gap-2 px-3 py-2.5">
+              <textarea
+                ref={taRef}
+                value={input}
+                rows={1}
+                onChange={(e) => { setInput(e.target.value); autoGrow(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+                }}
+                placeholder="和你的 Agent 对话…"
+                className="max-h-40 flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-relaxed text-text outline-none placeholder:text-muted focus:ring-0"
+              />
+              {busy ? (
+                <Button variant="destructive" onClick={stop}><Square className="size-3.5" /> 停止</Button>
+              ) : (
+                <Button className="h-9 min-w-16" onClick={() => handleSend()} disabled={!input.trim()}>
+                  {input.trim() ? "发送" : <ArrowUp className="size-4" />}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+            {QUICK_ACTIONS.slice(0, 3).map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                className="h-7 rounded-md border border-border bg-card/50 px-2.5 text-[11px] text-muted transition-colors hover:border-text hover:bg-panel hover:text-text"
+                onClick={() => setInput(a.msg)}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       {showJump && (
-        <Button onClick={jumpBottom} title="回到底部" variant="ghost"
-                className="absolute bottom-24 right-[45%] rounded-full px-4 py-1.5 text-xs shadow-md hover:border-accent hover:text-accent animate-slide-in z-10">
-          ↓ 最新
+          <Button onClick={jumpBottom} title="回到底部" variant="outline"
+                className="absolute bottom-28 right-4 rounded-full px-3 py-1.5 text-xs shadow-md hover:border-text hover:text-text sm:right-8 animate-slide-in z-10">
+          <ArrowUp className="size-3.5 rotate-180" /> 最新
         </Button>
       )}
     </section>

@@ -7,7 +7,7 @@
 
 - 灰白 light 主题：品牌 token（`--bg/--panel/--card/--border/--text/--muted-text/--accent-brand/--accent-soft/danger/success/warn + soft`）唯一主题源；
   shadcn 语义变量（`--primary/--accent/--muted/--ring/...`）全部映射到品牌 token，**禁止在组件里写死颜色/圆角/阴影值**。
-- 主色 `--accent-brand #4f6ef7`（primary）；圆角卡片 `rounded-xl`、控件 `rounded-lg`；1px `--border` 描边。
+- 主色采用黑白灰 `--accent-brand #202124`（primary）；红/橙/绿只表达错误、警告和成功；界面分区使用细边框与开放留白，卡片与控件不超过 8px 圆角；1px `--border` 描边。
 - 仅 light 主题（`.dark` 保留未启用，不要依赖 dark 样式）。
 
 ## 2. 控件清单（唯一实现，禁止自造复刻）
@@ -28,7 +28,7 @@
 
 ## 3. 排版与节奏
 
-- 卡片：`bg-panel border rounded-xl p-4`（Card 组件），卡片间距 `mb-4`；页容器 `max-w-3xl mx-auto`。
+- 页面优先使用 `border-b/border-y` 分区、列表和表格；确需成组时使用 `bg-panel border rounded-md p-4`（Card 组件），避免卡片套卡片；设置/认证页容器使用 `max-w-4xl` 或内容需要的稳定宽度。
 - 表单：label `text-xs text-muted` + 控件 `text-sm`，字段纵向 `gap-2`，区块内 `mb-3`。
 - 标题：卡片 `CardTitle text-sm font-bold`；页面 h2 `text-lg font-bold`。
 
@@ -36,6 +36,8 @@
 
 - 轻量信息：就地小字（字段旁/卡片底部）；跨页事件才走全局 ToastStack（事件总线 `EV.toast` 不变）。
 - 状态色语义：danger=失败/破坏性操作；success=成功；warn=警示；muted=次要文本。**禁止错位**（红底选中、蓝字错误等）。
+- 生产界面不使用 emoji 作为导航、工具栏、状态或空态图标；图标统一使用 lucide，文字作为可读标签，颜色只承担语义。
+- 黑色主操作与选中态必须克制使用；普通次要操作使用 outline/ghost，避免一行按钮全部变成深色块。
 - 操作后必须有反馈：保存/获取/删除/恢复都要就地提示或 toast。
 - 会话列表每条记录同时显示完整会话 ID；ID 使用低对比度等宽小字，长值允许换行，不用截断值替代真实标识。
 - 对话思考等级放在输入区，使用 `ui/select`，默认 `auto`；Provider 返回的模型 reasoning 单独显示在助手气泡内的原生 `<details>`，默认收叠，展开后使用现有 markdown 样式；没有 reasoning 返回时不展示伪造内容。

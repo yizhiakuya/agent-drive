@@ -68,20 +68,8 @@ export function maskSecretsJson(obj: unknown): string {
   );
 }
 
-export const TOOL_ICONS: Record<string, string> = {
-  list_files: "📂", search_files: "🔍", read_file: "📖", write_file: "✍️",
-  append_file: "➕", copy_file: "📄", create_folder: "📁", rename_file: "✏️",
-  move_file: "🚚", delete_file: "🗑️", get_storage_info: "💾",
-  get_system_status: "⚙️", set_llm_provider: "🔌", test_llm_connection: "📡",
-  set_preference: "🎛️", add_rule: "📏", remove_rule: "➖", view_audit_log: "🧾",
-  analyze_failures: "🔬", set_plan: "📋", update_plan: "📋",
-  remember: "🧠", memory_search: "🔎", memory_get: "📇", read_skill: "📚",
-  read_document: "📖", search_content: "🔍", semantic_search: "🧭", index_stats: "📊",
-  run_automation_now: "🤖", automation_status: "⏰",
-};
-
 export const STEP_STATUS: Record<string, [string, string]> = {
-  running: ["🔄", "执行中"],
-  done: ["✅", "完成"],
-  error: ["❌", "失败"],
+  running: ["", "执行中"],
+  done: ["", "完成"],
+  error: ["", "失败"],
 };

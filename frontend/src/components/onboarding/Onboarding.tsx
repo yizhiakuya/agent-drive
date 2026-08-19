@@ -6,6 +6,7 @@ import { PROTOCOLS, protocolOf } from "@/lib/llm-options";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import { ArrowRight, Bot, Check, HardDrive } from "lucide-react";
 
 export default function Onboarding() {
   const setConfigured = useAppStore((s) => s.setConfigured);
@@ -42,20 +43,22 @@ export default function Onboarding() {
   );
 
   return (
-    <div className="flex items-center justify-center min-h-screen p-5">
-      <div className="w-[640px] bg-panel border border-border rounded-2xl p-8 shadow-md">
-        <div className="text-center mb-6">
-          <div className="text-5xl mb-2">🦋</div>
-          <h1 className="text-xl font-bold">欢迎使用 Agent Drive</h1>
+    <div className="flex min-h-screen items-center justify-center bg-bg p-5">
+      <div className="w-full max-w-[640px] border border-border bg-panel p-6 sm:p-8">
+        <div className="mb-6 text-center">
+          <span className="mx-auto mb-4 grid size-10 place-items-center bg-text text-panel"><HardDrive className="size-5" /></span>
+          <h1 className="flex items-center justify-center gap-2 text-xl font-bold"><Bot className="size-5 text-muted" /> 欢迎使用 Agent Drive</h1>
           <p className="text-muted text-sm mt-2 leading-relaxed">AI 中心的私人网盘 — 配置好 Agent 后，一切通过对话完成</p>
         </div>
 
         <div className="grid gap-2 mb-4">
           {PROTOCOLS.map((p) => (
             <button key={p.type} type="button" onClick={() => setType(p.type)}
-                    className={`text-left bg-card border rounded-xl px-3.5 py-3 cursor-pointer transition-colors ${type === p.type ? "border-accent bg-accent-soft" : "border-border hover:bg-muted"}`}>
-              <div className="font-semibold text-sm">{p.label}</div>
+                    className={`flex cursor-pointer items-start gap-2 border px-3.5 py-3 text-left transition-colors ${type === p.type ? "border-text bg-card" : "border-border bg-panel hover:bg-card"}`}>
+              <span className={`mt-0.5 grid size-4 place-items-center border ${type === p.type ? "border-text bg-text text-panel" : "border-border text-transparent"}`}><Check className="size-3" /></span>
+              <div><div className="font-semibold text-sm">{p.label}</div>
               <small className="text-muted text-xs">{p.desc}</small>
+              </div>
             </button>
           ))}
         </div>
@@ -71,7 +74,7 @@ export default function Onboarding() {
 
         <div className="flex justify-end">
           <Button onClick={submit} disabled={busy || !baseUrl || !model || !apiKey}>
-            {busy ? "测试连接中…" : "连接并启动"}
+            {busy ? "测试连接中…" : "连接并启动"} <ArrowRight className="size-4" />
           </Button>
         </div>
       </div>

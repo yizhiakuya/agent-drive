@@ -7,6 +7,7 @@ import { fmtSize } from "@/lib/format";
 import { EV, emitToast, emitTasksChanged } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, ChevronRight, Download, File, FolderOpen, Home, PanelLeftClose, PanelLeftOpen, RefreshCw, Upload, X } from "lucide-react";
 
 export default function FilePanel() {
   const [path, setPath] = useState("");
@@ -70,42 +71,42 @@ export default function FilePanel() {
 
   return (
     <aside className={`bg-panel flex flex-col border-l border-border ${collapsed ? "w-11 min-w-11" : "w-80"}`}>
-      <div className="flex justify-between items-center px-4 py-3.5 border-b border-border">
-        <b className="text-sm">📁 文件</b>
+      <div className="flex items-center justify-between border-b border-border px-3 py-3">
+        <b className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em]"><FolderOpen className="size-3.5 text-muted" /> 文件</b>
         <span className="flex gap-1.5 items-center">
-          <Button variant="default" size="sm" onClick={() => fileRef.current?.click()}>⬆ 上传</Button>
-          <Button variant="ghost" size="sm" onClick={() => load(path)} title="刷新" aria-label="刷新">🔄</Button>
+          <Button variant="default" size="sm" onClick={() => fileRef.current?.click()}><Upload className="size-3.5" /> 上传</Button>
+          <Button variant="ghost" size="sm" onClick={() => load(path)} title="刷新" aria-label="刷新"><RefreshCw className="size-3.5" /></Button>
           <Button variant="ghost" size="sm" onClick={() => setCollapsed((v) => !v)}
-                  title={collapsed ? "展开" : "收起"} aria-label={collapsed ? "展开" : "收起"}>{collapsed ? "▶" : "▼"}</Button>
+                  title={collapsed ? "展开" : "收起"} aria-label={collapsed ? "展开" : "收起"}>{collapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}</Button>
         </span>
         <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
       </div>
       {!collapsed && (
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex items-center px-3 py-1.5 text-xs flex-wrap gap-0.5 border-b border-border/60">
-            <Button variant="ghost" size="sm" className={`px-1 ${!path ? "font-bold" : "text-accent"}`} onClick={() => load("")}>🏠</Button>
+            <Button variant="ghost" size="sm" className={`px-1.5 ${!path ? "font-semibold text-text" : "text-muted"}`} onClick={() => load("")}><Home className="size-3.5" /></Button>
             {crumbs.map((c, i) => (
               <span key={i}>
-                <span className="text-muted mx-0.5">/</span>
-                <Button variant="ghost" size="sm" className={`px-1 ${i === crumbs.length - 1 ? "font-bold" : "text-accent"}`}
+                <ChevronRight className="mx-0.5 inline size-3 text-muted" />
+                <Button variant="ghost" size="sm" className={`px-1.5 ${i === crumbs.length - 1 ? "font-semibold text-text" : "text-muted"}`}
                         onClick={() => load(crumbs.slice(0, i + 1).join("/"))}>{c}</Button>
               </span>
             ))}
             {path && <Button variant="ghost" size="sm" className="ml-1 font-bold px-1" title="返回上级"
-                            onClick={() => load(crumbs.slice(0, -1).join("/"))}>⬆</Button>}
+                            onClick={() => load(crumbs.slice(0, -1).join("/"))}><ArrowLeft className="size-3.5" /></Button>}
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {items.length === 0 && (
               <div className="py-6 text-center text-muted text-xs">
-                <span className="text-3xl block mb-2">📂</span>目录为空
+                <FolderOpen className="mx-auto mb-2 size-6" />目录为空
               </div>
             )}
             {items.map((it) => (
               <div key={it.path}
-                   className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer text-sm hover:bg-card ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
+                   className={`flex cursor-pointer items-center gap-2 border-b border-border/50 px-2.5 py-2 text-sm transition-colors hover:bg-card ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
                    onClick={() => openItem(it)}
                    onDoubleClick={() => it.is_dir && load(it.path)}>
-                <span className={it.is_dir ? "text-warn" : ""}>{it.is_dir ? "📂" : "📄"}</span>
+                <span className={it.is_dir ? "text-text" : "text-muted"}>{it.is_dir ? <FolderOpen className="size-4" /> : <File className="size-4" />}</span>
                 <span className="flex-1 truncate" title={it.path}>{it.name}</span>
                 <span className="text-muted text-xs">{it.is_dir ? "" : fmtSize(it.size)}</span>
               </div>
@@ -116,8 +117,8 @@ export default function FilePanel() {
               <div className="flex justify-between items-center px-2.5 py-1.5 border-b border-border/60">
                 <b className="text-xs truncate flex-1" title={selected.path}>{selected.path.split("/").pop()}</b>
                 <span className="flex gap-1">
-                  <Button variant="default" size="sm" asChild><a href={fileDownloadUrl(selected.path)} download>⬇</a></Button>
-                  <Button variant="ghost" size="sm" onClick={() => setSelected(null)} aria-label="关闭预览">✕</Button>
+                  <Button variant="default" size="sm" asChild><a href={fileDownloadUrl(selected.path)} download aria-label="下载"><Download className="size-3.5" /></a></Button>
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(null)} aria-label="关闭预览"><X className="size-3.5" /></Button>
                 </span>
               </div>
               {selected.info?.indexed && (

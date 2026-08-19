@@ -30,8 +30,9 @@ export default function FileDetails({ info }: { info: FileInfo }) {
   const index = info.indexed;
   const detail = index?.detail;
   return (
-    <div className="p-3 space-y-3 text-xs">
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+    <div className="space-y-4 p-4 text-xs">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">文件元数据</div>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-y border-border py-3">
         <dt className="text-muted">完整路径</dt>
         <dd className="min-w-0 break-all" title={info.path}>{info.path}</dd>
         <dt className="text-muted">类型</dt>
@@ -44,8 +45,11 @@ export default function FileDetails({ info }: { info: FileInfo }) {
         <dd>{info.revision ?? "未知"}</dd>
       </dl>
 
-      <div className="border-t border-border pt-3">
-        <div className="font-semibold mb-2">索引状态</div>
+      <div className="border-t border-border pt-4">
+        <div className="mb-2 flex items-center justify-between gap-2 font-semibold">
+          <span>索引状态</span>
+          <span className="font-mono text-[10px] font-normal text-muted">revision-aware</span>
+        </div>
         {!index ? (
           <p className="text-muted">当前文件还没有索引记录。</p>
         ) : (
@@ -92,13 +96,13 @@ export default function FileDetails({ info }: { info: FileInfo }) {
               <div className="space-y-1.5">
                 <div className="font-medium">文本段详情</div>
                 {detail.chunks.length ? detail.chunks.map((chunk) => (
-                  <details key={chunk.id} className="rounded border border-border px-2 py-1.5">
+                  <details key={chunk.id} className="border border-border px-2 py-1.5">
                     <summary className="cursor-pointer select-none">
                       <span>{chunkLabel(chunk)}</span>
                       <span className="ml-2 text-muted">{chunk.current_vector ? "当前向量有效" : "当前无有效向量"}</span>
                     </summary>
                     <div className="mt-2 space-y-2">
-                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-2 font-sans text-[11px]">{chunk.content}</pre>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words border border-border bg-card/60 p-2 font-sans text-[11px]">{chunk.content}</pre>
                       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px]">
                         <dt className="text-muted">Chunk ID</dt><dd className="break-all">{chunk.id}</dd>
                         <dt className="text-muted">文本长度</dt><dd>{chunk.content_length}</dd>

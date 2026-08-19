@@ -4,6 +4,7 @@ import { getDevices, removeDevice, DeviceInfo } from "@/lib/api/devices";
 import { EV } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { MonitorSmartphone, Trash2 } from "lucide-react";
 
 function relTime(ts: number): string {
   const diff = Math.max(0, Date.now() / 1000 - ts);
@@ -18,7 +19,7 @@ function fmtSync(d: DeviceInfo): string {
   if (!s?.enabled) return "未启用";
   const parts = [`每 ${s.interval_hours}h`, s.wifi_only ? "仅Wi-Fi" : "任意网络"];
   if (s.last_sync_at) parts.push(`上次 ${relTime(s.last_sync_at)} · ${s.last_synced_count} 张`);
-  if (s.last_error) parts.push(`⚠ ${s.last_error}`);
+  if (s.last_error) parts.push(`错误：${s.last_error}`);
   return parts.join(" · ");
 }
 
@@ -64,8 +65,8 @@ export default function DevicesCard() {
   }
 
   return (
-    <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-      <h3 className="font-bold text-sm mb-1">🖥️ 设备列表</h3>
+    <section className="border-b border-border py-5">
+      <h3 className="flex items-center gap-2 text-sm font-bold"><MonitorSmartphone className="size-4 text-muted" /> 设备列表</h3>
       <p className="text-muted text-xs mb-3">手机 App 扫码连接后自动登记；活跃时间由 App 心跳与相册同步刷新。</p>
       {devices.length === 0 ? (
         <p className="text-muted text-xs">暂无设备。用手机 App 扫上方二维码连接后会出现在这里。</p>
@@ -73,29 +74,29 @@ export default function DevicesCard() {
         <table className="w-full text-xs border-collapse">
           <thead>
             <tr>
-              <th className="text-left p-1.5 border-b border-border">设备</th>
-              <th className="text-left p-1.5 border-b border-border hidden sm:table-cell">版本</th>
-              <th className="text-left p-1.5 border-b border-border">活跃</th>
-              <th className="text-left p-1.5 border-b border-border hidden md:table-cell">相册同步</th>
-              <th className="text-right p-1.5 border-b border-border"></th>
+              <th className="border-b border-border p-2 text-left font-semibold">设备</th>
+              <th className="hidden border-b border-border p-2 text-left font-semibold sm:table-cell">版本</th>
+              <th className="border-b border-border p-2 text-left font-semibold">活跃</th>
+              <th className="hidden border-b border-border p-2 text-left font-semibold md:table-cell">相册同步</th>
+              <th className="border-b border-border p-2 text-right font-semibold"></th>
             </tr>
           </thead>
           <tbody>
             {devices.map((d) => (
               <tr key={d.device_id}>
-                <td className="p-1.5 border-b border-border/50">
+                <td className="border-b border-border/60 p-2">
                   <div className="font-medium">{d.name}</div>
                   <div className="text-muted">{d.model} · {d.platform}</div>
                 </td>
-                <td className="p-1.5 border-b border-border/50 text-muted hidden sm:table-cell">{d.app_version}</td>
-                <td className="p-1.5 border-b border-border/50">
+                <td className="hidden border-b border-border/60 p-2 text-muted sm:table-cell">{d.app_version}</td>
+                <td className="border-b border-border/60 p-2">
                   {now - d.last_seen < 120
                     ? <Badge variant="outline" className="bg-success-soft text-success border-success/30">在线</Badge>
                     : <span className="text-muted">{relTime(d.last_seen)}</span>}
                 </td>
-                <td className="p-1.5 border-b border-border/50 text-muted hidden md:table-cell">{fmtSync(d)}</td>
-                <td className="p-1.5 border-b border-border/50 text-right">
-                  <Button variant="destructive" size="sm" onClick={() => rm(d.device_id)} disabled={busy !== null}>移除</Button>
+                <td className="hidden border-b border-border/60 p-2 text-muted md:table-cell">{fmtSync(d)}</td>
+                <td className="border-b border-border/60 p-2 text-right">
+                  <Button variant="destructive" size="sm" onClick={() => rm(d.device_id)} disabled={busy !== null}><Trash2 className="size-3.5" /><span className="hidden sm:inline">移除</span></Button>
                 </td>
               </tr>
             ))}
@@ -103,6 +104,6 @@ export default function DevicesCard() {
         </table>
       )}
       {msg && <p className="text-danger text-xs mt-2">{msg}</p>}
-    </div>
+    </section>
   );
 }

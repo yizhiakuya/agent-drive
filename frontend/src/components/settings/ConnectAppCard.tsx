@@ -7,6 +7,7 @@ import { currentServer } from "@/lib/native/server-config";
 import { useRescan } from "@/lib/native/useRescan";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Download, Link2, RefreshCw, ScanLine } from "lucide-react";
 
 /**
  * 连接手机 App：web 端展示带一次性授权码的二维码（扫码即授权，免密码）；
@@ -61,15 +62,15 @@ export default function ConnectAppCard() {
   }, [left, native]);
 
   return (
-    <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-      <h3 className="font-bold text-sm mb-1">📱 连接手机 App</h3>
+    <section className="border-b border-border py-5">
+      <h3 className="flex items-center gap-2 text-sm font-bold"><Link2 className="size-4 text-muted" /> 连接手机 App</h3>
       {native ? (
         <div className="text-sm">
           <p className="text-muted text-xs mb-2">
             当前服务器：<span className="text-text font-mono">{server || "未配置"}</span>
           </p>
           <Button onClick={rescan} disabled={rescanBusy}>
-            {rescanBusy ? "等待扫码…" : "重新扫码连接"}
+            <ScanLine className="size-4" /> {rescanBusy ? "等待扫码…" : "重新扫码连接"}
           </Button>
           {rescanMsg && <p className="text-danger text-xs mt-2">{rescanMsg}</p>}
         </div>
@@ -81,26 +82,26 @@ export default function ConnectAppCard() {
           </p>
           {qr
             ? <>
-                <img src={qr} alt="扫码连接服务器" className="w-52 h-52 rounded-lg border border-border" />
+                <img src={qr} alt="扫码连接服务器" className="h-52 w-52 border border-border" />
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="text-muted">
                     {left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} 后过期` : "已过期"}
                   </Badge>
                   <Button variant="ghost" size="sm" onClick={refresh} disabled={busy}>
-                    {busy ? "生成中…" : "刷新二维码"}
+                    <RefreshCw className={busy ? "size-3.5 animate-spin" : "size-3.5"} /> {busy ? "生成中…" : "刷新二维码"}
                   </Button>
                 </div>
               </>
             : <p className="text-muted text-xs">生成中…</p>}
           <Button asChild>
             <a href="/app/agent-drive.apk" download>
-              📲 下载安卓 App（APK）
+              <Download className="size-4" /> 下载安卓 App（APK）
             </a>
           </Button>
           <p className="text-muted text-[10px]">扫码即授权（一次性 5 分钟）；App 内重扫：设置 → 连接手机 App</p>
           {msg && <p className="text-danger text-xs">{msg}</p>}
         </div>
       )}
-    </div>
+    </section>
   );
 }

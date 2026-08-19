@@ -153,7 +153,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         bumpSessions();
       }
       if (r?.truncated) {
-        setMessages((m) => [...m, { type: "system", content: "⚠️ 任务达到最大步数，可能未完成，回复「继续」可接着做" }]);
+        setMessages((m) => [...m, { type: "system", content: "任务达到最大步数，可能未完成，回复「继续」可接着做。" }]);
       }
       if (r?.pending_confirmation) setPending(r.pending_confirmation as PendingConfirmation);
       setTimeout(() => {
@@ -163,7 +163,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       if ((e as Error).name === "AbortError" || generation !== streamGenerationRef.current) return;
       setMessages((m) => {
         const copy = [...m];
-        copy[copy.length - 1] = { type: "assistant", content: `⚠️ 出错了：${(e as Error).message}` };
+        copy[copy.length - 1] = { type: "assistant", content: `出错了：${(e as Error).message}` };
         return copy;
       });
     } finally {
@@ -201,7 +201,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     setMessages((m) => {
       // 清掉空助手占位气泡后追加停止提示（工具步骤保留）
       const copy = m.filter((x) => !(x.type === "assistant" && !x.content && !x.reasoning));
-      copy.push({ type: "system", content: "⏹️ 已停止本次任务" });
+      copy.push({ type: "system", content: "已停止本次任务。" });
       return copy;
     });
   }, [cancelActiveStream, setMessages]);

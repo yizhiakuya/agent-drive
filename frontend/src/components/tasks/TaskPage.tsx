@@ -8,6 +8,7 @@ import {
   Clock3,
   DatabaseZap,
   LoaderCircle,
+  ListChecks,
   RefreshCw,
   RotateCcw,
   Square,
@@ -97,7 +98,7 @@ function TaskRow({ task, pending, onCancel, onRetry }: {
   const total = task.progress.total;
   const percent = total > 0 ? Math.min(100, Math.round((task.progress.current / total) * 100)) : 0;
   return (
-    <article className="px-3.5 sm:px-4 py-3 border-b border-border last:border-b-0 min-w-0">
+    <article className="min-w-0 border-b border-border px-3.5 py-3.5 last:border-b-0 sm:px-4">
       <div className="flex items-start gap-3 min-w-0">
         <StatusIcon status={task.status} />
         <div className="flex-1 min-w-0">
@@ -109,11 +110,11 @@ function TaskRow({ task, pending, onCancel, onRetry }: {
           {task.resource_key && (
             <p className="text-xs text-muted mt-1 break-all">{task.resource_key.replace(/^file:|^index:/, "")}</p>
           )}
-          {task.progress.message && <p className="text-xs mt-1 break-words">{task.progress.message}</p>}
+          {task.progress.message && <p className="mt-1 break-words text-xs text-muted">{task.progress.message}</p>}
           {(ACTIVE.has(task.status) || total > 0) && (
             <div className="mt-2 flex items-center gap-2">
-              <div className="h-1.5 flex-1 bg-card rounded-full overflow-hidden" aria-label={`进度 ${percent}%`}>
-                <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${percent}%` }} />
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-card" aria-label={`进度 ${percent}%`}>
+                <div className="h-full bg-text transition-[width] duration-300" style={{ width: `${percent}%` }} />
               </div>
               {total > 0 && <span className="text-[11px] tabular-nums text-muted w-9 text-right">{percent}%</span>}
             </div>
@@ -140,7 +141,7 @@ function TaskRow({ task, pending, onCancel, onRetry }: {
               type="button"
               variant="outline"
               size="sm"
-              className="h-9 px-2 text-accent hover:bg-accent-soft"
+              className="h-9 px-2 text-text hover:bg-accent-soft"
               title="重试任务"
               aria-label="重试任务"
               disabled={pending}
@@ -251,7 +252,7 @@ export default function TaskPage() {
       <header className="bg-panel border-b border-border">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-base font-bold">后台任务</h2>
+            <h2 className="flex items-center gap-2 text-base font-bold"><ListChecks className="size-4 text-muted" /> 后台任务</h2>
             <p className="text-xs text-muted mt-0.5">
               {activeCount > 0 ? `${activeCount} 个任务正在处理` : "当前没有运行中的任务"}
             </p>
@@ -292,16 +293,16 @@ export default function TaskPage() {
           </Alert>
         )}
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 border-y border-border bg-panel mb-4">
-          <div className="p-3 border-r border-b lg:border-b-0 border-border">
+        <div className="mb-5 grid grid-cols-2 border-y border-border bg-panel lg:grid-cols-4">
+          <div className="border-b border-border p-3 lg:border-b-0 lg:border-r">
             <div className="text-[11px] text-muted">运行中</div>
             <div className="text-lg font-semibold tabular-nums mt-0.5">{activeCount}</div>
           </div>
-          <div className="p-3 lg:border-r border-b lg:border-b-0 border-border">
+          <div className="border-b border-border p-3 lg:border-b-0 lg:border-r">
             <div className="text-[11px] text-muted">有效向量</div>
             <div className="text-lg font-semibold tabular-nums mt-0.5">{index?.vector_files ?? 0}</div>
           </div>
-          <div className="p-3 border-r border-border">
+          <div className="border-r border-border p-3">
             <div className="text-[11px] text-muted">待索引</div>
             <div className="text-lg font-semibold tabular-nums mt-0.5">{index?.missing_vectors ?? 0}</div>
           </div>
@@ -312,14 +313,14 @@ export default function TaskPage() {
         </div>
 
         <div className="flex items-center justify-between gap-3 mb-3">
-          <div className="inline-flex bg-card p-0.5 rounded-lg" role="tablist" aria-label="任务筛选">
+          <div className="inline-flex rounded-md border border-border bg-card p-0.5" role="tablist" aria-label="任务筛选">
             {(["all", "active", "failed", "done"] as Filter[]).map((item) => (
               <button
                 key={item}
                 type="button"
                 role="tab"
                 aria-selected={filter === item}
-                className={`h-9 px-3 rounded-md text-xs ${filter === item ? "bg-panel text-text shadow-sm font-semibold" : "text-muted"}`}
+                className={`h-8 rounded-sm px-3 text-xs ${filter === item ? "bg-panel font-semibold text-text shadow-sm" : "text-muted hover:text-text"}`}
                 onClick={() => setFilter(item)}
               >
                 {{ all: "全部", active: "运行中", failed: "异常", done: "已完成" }[item]}
@@ -329,7 +330,7 @@ export default function TaskPage() {
           {index?.model && <span className="hidden sm:block text-[11px] text-muted truncate">{index.model}</span>}
         </div>
 
-        <div className="bg-panel border border-border rounded-lg overflow-hidden">
+        <div className="overflow-hidden border-y border-border bg-panel">
           {error ? (
             <div className="p-5 text-sm text-danger flex items-center gap-2">
               <AlertCircle className="size-4 shrink-0" />
@@ -347,7 +348,7 @@ export default function TaskPage() {
 
       {confirmRebuild && (
         <div className="fixed inset-0 z-50 bg-black/35 grid place-items-center p-4" role="dialog" aria-modal="true" aria-labelledby="rebuild-title">
-          <div className="w-full max-w-sm bg-panel border border-border rounded-lg shadow-xl p-4">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-panel p-4 shadow-xl">
             <h3 id="rebuild-title" className="font-bold text-sm">重建全部搜索索引</h3>
             <p className="text-sm text-muted mt-2">现有全文与向量索引会在后台重新生成，文件本身不会被修改。</p>
             <div className="flex justify-end gap-2 mt-4">

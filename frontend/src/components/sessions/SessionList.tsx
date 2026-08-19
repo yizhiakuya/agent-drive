@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { MessageSquare, Plus, Trash2 } from "lucide-react";
 import { listSessions, deleteSession, summarizeSession } from "@/lib/api/sessions";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -68,24 +69,32 @@ export default function SessionList() {
   }
 
   return (
-    <aside className="hidden md:flex w-52 xl:w-60 border-r border-border bg-panel flex-col">
-      <div className="flex justify-between items-center px-3 py-3.5 border-b border-border">
-        <b className="text-sm">💬 会话</b>
-        <Button className="text-xs px-3 py-1.5 h-auto" onClick={newSession}>＋ 新会话</Button>
+    <aside className="hidden w-52 shrink-0 flex-col border-r border-border bg-bg md:flex xl:w-60">
+      <div className="flex items-center justify-between border-b border-border bg-panel px-3 py-3">
+        <b className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em] text-text">
+          <MessageSquare className="size-3.5 text-muted" aria-hidden="true" />
+          会话
+        </b>
+        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={newSession}>
+          <Plus className="size-3.5" aria-hidden="true" />
+          新会话
+        </Button>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {sessions.length === 0 && <div className="text-muted text-xs p-3">（暂无会话）</div>}
         {sessions.map((s) => (
           <div key={s.id}
-               className={`relative px-3 py-2.5 rounded-lg cursor-pointer mb-1 hover:bg-card ${sessionId === s.id ? "bg-accent-soft border border-accent" : ""}`}
+               className={`relative mb-1 cursor-pointer rounded-md border px-3 py-2.5 transition-colors ${sessionId === s.id ? "border-border bg-panel" : "border-transparent hover:bg-panel"}`}
                onClick={() => setSessionId(s.id)}>
-            <div className="text-sm font-semibold pr-5 truncate">{s.title || "（无标题会话）"}</div>
+            <div className="truncate pr-5 text-sm font-semibold text-text">{s.title || "（无标题会话）"}</div>
             {s.summary && <div className="text-xs text-muted mt-0.5 truncate">{s.summary}</div>}
             <div className="mt-1 pr-5 break-all font-mono text-[10px] leading-4 text-muted" title={s.id}>
               ID: {s.id}
             </div>
-            <button className="absolute top-2 right-2 text-muted text-xs cursor-pointer hover:text-danger"
-                    onClick={(e) => remove(s.id, e)} title="删除会话">✕</button>
+            <button className="absolute right-2 top-2 grid size-6 place-items-center text-muted transition-colors hover:text-danger"
+                    onClick={(e) => remove(s.id, e)} title="删除会话" aria-label="删除会话">
+              <Trash2 className="size-3.5" aria-hidden="true" />
+            </button>
           </div>
         ))}
       </div>

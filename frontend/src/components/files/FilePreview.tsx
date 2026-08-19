@@ -1,6 +1,7 @@
 "use client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Music2 } from "lucide-react";
 import { FileInfo, fileRawUrl } from "@/lib/api/files";
 
 /**
@@ -40,8 +41,10 @@ export default function FilePreview({
       );
     }
     return (
-      <div className="p-6 flex flex-col items-center gap-3">
-        <span className="text-4xl">🎵</span>
+      <div className="flex flex-col items-center gap-3 p-6">
+        <div className="grid size-16 place-items-center rounded-lg border border-border bg-card text-text">
+          <Music2 className="size-8" aria-hidden="true" />
+        </div>
         <div className="text-sm">{name}</div>
         <audio src={fileRawUrl(path)} controls className="w-full" />
       </div>

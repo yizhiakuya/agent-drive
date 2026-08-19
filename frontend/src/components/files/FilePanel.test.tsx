@@ -37,7 +37,7 @@ describe("FilePanel（Next 版）", () => {
     fireEvent.click(screen.getByText("合同.txt"));
     await act(async () => {});
     expect(screen.getByText("房屋租赁合同内容")).toBeInTheDocument();
-    expect(screen.getByText("✕")).toBeInTheDocument();
+    expect(screen.getByLabelText("关闭预览")).toBeInTheDocument();
   });
 
   it("折叠切换", async () => {

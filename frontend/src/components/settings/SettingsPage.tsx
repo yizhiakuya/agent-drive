@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, ComboboxEmpty } from "@/components/ui/combobox";
 import { Alert } from "@/components/ui/alert";
-import { RefreshCw } from "lucide-react";
+import { Bot, BrainCircuit, Eye, LogOut, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -228,20 +228,27 @@ export default function SettingsPage() {
   );
 
   return (
-    <section className="flex-1 overflow-auto p-5 max-w-3xl mx-auto">
-      <h2 className="text-lg font-bold mb-3">⚙️ 设置</h2>
+    <section className="flex-1 overflow-auto bg-bg px-4 py-5 sm:px-6">
+      <div className="mx-auto max-w-4xl">
+      <div className="mb-5 flex items-end justify-between gap-3 border-b border-border pb-4">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-bold"><Settings2 className="size-5 text-muted" /> 设置</h2>
+          <p className="mt-1 text-xs text-muted">模型、索引、设备与本地同步的运行配置。</p>
+        </div>
+        <span className="hidden font-mono text-[10px] uppercase tracking-[0.12em] text-muted sm:block">workspace config</span>
+      </div>
       {msg && msg.kind === "error" && (
         <Alert variant="destructive" className="mb-3 text-xs bg-danger-soft text-danger border-danger/30">{msg.text}</Alert>
       )}
 
       {!isNative && (<>
-      <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-        <h3 className="font-bold text-sm mb-1">🧠 LLM 模型</h3>
+      <section className="border-b border-border py-5 first:pt-0">
+        <h3 className="flex items-center gap-2 text-sm font-bold"><Bot className="size-4 text-muted" /> LLM 模型</h3>
         <p className="text-muted text-xs mb-3">Agent 的大脑。选择协议后可一键获取该服务商的可用模型。</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
           {PROTOCOLS.map((p) => (
             <button key={p.type} type="button" onClick={() => changeProtocol(p.type)}
-                    className={`text-left bg-card border rounded-lg px-2.5 py-2 cursor-pointer text-xs transition-colors ${llmForm.type === p.type ? "border-accent bg-accent-soft" : "border-border hover:bg-muted"}`}>
+                    className={`cursor-pointer border px-2.5 py-2 text-left text-xs transition-colors ${llmForm.type === p.type ? "border-text bg-card" : "border-border bg-panel hover:bg-card"}`}>
               <div className="font-semibold">{p.label}</div>
               <small className="text-muted text-[10px]">{p.desc}</small>
             </button>
@@ -310,10 +317,10 @@ export default function SettingsPage() {
                  className={`mb-3 text-xs ${llmMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{llmMsg.text}</Alert>
         )}
         <Button onClick={saveLlm} disabled={saving !== null}>{saving === "llm" ? "测试中…" : "保存并测试连接"}</Button>
-      </div>
+      </section>
 
-      <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-        <h3 className="font-bold text-sm mb-1">🧭 向量化（语义搜索）</h3>
+      <section className="border-b border-border py-5">
+        <h3 className="flex items-center gap-2 text-sm font-bold"><BrainCircuit className="size-4 text-muted" /> 向量化（语义搜索）</h3>
         <p className="text-muted text-xs mb-3">文件语义搜索的 embedding 服务（云 API，如 Jina AI）。</p>
         <div className="flex flex-col gap-1.5 mb-3">
           <span className="text-xs text-muted">Provider</span>
@@ -327,10 +334,10 @@ export default function SettingsPage() {
                  className={`mb-3 text-xs ${embMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{embMsg.text}</Alert>
         )}
         <Button onClick={saveEmb} disabled={saving !== null}>{saving === "emb" ? "测试中…" : "保存并测试"}</Button>
-      </div>
+      </section>
 
-      <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-        <h3 className="font-bold text-sm mb-1">🖼️ 视觉模型（图片识别）</h3>
+      <section className="border-b border-border py-5">
+        <h3 className="flex items-center gap-2 text-sm font-bold"><Eye className="size-4 text-muted" /> 视觉模型（图片识别）</h3>
         <p className="text-muted text-xs mb-3">为图片生成结构化描述，再进入文件语义索引。使用 OpenAI 兼容的多模态 Chat Completions 接口。</p>
         <div className="flex flex-col gap-1.5 mb-3">
           <span className="text-xs text-muted">协议</span>
@@ -389,22 +396,22 @@ export default function SettingsPage() {
                  className={`mb-3 text-xs ${visionMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{visionMsg.text}</Alert>
         )}
         <Button onClick={saveVisionConfig} disabled={saving !== null}>{saving === "vision" ? "测试中…" : "保存并测试"}</Button>
-      </div>
+      </section>
       </>)}
 
       {isNative && (
-        <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-          <h3 className="font-bold text-sm mb-1">🧠 AI 配置</h3>
+        <section className="border-b border-border py-5">
+          <h3 className="flex items-center gap-2 text-sm font-bold"><Bot className="size-4 text-muted" /> AI 配置</h3>
           <p className="text-muted text-xs">AI 模型与向量化在网页端管理，App 内不提供设置入口。</p>
-        </div>
+        </section>
       )}
 
       <ConnectAppCard />
       <DevicesCard />
       <PhotoSyncCard />
 
-      <div className="bg-panel border border-border rounded-xl p-4">
-        <h3 className="font-bold text-sm mb-1">🎛️ 偏好与规则</h3>
+      <section className="border-b border-border py-5">
+        <h3 className="flex items-center gap-2 text-sm font-bold"><SlidersHorizontal className="size-4 text-muted" /> 偏好与规则</h3>
         {!cfg?.preferences || Object.keys(cfg.preferences).length === 0 ? (
           <p className="text-muted text-xs">暂无偏好。在对话里说“以后用中文回复”即可添加。</p>
         ) : (
@@ -417,12 +424,13 @@ export default function SettingsPage() {
             </tbody>
           </table>
         )}
-      </div>
+      </section>
 
-      <div className="bg-panel border border-border rounded-xl p-4">
-        <h3 className="font-bold text-sm mb-1">🔒 会话</h3>
-        <button className="text-danger text-sm cursor-pointer" onClick={logout}>退出登录</button>
+      <section className="py-5">
+        <h3 className="flex items-center gap-2 text-sm font-bold"><LogOut className="size-4 text-muted" /> 会话</h3>
+        <button className="mt-2 inline-flex min-h-9 items-center gap-2 border border-danger/30 px-3 text-sm text-danger transition-colors hover:bg-danger-soft" onClick={logout}><LogOut className="size-3.5" /> 退出登录</button>
         <p className="text-muted text-[10px] mt-1">退出后需重新输入密码；App 内退出会同时清除本地设备令牌（相册同步停止，需重新登录）。</p>
+      </section>
       </div>
     </section>
   );

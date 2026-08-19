@@ -7,6 +7,8 @@ import { fmtTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Alert } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Camera, Clock3, RefreshCw, Upload, Wifi } from "lucide-react";
 
 const INTERVALS = [1, 6, 12, 24];
 
@@ -57,7 +59,7 @@ export default function PhotoSyncCard() {
     setMsg(null);
     try {
       setSt(await PhotoSync.configure(patch));
-      setMsg("✅ 已保存");
+      setMsg("已保存");
     } catch (e) {
       setMsg(String(e));
     } finally {
@@ -71,7 +73,7 @@ export default function PhotoSyncCard() {
     try {
       await PhotoSync.requestPermissions();
       const r = await PhotoSync.syncNow();
-      setMsg(r.started ? "🔄 后台同步已启动，完成后通知" : "未启动");
+      setMsg(r.started ? "后台同步已启动，完成后通知" : "未启动");
       load();
     } catch (e) {
       setMsg(String(e));
@@ -85,15 +87,16 @@ export default function PhotoSyncCard() {
   const fmt = (ts: number | null) => (ts ? fmtTime(ts) : "从未");
 
   return (
-    <div className="bg-panel border border-border rounded-xl p-4 mb-4">
-      <h3 className="font-bold text-sm mb-1">📸 相册自动同步</h3>
+    <section className="border-b border-border py-5">
+      <h3 className="flex items-center gap-2 text-sm font-bold"><Camera className="size-4 text-muted" /> 相册自动同步</h3>
       <p className="text-muted text-xs mb-3">新照片后台自动上传到网盘（App 关闭也运行）。</p>
 
       {progress?.running && (
-        <div className="bg-card border border-border rounded-lg p-2.5 mb-3">
+        <div className="mb-3 rounded-md border border-border bg-card/60 p-2.5">
           <div className="flex justify-between text-xs text-muted mb-1.5">
-            <span className="font-medium">
-              {progress.phase === "scanning" ? "🔍 扫描相册中…" : `⬆️ 正在上传 ${progress.uploaded}/${progress.total || "?"}`}
+            <span className="flex items-center gap-1.5 font-medium">
+              {progress.phase === "scanning" ? <RefreshCw className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+              {progress.phase === "scanning" ? "扫描相册中…" : `正在上传 ${progress.uploaded}/${progress.total || "?"}`}
             </span>
             {progress.currentFile && <span className="truncate max-w-[55%]">{progress.currentFile}</span>}
           </div>
@@ -106,7 +109,7 @@ export default function PhotoSyncCard() {
         </div>
       )}
 
-      <label className="flex items-center gap-2 text-sm mb-2 cursor-pointer">
+      <label className="mb-2 flex cursor-pointer items-center gap-2 text-sm">
         <Switch checked={st?.enabled ?? false} disabled={busy}
                 onCheckedChange={(v) => apply({ enabled: v })} />
         启用自动同步
@@ -114,20 +117,19 @@ export default function PhotoSyncCard() {
 
       {st?.enabled && (
         <>
-          <label className="flex items-center gap-2 text-sm mb-2 cursor-pointer">
+          <label className="mb-2 flex cursor-pointer items-center gap-2 text-sm">
             <Switch checked={st.wifiOnly} disabled={busy}
                     onCheckedChange={(v) => apply({ wifiOnly: v })} />
-            仅 Wi-Fi 时同步
+            <span className="flex items-center gap-1.5"><Wifi className="size-3.5 text-muted" /> 仅 Wi-Fi 时同步</span>
           </label>
-          <label className="flex items-center gap-2 text-sm mb-2">
-            <span className="text-muted text-xs w-16">频率</span>
-            <select value={st.intervalHours} disabled={busy}
-                    onChange={(e) => apply({ intervalHours: Number(e.target.value) })}
-                    className="px-2 py-1.5 border border-border rounded-lg text-sm bg-panel">
-              {INTERVALS.map((h) => (
-                <option key={h} value={h}>每 {h} 小时</option>
-              ))}
-            </select>
+          <label className="mb-2 flex items-center gap-2 text-sm">
+            <span className="flex w-16 items-center gap-1.5 text-xs text-muted"><Clock3 className="size-3.5" /> 频率</span>
+            <Select value={String(st.intervalHours)} disabled={busy} onValueChange={(value) => apply({ intervalHours: Number(value) })}>
+              <SelectTrigger size="sm" className="w-32"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {INTERVALS.map((h) => <SelectItem key={h} value={String(h)}>每 {h} 小时</SelectItem>)}
+              </SelectContent>
+            </Select>
           </label>
         </>
       )}
@@ -145,10 +147,10 @@ export default function PhotoSyncCard() {
       </div>
       {msg && (
         <Alert
-          variant={msg.startsWith("✅") || msg.startsWith("🔄") || msg === "未启动" ? "default" : "destructive"}
-          className={`mt-2 text-xs ${msg.startsWith("✅") || msg.startsWith("🔄") || msg === "未启动" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}
+          variant={msg === "已保存" || msg === "后台同步已启动，完成后通知" || msg === "未启动" ? "default" : "destructive"}
+          className={`mt-2 text-xs ${msg === "已保存" || msg === "后台同步已启动，完成后通知" || msg === "未启动" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}
         >{msg}</Alert>
       )}
-    </div>
+    </section>
   );
 }

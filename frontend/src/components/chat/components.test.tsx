@@ -62,7 +62,7 @@ describe("PlanCard 计划卡片", () => {
       { text: "汇报", status: "pending" },
     ];
     render(<PlanCard plan={plan} />);
-    expect(screen.getByText("📋 执行计划（1/3）")).toBeInTheDocument();
+    expect(screen.getByText(/执行计划（1\/3）/)).toBeInTheDocument();
     expect(screen.getByText("扫描文件")).toBeInTheDocument();
   });
 });
