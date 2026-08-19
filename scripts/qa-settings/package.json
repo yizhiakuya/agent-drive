@@ -1,8 +1,0 @@
-{
-  "name": "agent-drive-settings-qa",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "playwright": "1.57.0"
-  }
-}

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.DeviceMapper">
+    <select id="selectActive" resultType="map">
+        SELECT external_device_id AS device_id,
+               COALESCE(name, '') AS name,
+               COALESCE(model, '') AS model,
+               COALESCE(platform, '') AS platform,
+               COALESCE(app_version, '') AS app_version,
+               EXTRACT(EPOCH FROM created_at) AS first_seen,
+               EXTRACT(EPOCH FROM last_seen_at) AS last_seen,
+               sync_state::text AS sync_json
+        FROM devices
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND external_device_id IS NOT NULL
+          AND revoked_at IS NULL
+        ORDER BY last_seen_at DESC
+    </select>
+
+    <select id="upsertMetadata" resultType="map">
+        INSERT INTO devices(user_id, external_device_id, device_token_hash, name, platform, model, app_version, sync_state)
+        VALUES (
+            CAST(#{userId, jdbcType=VARCHAR} AS uuid),
+            #{deviceId, jdbcType=VARCHAR},
+            NULL,
+            COALESCE(NULLIF(#{name, jdbcType=VARCHAR}, ''), 'Android device'),
+            COALESCE(NULLIF(#{platform, jdbcType=VARCHAR}, ''), 'android'),
+            COALESCE(#{model, jdbcType=VARCHAR}, ''),
+            COALESCE(#{appVersion, jdbcType=VARCHAR}, ''),
+            CAST(#{syncState, jdbcType=LONGVARCHAR} AS jsonb)
+        )
+        ON CONFLICT (user_id, external_device_id) WHERE external_device_id IS NOT NULL
+        DO UPDATE SET
+            name = COALESCE(NULLIF(EXCLUDED.name, ''), devices.name),
+            platform = COALESCE(NULLIF(EXCLUDED.platform, ''), devices.platform),
+            model = COALESCE(NULLIF(EXCLUDED.model, ''), devices.model),
+            app_version = COALESCE(NULLIF(EXCLUDED.app_version, ''), devices.app_version),
+            sync_state = CASE
+                WHEN EXCLUDED.sync_state = '{}'::jsonb THEN devices.sync_state
+                ELSE devices.sync_state || EXCLUDED.sync_state
+            END,
+            last_seen_at = now(),
+            revoked_at = NULL
+        RETURNING external_device_id AS device_id,
+                  COALESCE(name, '') AS name,
+                  COALESCE(model, '') AS model,
+                  COALESCE(platform, '') AS platform,
+                  COALESCE(app_version, '') AS app_version,
+                  EXTRACT(EPOCH FROM created_at) AS first_seen,
+                  EXTRACT(EPOCH FROM last_seen_at) AS last_seen,
+                  sync_state::text AS sync_json
+    </select>
+
+    <update id="revoke">
+        UPDATE devices
+        SET revoked_at = now()
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND external_device_id = #{deviceId, jdbcType=VARCHAR}
+          AND revoked_at IS NULL
+    </update>
+</mapper>

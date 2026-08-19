@@ -1,0 +1,18 @@
+[Unit]
+Description=Agent Drive Java PostgreSQL and owner data backup
+After=network-online.target agent-drive-java.service agent-drive-java-worker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/agent-drive-java
+ExecStart=/root/projects/agent-drive/scripts/backup-java.sh
+EnvironmentFile=/etc/agent-drive-java/java.env
+Environment=AGENT_DRIVE_BACKUP_DIR=/opt/agent-drive-java/backups
+Environment=AGENT_DRIVE_POSTGRES_CONTAINER=agent-drive-java-postgres
+Environment=AGENT_DRIVE_DATABASE_NAME=agent_drive
+UMask=077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+TimeoutStartSec=30min

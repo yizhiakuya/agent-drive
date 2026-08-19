@@ -53,6 +53,7 @@ export default function Home() {
   const setConfigured = useAppStore((s) => s.setConfigured);
   const setModelName = useAppStore((s) => s.setModelName);
   const bumpSessions = useAppStore((s) => s.bumpSessions);
+  const frontendActions = useAppStore((s) => s.frontendActions);
 
   const boot = useCallback(async () => {
     try {
@@ -101,11 +102,19 @@ export default function Home() {
           } catch { /* 忽略 */ }
         }
       } catch (e) {
-        if (e instanceof ApiError && e.status === 401) {
+        // Auth errors can cross a separately bundled client boundary, so inspect the status structurally too.
+        const statusCode = e instanceof ApiError
+          ? e.status
+          : typeof e === "object" && e !== null && "status" in e
+            && typeof (e as { status?: unknown }).status === "number"
+            ? (e as { status: number }).status
+            : null;
+        if (statusCode === 401 || statusCode === 403) {
           setAuthMode(native ? "rescan" : "login");
           return;
         }
-        setConfigured(false); // 网络/服务错误：进入 onboarding 便于重试
+        // A failed authenticated status check must never masquerade as missing AI configuration.
+        setAuthMode(native ? "rescan" : "login");
       }
     } catch (error) {
       if (Capacitor.isNativePlatform()) {
@@ -134,6 +143,12 @@ export default function Home() {
     window.addEventListener(EV.unauthorized, onUnauthorized);
     return () => window.removeEventListener(EV.unauthorized, onUnauthorized);
   }, [setAuthMode]);
+
+  useEffect(() => {
+    const next = frontendActions[0];
+    if (!next) return;
+    if (next.targetTab === "files") setTab("files");
+  }, [frontendActions, setTab]);
 
   useEffect(() => {
     // 原生 App：回前台/窗口聚焦时心跳，刷新服务器设备列表活跃时间

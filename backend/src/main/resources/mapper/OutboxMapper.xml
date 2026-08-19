@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.OutboxMapper">
+    <insert id="insert">
+        INSERT INTO outbox_events(user_id, event_type, aggregate_type, aggregate_id, idempotency_key, payload)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{eventType, jdbcType=VARCHAR},
+                #{aggregateType, jdbcType=VARCHAR}, #{aggregateId, jdbcType=VARCHAR},
+                #{idempotencyKey, jdbcType=VARCHAR}, CAST(#{payload, jdbcType=LONGVARCHAR} AS jsonb))
+        ON CONFLICT (idempotency_key) DO NOTHING
+    </insert>
+
+    <select id="pending" resultType="map">
+        SELECT id, user_id::text AS user_id, event_type, aggregate_type, aggregate_id, idempotency_key,
+               payload::text AS payload_json,
+               EXTRACT(EPOCH FROM created_at) AS created_at,
+               EXTRACT(EPOCH FROM published_at) AS published_at
+        FROM outbox_events
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND published_at IS NULL
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pendingAll" resultType="map">
+        SELECT id, user_id::text AS user_id, event_type, aggregate_type, aggregate_id, idempotency_key,
+               payload::text AS payload_json,
+               EXTRACT(EPOCH FROM created_at) AS created_at,
+               EXTRACT(EPOCH FROM published_at) AS published_at
+        FROM outbox_events
+        WHERE published_at IS NULL
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markPublished">
+        UPDATE outbox_events
+        SET published_at = COALESCE(published_at, now())
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND id = #{eventId}
+          AND published_at IS NULL
+    </update>
+</mapper>

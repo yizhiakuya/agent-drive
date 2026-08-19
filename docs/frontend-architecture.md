@@ -1,125 +1,85 @@
 # 前端架构
 
-> ⚠️ **本文档正文是 2026-08-14 迁移当天做的架构分析存档**（下文目录树/行数反映迁移前 Vite 版与迁移初期状态，已不反映现状）。
-> 最新结构与实现请以 [frontend/README.md](../frontend/README.md) 与代码为准。以下"现状速览"为当前（2026-08-14 晚）真实结构摘要。
+> 现行说明（2026-08-19）。前端是 Next.js 16 + React 19 + TypeScript 5 的静态导出应用；生产由 Java WebFlux 托管 `frontend/out`，Android 通过 Capacitor 7 复用同一套 web UI。
 
-## 现状速览（当前真实结构）
+## 1. 目录与分层
 
-```
-src/
-├── app/                # layout.tsx（主题/安全区/manifest）+ page.tsx（认证门控 + 三 tab + 全局下拉刷新）
+```text
+frontend/src/
+├── app/                 # layout、主题、viewport、认证门控和主页面
 ├── components/
-│   ├── chat/           # ChatPanel（SSE 流式）+ ToolStep/ContextBar/PlanCard
-│   ├── files/          # FilePage + FilePanel（文件/回收站/预览/上传）
-│   ├── sessions/       # SessionList（多会话）
-│   ├── settings/       # SettingsPage + ConnectAppCard(配对二维码) + DevicesCard + PhotoSyncCard(仅 App)
-│   ├── onboarding/     # AI 配置向导（仅 web 渲染）
-│   ├── auth/           # LoginCard(登录/设密) / RescanCard(重扫码) / ServerNotReadyCard
-│   └── PullToRefresh   # 全局下拉刷新（触屏手势）
+│   ├── auth/            # 登录/设密、重扫码、服务未就绪
+│   ├── chat/            # ChatPanel、工具轨迹、流事件/状态/帧模块
+│   ├── files/           # FilePage、FilePanel、FilePreview、FileDetails
+│   ├── sessions/        # 会话列表和摘要刷新
+│   ├── settings/        # provider、embedding、设备和同步设置
+│   ├── tasks/           # 任务列表、详情和状态流
+│   ├── onboarding/      # web-only AI 配置引导
+│   ├── ui/              # shadcn/ui 基础控件
+│   └── PullToRefresh/   # Web/App 共用的下拉刷新
 └── lib/
-    ├── api/            # client(基座+鉴权头+401 拦截) chat files config sessions devices auth
-    ├── native/         # Capacitor 插件桥：server-config / photo-sync
-    └── store(zustand)  events(事件总线)  format
+    ├── api/             # client、auth、chat、files、config、tasks 等 API 封装
+    ├── native/          # ServerConfig、PhotoSync Capacitor 桥
+    ├── store.ts         # zustand 全局状态和前端动作队列
+    ├── events.ts        # 类型化窗口事件总线
+    └── format.ts        # 时间、大小、工具参数等展示格式化
 ```
 
-**演进要点**（相对迁移当天）：
-- 2026-08-16：引入 shadcn/ui（radix 底座）——`components/ui/` 组件库 + `docs/frontend-design.md` 设计规范（控件清单/排版/反馈/反模式）；协议枚举单一来源 `lib/llm-options.ts`；模型选择 Combobox 单控件
-- 认证体系：登录/设密页、扫码配对、401 全局拦截、原生端"重扫码"模式
-- 原生桥：ServerConfig / PhotoSync 插件（服务器地址、设备令牌、同步进度事件）
-- 事件总线扩展：`agent-drive:refresh`（下拉刷新全局联动）+ 既有 files-changed/toast
-- AI 配置界面 web-only；App 内仅显示提示
-- Capacitor 7（frontend/android）打包 web 资源，插件注册须在 super.onCreate 之前
+组件只通过 `lib/api` 访问后端，不在业务组件中直接 `fetch`。通用控件必须复用 `components/ui`；主题 token 的唯一来源是 `app/globals.css` 的 `:root`。
 
----
+## 2. 页面与状态
 
-## 历史分析存档（2026-08-14 迁移时）
+`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载，避免切换页面时丢失 SSE 流和工具步骤。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
 
-> 技术栈（当时）：Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + zustand + vitest
-> 部署：`output: 'export'` 静态导出 out/，由 backend（FastAPI）单服务托管
-> 演进：2026-08-14 从 React18+Vite 迁移，架构分析清单问题 ①-④ 已随迁移清零
+跨组件刷新使用 `lib/events.ts` 中的类型化事件：
 
-## 一、目录结构与分层
+- `agent-drive:refresh`：全局下拉刷新；
+- `agent-drive:files-changed`：文件 mutation 或索引入队后刷新文件列表；
+- `agent-drive:tasks-changed`：任务状态变化；
+- `agent-drive:toast`：跨页面反馈；
+- `agent-drive:unauthorized`：当前身份失效，回到登录/重扫码流程。
 
-```
-src/
-├── main.jsx                    # React 入口（挂载 App）
-├── App.jsx (128)               # 根组件：全局状态 + 三视图 tab
-├── styles.css (~700)           # 单文件全局样式：CSS 变量设计系统
-├── api/                        # API 层（薄封装，逐模块）
-│   ├── client.js (45)          # fetch 基座 api() + 【半废弃】重复导出
-│   ├── chat.js (48)            # SSE 流解析（chatStream）
-│   ├── config.js (6)           # 状态/LLM 配置
-│   ├── files.js (11)           # 列表/上传
-│   └── sessions.js (7)         # 会话 CRUD
-└── components/
-    ├── chat/ChatPanel.jsx (452)      # 对话容器 + 导出展示组件
-    ├── files/FilePage.jsx (189)      # 全宽文件管理页
-    ├── files/FilePanel.jsx (162)     # 对话页右侧面板
-    ├── onboarding/Onboarding.jsx (120)
-    ├── sessions/SessionList.jsx (43)
-    └── settings/SettingsPage.jsx (105)
-```
+全局 API client 将 API base、credential generation、cache generation 和 path 纳入 GET cache key。凭据切换、写请求开始/结束、HTTP 错误、网络异常和 Abort 都会使对应缓存失效；旧身份的迟到响应不能写入新状态。
 
-**分层纪律**：components → api → HTTP。组件原则上不直接 fetch（例外见 §三-1）。
+## 3. Chat 流
 
-## 二、核心模式
+`useChatStream` 负责编排请求生命周期，纯逻辑按职责拆分：
 
-### 2.1 状态管理（无库，3 种模式）
-| 模式 | 载体 | 例子 |
-|------|------|------|
-| props 下发 | App → 子组件 | status/sessions/sessionId/tab |
-| 组件本地 state | useState 函数式更新 | ChatPanel 的 messages/busy/pending |
-| 事件总线 | window CustomEvent | `agent-drive:files-changed` / `agent-drive:toast` |
+- `chat-stream-events.ts`：SSE 事件形状和事件映射；
+- `chat-stream-state.ts`：消息、reasoning、工具轮次和终态状态转换；
+- `chat-stream-frame.ts`：80ms 批量刷新、工具轮次边界和最终冲刷。
 
-事件总线是亮点：ChatPanel 广播"文件变了"→ FilePanel/FilePage 各自监听刷新，**跨分支组件零 props 穿透**。
+解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
 
-### 2.2 数据流（对话主链路）
-```
-用户输入 → chatStream(SSE) → onEvent 回调
-  ├─ "text"        → setMessages 函数式更新（流式追加）
-  ├─ "tool_start"  → 插入 tool_step 节点（🔄 执行中）
-  ├─ "tool_trace"  → 更新节点状态(✅/❌) + 广播 files-changed
-  └─ "done"        → pending 确认/plan/contextUsage/session_id
-AbortController: 切会话中止在途流（防串消息）+ 停止按钮复用
+## 4. 文件页请求生命周期
+
+`FilePage` 对列表、选中文件详情、完整文本和索引刷新分别维护请求代次，并在响应提交前校验当前路径/选中文件。目录切换、文件切换和卸载都会使旧请求失效；迟到响应不能覆盖新状态。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
+
+文件页支持：
+
+- name 搜索和 semantic 搜索；
+- 文本、Markdown、图片、PDF 预览以及受限完整文本读取；
+- revision、全文和向量状态查看；
+- embedding/vision 异步索引、上传、移动、复制、回收站和恢复。
+
+移动端预览与回收站是全屏覆盖层；小于 640px 时文件工具栏保持 3×2 触控网格，极窄屏隐藏品牌文字但保留无障碍名称。当前主视图是 tab state，不提供可分享的 URL 路由；上传界面显示状态但没有细粒度进度回调。
+
+## 5. 认证与原生桥
+
+- Web/PWA 使用 HttpOnly Cookie；401 通过 `agent-drive:unauthorized` 返回认证入口。
+- Android 首启扫码兑换设备令牌，原生侧写入独立 EncryptedSharedPreferences；没有令牌时进入重扫码页，密码登录是逃生口。
+- AI 配置只在 web 设置页提供，App 通过原生插件管理服务器地址、设备令牌和相册同步。
+- `MainActivity` 必须在 `super.onCreate()` 前注册 Capacitor 插件；插件生命周期、权限回调和 observer 约束见 [`android.md`](android.md) 与 [`AGENTS.md`](../AGENTS.md)。
+
+## 6. 开发与验证
+
+```bash
+cd frontend
+npm run dev -- -p 3333
+npm run lint
+npm test
+npm run build
+npm run verify:build
 ```
 
-### 2.3 路由
-三视图 tab（chat/files/settings），**state 切换而非 URL 路由**——无 react-router。
-
-### 2.4 样式
-单文件 styles.css：`:root` 设计变量（色板/圆角/阴影/动效）+ BEM 式前缀类名（fp-/pv-/set-/sl-），灰白 light 主题一致。
-
-### 2.5 测试策略
-- vitest + testing-library：SSE 解析单测（跨 chunk 缓冲/AbortError）+ 小组件导出测试
-- **务实模式**：把纯展示组件（ToolStep/ContextBar/PlanCard/fmtToolArgs）从 ChatPanel 导出独立测，避免 mock 大组件
-
-## 三、问题清单（迁移后状态：2026-08-14 复核）
-
-> ✅ = 已随 Next.js 迁移修复；⏳ = 仍未处理。
-
-1. ✅ **client.js 半废弃层**：已重写为 client.ts 单一真相源 + apiPath()，死导出/死路径清零。
-2. ✅ **组件绕层 fetch**：API 层已补全（files.info/raw/mkdir/rename/move/copy/delete/trash、config.getConfig/saveEmbeddings），组件全部走封装。
-3. ✅ **ChatPanel 452 行**：已拆分 ChatPanel + ToolStep/ContextBar/PlanCard + lib/format.ts（现各 <280 行）。
-4. ✅ **事件总线魔法字符串**：lib/events.ts 类型化常量（EV.filesChanged/EV.toast + emit* 函数）。
-5. ⏳ **无 URL 路由**：仍是 tab state（个人项目可接受；若需分享链接再上 hash 路由）。
-6. ⏳ **上传无进度**：仍 spinner（share target 场景浏览器自带进度；后续可 XHR）。
-7. ✅ 小项：Markdown 用全局 .markdown-body 类；Tailwind 取代单文件样式；SSE 错误已有友好文案。
-
-## 四、优点（保持）
-
-- 薄 API 层 + 组件分层清晰，新人可 10 分钟上手
-- SSE 封装干净（buffer 跨 chunk 正确处理）
-- 事件总线解耦聊天↔文件面板联动
-- 函数式 setState 全链路防闭包过期
-- 生产/开发双形态（vite dev / dist 由 backend SPA 托管）
-
-## 五、演进建议（按投入排序）
-
-1. **清 client.js**：删死导出（getStatus 死路径等），api() 只留基座；半小时
-2. **API 层补全**：files.js 加 getFileInfo/getRawUrl、config.js 加 getConfig/saveEmbeddings，
-   组件不再绕层；1 小时
-3. **ChatPanel 拆分**：format.js + ToolStep.jsx/ContextBar.jsx/PlanCard.jsx 独立文件；1 小时
-4. **事件常量**：events.js 导出 BUS 常量；半小时
-5. **URL 路由**：react-router 或 URL hash 同步 tab（先 hash，零依赖）；半天
-6. **上传进度**：XHR uploadFile(onProgress)；1 小时
-7. 样式拆分/状态库（zustand）——**暂不需要**，复杂度未到
+前端行为变化需要同步测试和 Service Worker cache 版本。生产静态资源通过顶层 `scripts/deploy.ps1` 原子发布，不使用 PowerShell 通配符上传 `out`，以免遗漏 `.well-known/assetlinks.json`。

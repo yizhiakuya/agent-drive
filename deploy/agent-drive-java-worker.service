@@ -1,0 +1,28 @@
+[Unit]
+Description=Agent Drive Java durable task worker
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-drive-java
+ExecStart=/usr/bin/java -jar /opt/agent-drive-java/agent-drive-backend.jar --spring.profiles.active=db,java-chat --app.mode=worker
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+SuccessExitStatus=143
+EnvironmentFile=-/etc/agent-drive-java/java.env
+Environment=AGENT_DRIVE_MODE=worker
+Environment=AGENT_DRIVE_DATA_DIR=/opt/agent-drive-java/data
+EnvironmentFile=/etc/agent-drive/proxy.env
+UnsetEnvironment=ALL_PROXY all_proxy
+UMask=077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

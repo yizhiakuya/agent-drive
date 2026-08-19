@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listFiles, uploadFile, getFileInfo, FileInfo, fileDownloadUrl } from "@/lib/api/files";
 import FilePreview from "./FilePreview";
+import { indexStatusLabel } from "./FileDetails";
 import { fmtSize } from "@/lib/format";
 import { EV, emitToast, emitTasksChanged } from "@/lib/events";
 import { Button } from "@/components/ui/button";
@@ -120,7 +121,7 @@ export default function FilePanel() {
                 </span>
               </div>
               {selected.info?.indexed && (
-                <div className="px-2.5 py-0.5"><Badge variant="outline">已索引({selected.info.indexed.method}, {selected.info.indexed.chars}字)</Badge></div>
+                <div className="px-2.5 py-0.5"><Badge variant={selected.info.indexed.vectorized ? "default" : "outline"}>{indexStatusLabel(selected.info.indexed)}</Badge></div>
               )}
               <div className="flex-1 overflow-auto">
                 {selected.info && (

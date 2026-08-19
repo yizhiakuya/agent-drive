@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.TaskMapper">
+    <sql id="task_columns">
+        id::text AS id,
+        kind AS type,
+        lane,
+        status,
+        payload::text AS payload_json,
+        result::text AS result_json,
+        error,
+        priority,
+        resource_key,
+        parent_id::text AS parent_id,
+        origin,
+        attempt AS attempts,
+        max_attempts,
+        lease_owner,
+        cancel_requested,
+        progress_current,
+        progress_total,
+        progress_message,
+        EXTRACT(EPOCH FROM available_at) AS run_after,
+        EXTRACT(EPOCH FROM lease_until) AS lease_until,
+        EXTRACT(EPOCH FROM created_at) AS created_at,
+        EXTRACT(EPOCH FROM updated_at) AS updated_at,
+        EXTRACT(EPOCH FROM started_at) AS started_at,
+        EXTRACT(EPOCH FROM finished_at) AS finished_at
+    </sql>
+
+    <select id="selectTasks" resultType="map">
+        SELECT <include refid="task_columns"/>
+        FROM tasks
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach collection="statuses" item="status" open="(" separator="," close=")">
+                #{status}
+            </foreach>
+        </if>
+        <if test="type != null and type != ''">
+            AND kind = #{type, jdbcType=VARCHAR}
+        </if>
+        <if test="!includeChildren">
+            AND parent_id IS NULL
+        </if>
+        ORDER BY priority DESC, created_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="selectStatusCounts" resultType="map">
+        SELECT status, COUNT(*) AS count
+        FROM tasks
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND parent_id IS NULL
+        GROUP BY status
+        ORDER BY status
+    </select>
+
+    <select id="selectOnlineWorkerCount" resultType="int">
+        SELECT COUNT(*)::int
+        FROM task_workers
+        WHERE heartbeat_at &gt; now() - interval '10 seconds'
+    </select>
+
+    <select id="selectTask" resultType="map">
+        SELECT <include refid="task_columns"/>
+        FROM tasks
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <select id="selectChildSummary" resultType="map">
+        SELECT <include refid="task_columns"/>
+        FROM tasks
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND parent_id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY created_at ASC
+    </select>
+
+    <select id="insertTask" resultType="map">
+        INSERT INTO tasks(user_id, parent_id, kind, lane, status, dedupe_key, payload, origin, available_at)
+        VALUES (
+            CAST(#{userId, jdbcType=VARCHAR} AS uuid),
+            CAST(#{parentId, jdbcType=VARCHAR} AS uuid),
+            #{type, jdbcType=VARCHAR},
+            #{lane, jdbcType=VARCHAR},
+            'queued',
+            #{dedupeKey, jdbcType=VARCHAR},
+            CAST(#{payload, jdbcType=LONGVARCHAR} AS jsonb),
+            COALESCE(#{origin, jdbcType=VARCHAR}, 'api'),
+            now()
+        )
+        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL AND status IN ('queued', 'running', 'retry_wait', 'cancelling')
+        DO NOTHING
+        RETURNING <include refid="task_columns"/>
+    </select>
+
+    <select id="selectActiveByDedupe" resultType="map">
+        SELECT <include refid="task_columns"/>
+        FROM tasks
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND dedupe_key = #{dedupeKey, jdbcType=VARCHAR}
+          AND status IN ('queued', 'running', 'retry_wait', 'cancelling')
+        ORDER BY created_at DESC
+        LIMIT 1
+    </select>
+
+    <update id="cancelTask">
+        UPDATE tasks
+        SET status = CASE
+                WHEN status IN ('queued', 'retry_wait') THEN 'cancelled'
+                WHEN status IN ('running', 'cancelling') THEN 'cancelling'
+                ELSE status
+            END,
+            cancel_requested = CASE WHEN status IN ('queued', 'retry_wait', 'running', 'cancelling') THEN true ELSE cancel_requested END,
+            finished_at = CASE WHEN status IN ('queued', 'retry_wait') THEN now() ELSE finished_at END,
+            updated_at = now()
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <update id="retryTask">
+        UPDATE tasks
+        SET status = 'queued', attempt = 0, error = NULL, result = NULL,
+            cancel_requested = false, available_at = now(), lease_owner = NULL,
+            lease_until = NULL, heartbeat_at = NULL, started_at = NULL,
+            finished_at = NULL, progress_current = 0, progress_total = 0,
+            progress_message = '', updated_at = now()
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+          AND status IN ('failed', 'cancelled')
+    </update>
+
+    <insert id="insertEvent">
+        INSERT INTO task_events(task_id, event_type, payload)
+        VALUES (CAST(#{taskId, jdbcType=VARCHAR} AS uuid), #{type, jdbcType=VARCHAR},
+                CAST(#{payload, jdbcType=LONGVARCHAR} AS jsonb))
+    </insert>
+
+    <select id="latestEventId" resultType="long">
+        SELECT MAX(e.id)
+        FROM task_events e
+        JOIN tasks t ON t.id = e.task_id
+        WHERE t.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <select id="selectEvents" resultType="map">
+        SELECT e.id,
+               e.task_id::text AS job_id,
+               e.event_type AS type,
+               e.payload::text AS payload_json,
+               EXTRACT(EPOCH FROM e.created_at) AS created_at
+        FROM task_events e
+        JOIN tasks t ON t.id = e.task_id
+        WHERE t.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND e.id &gt; #{afterId}
+        ORDER BY e.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="pruneHistory">
+        WITH RECURSIVE candidates AS (
+            SELECT id
+            FROM tasks
+            WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND status IN ('cancelled', 'succeeded', 'failed')
+              AND COALESCE(finished_at, updated_at) &lt; to_timestamp(#{cutoffEpoch})
+              AND id NOT IN (
+                  SELECT id
+                  FROM tasks
+                  WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+                    AND status IN ('cancelled', 'succeeded', 'failed')
+                  ORDER BY COALESCE(finished_at, updated_at) DESC, id DESC
+                  LIMIT #{keepRecent}
+              )
+        ), protected_ids(id) AS (
+            SELECT DISTINCT child.parent_id
+            FROM tasks child
+            WHERE child.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND child.parent_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM candidates c WHERE c.id = child.id)
+            UNION
+            SELECT parent.parent_id
+            FROM tasks parent
+            JOIN protected_ids protected ON protected.id = parent.id
+            WHERE parent.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND parent.parent_id IS NOT NULL
+        ), deletable AS (
+            SELECT c.id
+            FROM candidates c
+            WHERE NOT EXISTS (SELECT 1 FROM protected_ids p WHERE p.id = c.id)
+        )
+        DELETE FROM tasks task
+        USING deletable
+        WHERE task.id = deletable.id
+          AND task.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+</mapper>

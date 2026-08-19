@@ -8,40 +8,44 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: agent_drive
+          POSTGRES_USER: agent_drive
+          POSTGRES_PASSWORD: agent_drive_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_drive -d agent_drive"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-java@v4
         with:
-          python-version: "3.10"
-          cache: pip
-          cache-dependency-path: pyproject.toml
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/pom.xml
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Java tests with PostgreSQL integration
+        env:
+          AGENT_DRIVE_DATABASE_URL: jdbc:postgresql://localhost:5432/agent_drive
+          AGENT_DRIVE_DATABASE_USERNAME: agent_drive
+          AGENT_DRIVE_DATABASE_PASSWORD: agent_drive_test
+          AGENT_DRIVE_JDBC_TEST_URL: jdbc:postgresql://localhost:5432/agent_drive
+          SPRING_FLYWAY_ENABLED: "true"
+        run: mvn -q test
 
-      - name: Lint (ruff)
-        run: ruff check app/
-
-      - name: Type check (mypy)
-        run: mypy app/
-
-      - name: Integration tests (pytest)
-        run: python -m pytest tests/integration -q
-
-      - name: "Unit tests (pytest: 9 files — auth/devices/upload-index/storage/ingest/tasks/config/retry/bugfixes)"
-        run: python -m pytest tests/unit -q
-
-      - name: Unit test suites (legacy scripts)
-        run: |
-          for t in test_agent test_critic test_reliability test_retry \
-                   test_compress test_write_tools test_memory test_bugfixes; do
-            echo "== $t =="
-            python tests/unit/$t.py || exit 1
-          done
+      - name: Java package
+        run: mvn -q -DskipTests package
 
   frontend:
     runs-on: ubuntu-latest

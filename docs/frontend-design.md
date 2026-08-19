@@ -37,7 +37,8 @@
 - 轻量信息：就地小字（字段旁/卡片底部）；跨页事件才走全局 ToastStack（事件总线 `EV.toast` 不变）。
 - 状态色语义：danger=失败/破坏性操作；success=成功；warn=警示；muted=次要文本。**禁止错位**（红底选中、蓝字错误等）。
 - 操作后必须有反馈：保存/获取/删除/恢复都要就地提示或 toast。
-- 对话思考等级放在输入区，使用 `ui/select`，默认 `auto`；模型 reasoning 单独显示在助手气泡内的原生 `<details>`，默认收叠，展开后使用现有 markdown 样式。
+- 会话列表每条记录同时显示完整会话 ID；ID 使用低对比度等宽小字，长值允许换行，不用截断值替代真实标识。
+- 对话思考等级放在输入区，使用 `ui/select`，默认 `auto`；Provider 返回的模型 reasoning 单独显示在助手气泡内的原生 `<details>`，默认收叠，展开后使用现有 markdown 样式；没有 reasoning 返回时不展示伪造内容。
 
 ## 5. 移动端（沿用 AGENTS.md 坑位 + 新增）
 
@@ -57,4 +58,4 @@
 
 - 只换表现层（className/组件），**不改任何逻辑**：SSE 解析/80ms 节流/事件总线/状态机/缓存键一律不动。
 - 行为等价：控件触发、文案、状态流转与改造前一致；视觉对齐本规范。
-- 每页改完 `npm run lint && npm test && npm run build` 全绿；完成后主代理跑浏览器 QA + vision 复查。
+- 每页改完 `npm run lint && npm test && npm run build` 全绿；部署脚本负责发布前的统一构建和健康检查。

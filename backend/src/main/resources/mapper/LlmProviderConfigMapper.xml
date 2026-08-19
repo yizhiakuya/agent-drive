@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.LlmProviderConfigMapper">
+    <select id="selectByUserId" resultType="map">
+        SELECT provider,
+               base_url,
+               model,
+               encrypted_api_key,
+               api_key_fingerprint
+        FROM llm_provider_configs
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <insert id="upsert">
+        INSERT INTO llm_provider_configs(
+            user_id, provider, base_url, model, encrypted_api_key, api_key_fingerprint
+        ) VALUES (
+            CAST(#{userId, jdbcType=VARCHAR} AS uuid),
+            #{provider, jdbcType=VARCHAR},
+            #{baseUrl, jdbcType=VARCHAR},
+            #{model, jdbcType=VARCHAR},
+            #{encryptedApiKey, jdbcType=VARBINARY},
+            #{apiKeyFingerprint, jdbcType=VARCHAR}
+        )
+        ON CONFLICT (user_id) DO UPDATE SET
+            provider = EXCLUDED.provider,
+            base_url = EXCLUDED.base_url,
+            model = EXCLUDED.model,
+            encrypted_api_key = EXCLUDED.encrypted_api_key,
+            api_key_fingerprint = EXCLUDED.api_key_fingerprint,
+            updated_at = now()
+    </insert>
+</mapper>

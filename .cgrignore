@@ -1,0 +1,19 @@
+# Generated static export copied into the Android shell.
+frontend/android/app/src/main/assets/public/
+# Reproducible build output; never index generated bundles as application code.
+frontend/.next/
+frontend/out/
+frontend/out.tar
+frontend/tsconfig.tsbuildinfo
+frontend/android/.gradle/
+frontend/android/build/
+frontend/android/app/build/
+frontend/android/capacitor-cordova-android-plugins/build/
+frontend/android/capacitor-cordova-android-plugins/
+frontend/android/app/src/main/res/xml/
+frontend/android/app/src/main/assets/capacitor.config.json
+frontend/android/app/src/main/assets/capacitor.plugins.json
+backend/target/
+*.log
+*.tar
+.cgr-*

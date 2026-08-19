@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getConfig, saveEmbeddings, configureLLM, listModels } from "@/lib/api/config";
+import { getConfig, getVisionConfig, saveEmbeddings, saveVision, configureLLM, listModels, listVisionModels } from "@/lib/api/config";
 import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
@@ -12,7 +12,6 @@ import { useAppStore } from "@/lib/store";
 import { EV, emitTasksChanged, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupButton } from "@/components/ui/input-group";
 import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, ComboboxEmpty } from "@/components/ui/combobox";
 import { Alert } from "@/components/ui/alert";
 import { RefreshCw } from "lucide-react";
@@ -22,12 +21,18 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [llmMsg, setLlmMsg] = useState<{ kind: string; text: string } | null>(null);
   const [embMsg, setEmbMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [visionCfg, setVisionCfg] = useState<Awaited<ReturnType<typeof getVisionConfig>> | null>(null);
+  const [visionMsg, setVisionMsg] = useState<{ kind: string; text: string } | null>(null);
   const [llmForm, setLlmForm] = useState({ type: "openai_compat", base_url: "", model: "", api_key: "" });
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
-  const [saving, setSaving] = useState<"llm" | "emb" | null>(null);
+  const [visionForm, setVisionForm] = useState({ provider: "openai_compat", base_url: "https://api.openai.com/v1", model: "", api_key: "" });
+  const [saving, setSaving] = useState<"llm" | "emb" | "vision" | null>(null);
   const [modelList, setModelList] = useState<string[] | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [visionModelList, setVisionModelList] = useState<string[] | null>(null);
+  const [visionModelsLoading, setVisionModelsLoading] = useState(false);
+  const [visionModelsOpen, setVisionModelsOpen] = useState(false);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
   const isNative = Capacitor.isNativePlatform();
 
@@ -71,10 +76,12 @@ export default function SettingsPage() {
 
   async function load() {
     try {
-      const d = await getConfig();
+      const [d, vision] = await Promise.all([getConfig(), getVisionConfig()]);
       setCfg(d);
+      setVisionCfg(vision);
       if (d.llm) setLlmForm((f) => ({ ...f, type: d.llm!.type, base_url: d.llm!.base_url, model: d.llm!.model }));
       if (d.embeddings) setEmbForm((f) => ({ ...f, provider: d.embeddings!.provider, base_url: d.embeddings!.base_url, model: d.embeddings!.model }));
+      if (vision.configured) setVisionForm((f) => ({ ...f, provider: vision.provider, base_url: vision.base_url, model: vision.model }));
     } catch (e) {
       setMsg({ kind: "error", text: String(e) });
     }
@@ -157,6 +164,60 @@ export default function SettingsPage() {
     finally { setSaving(null); }
   }
 
+  /**
+   * 保存视觉模型配置并执行 1x1 图片连接测试。
+   */
+  async function saveVisionConfig() {
+    setVisionMsg(null);
+    if (!visionForm.base_url || !/^https?:\/\//i.test(visionForm.base_url)) {
+      setVisionMsg({ kind: "error", text: "接口地址需以 http(s):// 开头" });
+      return;
+    }
+    if (!visionForm.model.trim()) {
+      setVisionMsg({ kind: "error", text: "请填写视觉模型名" });
+      return;
+    }
+    setSaving("vision");
+    try {
+      const result = await saveVision(visionForm) as { ok?: boolean; test?: { error?: string }; message?: string };
+      setVisionMsg(result.ok
+        ? { kind: "ok", text: "视觉模型已保存并测试通过" }
+        : { kind: "error", text: result.message || result.test?.error || "视觉模型连接测试失败" });
+      await load();
+    } catch (error) {
+      setVisionMsg({ kind: "error", text: String(error) });
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  /**
+   * 获取视觉 provider 的模型目录，并把结果放进图片识别模型选择器。
+   */
+  async function fetchVisionModels() {
+    setVisionMsg(null);
+    setVisionModelsLoading(true);
+    try {
+      const result = await listVisionModels({
+        provider: visionForm.provider,
+        base_url: visionForm.base_url,
+        api_key: visionForm.api_key,
+      });
+      if (result.ok && result.models && result.models.length > 0) {
+        setVisionModelList(result.models);
+        setVisionModelsOpen(true);
+        setVisionMsg({ kind: "ok", text: `已获取 ${result.models.length} 个可用视觉模型` });
+      } else {
+        setVisionModelList(null);
+        setVisionMsg({ kind: "error", text: result.error || "获取视觉模型列表失败" });
+      }
+    } catch (error) {
+      setVisionMsg({ kind: "error", text: String(error) });
+    } finally {
+      setVisionModelsLoading(false);
+    }
+  }
+
   const field = (label: string, value: string, onChange: (v: string) => void, placeholder: string, type = "text", step?: string, hint?: string) => (
     <label className="flex flex-col gap-1.5 mb-3">
       <span className="text-xs text-muted">{label}</span>
@@ -226,23 +287,18 @@ export default function SettingsPage() {
             </Combobox>
           </label>
           <div className="flex items-center gap-2 mt-1.5">
-            <InputGroup className="w-auto">
-              <InputGroupButton
-                variant="ghost"
-                size="xs"
-                aria-label="获取可用模型"
-                title="获取可用模型"
-                onClick={fetchModels}
-                disabled={modelsLoading || saving !== null}
-              >
-                <RefreshCw className={modelsLoading ? "animate-spin" : undefined} />
-              </InputGroupButton>
-              <InputGroupAddon align="inline-end">
-                <span className="text-xs text-muted">
-                  {modelsLoading ? "获取中…" : "获取可用模型"}
-                </span>
-              </InputGroupAddon>
-            </InputGroup>
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 whitespace-nowrap"
+              aria-label="获取模型"
+              title="从当前接口获取模型列表"
+              onClick={fetchModels}
+              disabled={modelsLoading || saving !== null}
+            >
+              <RefreshCw className={modelsLoading ? "animate-spin" : undefined} />
+              {modelsLoading ? "获取中…" : "获取模型"}
+            </Button>
             {llmMsg?.kind === "ok" && llmMsg.text.startsWith("已获取") && (
               <span className="text-[10px] text-muted">{llmMsg.text}</span>
             )}
@@ -271,6 +327,68 @@ export default function SettingsPage() {
                  className={`mb-3 text-xs ${embMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{embMsg.text}</Alert>
         )}
         <Button onClick={saveEmb} disabled={saving !== null}>{saving === "emb" ? "测试中…" : "保存并测试"}</Button>
+      </div>
+
+      <div className="bg-panel border border-border rounded-xl p-4 mb-4">
+        <h3 className="font-bold text-sm mb-1">🖼️ 视觉模型（图片识别）</h3>
+        <p className="text-muted text-xs mb-3">为图片生成结构化描述，再进入文件语义索引。使用 OpenAI 兼容的多模态 Chat Completions 接口。</p>
+        <div className="flex flex-col gap-1.5 mb-3">
+          <span className="text-xs text-muted">协议</span>
+          <p className="text-sm">OpenAI 兼容（当前唯一支持）</p>
+        </div>
+        {field("接口地址", visionForm.base_url, (v) => {
+          setVisionForm((f) => ({ ...f, base_url: v }));
+          setVisionModelList(null);
+          setVisionModelsOpen(false);
+        }, "https://api.openai.com/v1")}
+        <div className="flex flex-col gap-1.5 mb-3">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs text-muted">视觉模型</span>
+            <Combobox
+              onValueChange={(v) => setVisionForm((f) => ({ ...f, model: v == null ? "" : String(v) }))}
+              onInputValueChange={(v) => { if (v !== "") setVisionForm((f) => ({ ...f, model: v })); }}
+              open={visionModelsOpen}
+              onOpenChange={setVisionModelsOpen}
+              items={visionModelList ? visionModelList.map((model) => ({ value: model, label: model })) : []}
+            >
+              <ComboboxInput className="w-full" placeholder="选择或输入视觉模型名" showClear />
+              <ComboboxContent>
+                <ComboboxList>
+                  {(item) => <ComboboxItem value={String(item.value)}>{String(item.label)}</ComboboxItem>}
+                </ComboboxList>
+                <ComboboxEmpty>暂无可用视觉模型，请点击下方获取</ComboboxEmpty>
+              </ComboboxContent>
+            </Combobox>
+          </label>
+          <div className="flex items-center gap-2 mt-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 whitespace-nowrap"
+              aria-label="获取视觉模型"
+              title="从当前视觉接口获取模型列表"
+              onClick={fetchVisionModels}
+              disabled={visionModelsLoading || saving !== null}
+            >
+              <RefreshCw className={visionModelsLoading ? "animate-spin" : undefined} />
+              {visionModelsLoading ? "获取中…" : "获取模型"}
+            </Button>
+            {visionMsg?.kind === "ok" && visionMsg.text.startsWith("已获取") && (
+              <span className="text-[10px] text-muted">{visionMsg.text}</span>
+            )}
+          </div>
+        </div>
+        {field("API Key", visionForm.api_key, (v) => {
+          setVisionForm((f) => ({ ...f, api_key: v }));
+          setVisionModelList(null);
+          setVisionModelsOpen(false);
+        }, visionCfg?.api_key_masked ? `当前: ${visionCfg.api_key_masked}（留空不变）` : "API Key", "password")}
+        {visionMsg && (
+          !(visionMsg.kind === "ok" && visionMsg.text.startsWith("已获取")) &&
+          <Alert variant={visionMsg.kind === "ok" ? "default" : "destructive"}
+                 className={`mb-3 text-xs ${visionMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{visionMsg.text}</Alert>
+        )}
+        <Button onClick={saveVisionConfig} disabled={saving !== null}>{saving === "vision" ? "测试中…" : "保存并测试"}</Button>
       </div>
       </>)}
 

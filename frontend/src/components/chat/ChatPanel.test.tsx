@@ -111,6 +111,30 @@ describe("ChatPanel 主流程", () => {
     expect(document.querySelectorAll(".markdown-body").length).toBe(1);
   });
 
+  it("工具步骤之间的 reasoning 不重复上一模型轮次", async () => {
+    chatStream.mockImplementation(async (_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("reasoning", { text: "第一步" });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      onEvent("tool_start", { tool: "list_files", arguments: {} });
+      onEvent("tool_trace", { tool: "list_files", output: "[]", parsed: [] });
+      onEvent("reasoning", { text: "第二步" });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      onEvent("tool_start", { tool: "index_stats", arguments: {} });
+      onEvent("tool_trace", { tool: "index_stats", output: "{}", parsed: {} });
+      onEvent("text", { text: "完成" });
+      return null;
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("执行多步任务");
+    await waitFor(() => expect(screen.getAllByTestId("reasoning-block")).toHaveLength(2), { timeout: 2000 });
+
+    const blocks = screen.getAllByTestId("reasoning-block");
+    expect(blocks).toHaveLength(2);
+    expect(blocks.map((block) => block.querySelector(".markdown-body")?.textContent ?? "").sort())
+      .toEqual(["第一步", "第二步"].sort());
+  });
+
   it("仅工具调用无文本回复时移除空占位气泡", async () => {
     chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
       onEvent("tool_start", { tool: "list_files", arguments: {} });

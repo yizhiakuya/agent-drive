@@ -1,5 +1,6 @@
 // 对话 API：聚合 + SSE 流式（含跨 chunk 缓冲）
 import { api, authenticatedFetch, ApiError, apiErrorMessage } from "./client";
+import type { FrontendCapability } from "../frontend-actions";
 
 export const chat = (
   message: string,
@@ -7,9 +8,17 @@ export const chat = (
   sessionId: string | null,
   confirmations: Record<string, unknown>[] = [],
   thinkingLevel = "auto",
+  frontendCapabilities: FrontendCapability[] = [],
 ) => api("/chat", {
   method: "POST",
-  body: JSON.stringify({ message, history, session_id: sessionId, confirmations, thinking_level: thinkingLevel }),
+  body: JSON.stringify({
+    message,
+    history,
+    session_id: sessionId,
+    confirmations,
+    thinking_level: thinkingLevel,
+    frontend_capabilities: frontendCapabilities,
+  }),
 });
 
 export async function chatStream(
@@ -20,11 +29,19 @@ export async function chatStream(
   onEvent: (event: string, data: Record<string, unknown>) => void,
   signal: AbortSignal,
   thinkingLevel = "auto",
+  frontendCapabilities: FrontendCapability[] = [],
 ): Promise<Record<string, unknown> | null> {
   const res = await authenticatedFetch("/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history, session_id: sessionId, confirmations, thinking_level: thinkingLevel }),
+    body: JSON.stringify({
+      message,
+      history,
+      session_id: sessionId,
+      confirmations,
+      thinking_level: thinkingLevel,
+      frontend_capabilities: frontendCapabilities,
+    }),
     signal,
   });
   if (!res.ok) {
@@ -64,6 +81,12 @@ export async function chatStream(
     } catch (error) {
       const detail = rawData.length > 200 ? `${rawData.slice(0, 200)}…` : rawData;
       throw new Error(`SSE ${event || "message"} 数据格式错误: ${detail}`, { cause: error });
+    }
+    if (event === "error") {
+      const message = typeof data.error === "string" && data.error.trim()
+        ? data.error
+        : "chat stream failed";
+      throw new Error(message);
     }
     if (event === "done") donePayload = data;
     onEvent(event, data);

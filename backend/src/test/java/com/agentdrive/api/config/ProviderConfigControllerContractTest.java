@@ -1,0 +1,170 @@
+package com.agentdrive.api.config;
+
+import com.agentdrive.auth.AuthenticatedPrincipal;
+import com.agentdrive.auth.CredentialAuthenticator;
+import com.agentdrive.api.auth.WebRequestPrincipalResolver;
+import com.agentdrive.infrastructure.LlmApiKeyCipher;
+import com.agentdrive.infrastructure.EmbeddingConfigStore;
+import com.agentdrive.tasks.TaskStore;
+import com.agentdrive.infrastructure.LlmProviderConfigService;
+import com.agentdrive.infrastructure.LlmProviderConfigView;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.reactive.server.WebTestClient;
+
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+class ProviderConfigControllerContractTest {
+    @Test
+    void returnsOwnerScopedMaskedConfigWithoutPlaintextKey() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        FakeConfigService configs = new FakeConfigService(owner, cipher.encrypt("sk-provider-secret"));
+        WebTestClient client = client(owner, configs, cipher);
+
+        String body = client.get()
+                .uri("/api/v1/config")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertThat(body).contains("\"configured\":true", "\"api_key_masked\":\"sk-pro…\"");
+        assertThat(body).doesNotContain("sk-provider-secret");
+    }
+
+    @Test
+    void rejectsInvalidProviderConfigurationWithBadRequest() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        WebTestClient client = client(owner, new FakeConfigService(owner, null), cipher);
+
+        client.post()
+                .uri("/api/v1/config/test")
+                .header("Authorization", "Bearer session-token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "type", "not-a-provider",
+                        "base_url", "file:///tmp/provider",
+                        "api_key", "test-key"
+                ))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").isEqualTo("未知 Provider 类型: not-a-provider");
+    }
+
+    @Test
+    void exposesOwnerScopedEmbeddingStatusWithoutPlaintextKey() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        EmbeddingConfigStore embeddings = mock(EmbeddingConfigStore.class);
+        when(embeddings.find(owner)).thenReturn(Optional.of(new EmbeddingConfigStore.EmbeddingConfig(
+                "jina", "https://api.jina.ai/v1", "jina-embeddings-v3", cipher.encrypt("jina-secret"))));
+        WebTestClient client = embeddingClient(owner, new FakeConfigService(owner, null), cipher, embeddings);
+
+        String body = client.get().uri("/api/v1/config/status")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody();
+
+        assertThat(body).contains("\"configured\":true", "\"provider\":\"jina\"", "\"api_key_masked\":\"jina-s…\"");
+        assertThat(body).doesNotContain("jina-secret");
+    }
+
+    @Test
+    void rejectsUnsupportedEmbeddingProviderWithBadRequest() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        WebTestClient client = embeddingClient(owner, new FakeConfigService(owner, null), cipher, mock(EmbeddingConfigStore.class));
+
+        client.put().uri("/api/v1/config/embeddings")
+                .header("Authorization", "Bearer session-token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("provider", "unsupported", "api_key", "test-key"))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.detail").isEqualTo("当前仅支持 Jina embedding provider");
+    }
+
+    @Test
+    void requiresAuthenticationForConfigRead() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        WebTestClient client = client(owner, new FakeConfigService(owner, null), cipher);
+
+        client.get()
+                .uri("/api/v1/config")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    private static WebTestClient client(UUID owner, LlmProviderConfigService configs, LlmApiKeyCipher cipher) {
+        CredentialAuthenticator authenticator = credential -> "session-token".equals(credential)
+                ? Optional.of(new AuthenticatedPrincipal(owner, AuthenticatedPrincipal.CredentialKind.SESSION))
+                : Optional.empty();
+        ProviderConfigController controller = new ProviderConfigController(
+                configs,
+                cipher,
+                new WebRequestPrincipalResolver(authenticator),
+                new com.fasterxml.jackson.databind.ObjectMapper()
+        );
+        return WebTestClient.bindToController(controller)
+                .controllerAdvice(new ProviderConfigExceptionHandler())
+                .build();
+    }
+
+    private static WebTestClient embeddingClient(UUID owner, LlmProviderConfigService configs,
+                                                  LlmApiKeyCipher cipher, EmbeddingConfigStore embeddings) {
+        CredentialAuthenticator authenticator = credential -> "session-token".equals(credential)
+                ? Optional.of(new AuthenticatedPrincipal(owner, AuthenticatedPrincipal.CredentialKind.SESSION))
+                : Optional.empty();
+        ProviderConfigController controller = new ProviderConfigController(
+                configs,
+                cipher,
+                new WebRequestPrincipalResolver(authenticator),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                embeddings,
+                mock(TaskStore.class)
+        );
+        return WebTestClient.bindToController(controller)
+                .controllerAdvice(new ProviderConfigExceptionHandler())
+                .build();
+    }
+
+    private static final class FakeConfigService implements LlmProviderConfigService {
+        private final UUID owner;
+        private final byte[] encryptedKey;
+
+        private FakeConfigService(UUID owner, byte[] encryptedKey) {
+            this.owner = owner;
+            this.encryptedKey = encryptedKey;
+        }
+
+        @Override
+        public Optional<LlmProviderConfigView> findForOwner(UUID userId) {
+            return owner.equals(userId)
+                    ? Optional.of(new LlmProviderConfigView("openai_compat", "https://provider.test/v1", "model-a", encryptedKey != null, "fingerprint"))
+                    : Optional.empty();
+        }
+
+        @Override
+        public Optional<byte[]> encryptedApiKeyForOwner(UUID userId) {
+            return owner.equals(userId) ? Optional.ofNullable(encryptedKey) : Optional.empty();
+        }
+
+        @Override
+        public void saveForOwner(UUID userId, String provider, String baseUrl, String model,
+                                 byte[] encryptedApiKey, String apiKeyFingerprint) {
+        }
+    }
+}

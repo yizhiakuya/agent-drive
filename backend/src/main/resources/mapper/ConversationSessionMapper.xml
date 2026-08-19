@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.ConversationSessionMapper">
+    <select id="selectOwned" resultType="map">
+        SELECT id::text AS id, user_id::text AS user_id
+        FROM chat_sessions
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <select id="insertSession" resultType="string">
+        INSERT INTO chat_sessions(user_id)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid))
+        RETURNING id::text
+    </select>
+
+    <select id="selectOwnedList" resultType="map">
+        SELECT id::text AS id,
+               title,
+               summary,
+               last_routed,
+               EXTRACT(EPOCH FROM created_at) AS created_at,
+               EXTRACT(EPOCH FROM updated_at) AS updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
+        FROM chat_sessions s
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY updated_at DESC
+    </select>
+
+    <select id="selectOwnedDetails" resultType="map">
+        SELECT id::text AS id,
+               title,
+               summary,
+               last_routed,
+               EXTRACT(EPOCH FROM created_at) AS created_at,
+               EXTRACT(EPOCH FROM updated_at) AS updated_at,
+               (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
+        FROM chat_sessions s
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <select id="selectMessages" resultType="map">
+        SELECT role,
+               content,
+               reasoning,
+               tool_name,
+               arguments::text AS arguments_json,
+               parsed::text AS parsed_json,
+               EXTRACT(EPOCH FROM created_at) AS ts
+        FROM chat_messages
+        WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND session_id IN (
+              SELECT id FROM chat_sessions
+              WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+                AND user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          )
+        ORDER BY id
+    </select>
+
+    <delete id="deleteOwned">
+        DELETE FROM chat_sessions
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+
+    <update id="updateSummary">
+        UPDATE chat_sessions
+        SET summary = #{summary, jdbcType=LONGVARCHAR},
+            title = #{title, jdbcType=VARCHAR},
+            updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </update>
+</mapper>

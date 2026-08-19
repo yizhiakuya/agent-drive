@@ -5,6 +5,7 @@ import FilePage from "./FilePage";
 const listFiles = vi.fn();
 const uploadFile = vi.fn();
 const getFileInfo = vi.fn();
+const getFileContent = vi.fn();
 const renameFile = vi.fn();
 const moveFile = vi.fn();
 const copyFile = vi.fn();
@@ -18,6 +19,7 @@ vi.mock("@/lib/api/files", () => ({
   listFiles: (...a: unknown[]) => listFiles(...a),
   uploadFile: (...a: unknown[]) => uploadFile(...a),
   getFileInfo: (...a: unknown[]) => getFileInfo(...a),
+  getFileContent: (...a: unknown[]) => getFileContent(...a),
   renameFile: (...a: unknown[]) => renameFile(...a),
   moveFile: (...a: unknown[]) => moveFile(...a),
   copyFile: (...a: unknown[]) => copyFile(...a),
@@ -30,9 +32,35 @@ vi.mock("@/lib/api/files", () => ({
   fileRawUrl: (p: string) => "/raw?path=" + p,
 }));
 
+const enqueueEmbedIndex = vi.fn();
+const enqueueVisionIndex = vi.fn();
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+function fileInfo(path: string, snippet: string) {
+  return {
+    path,
+    name: path,
+    size: 75,
+    modified: 1750000000,
+    preview_kind: "text" as const,
+    snippet,
+    indexed: null,
+  };
+}
+
+vi.mock("@/lib/api/tasks", () => ({
+  enqueueEmbedIndex: (...a: unknown[]) => enqueueEmbedIndex(...a),
+  enqueueVisionIndex: (...a: unknown[]) => enqueueVisionIndex(...a),
+}));
+
 // 预览面板依赖较重，测试关注文件操作主流程，直接桩掉。
 vi.mock("./FilePreview", () => ({
-  default: () => <div data-testid="preview" />,
+  default: ({ text }: { text?: string }) => <div data-testid="preview">{text}</div>,
 }));
 
 const rootListing = {
@@ -55,6 +83,11 @@ describe("FilePage 核心操作", () => {
       path: "合同.txt", name: "合同.txt", size: 75, modified: 1750000000,
       preview_kind: "text", snippet: "内容", indexed: null,
     });
+    getFileContent.mockResolvedValue({
+      path: "合同.txt", name: "合同.txt", content: "完整合同内容", encoding: "UTF-8", size: 20, truncated: false,
+    });
+    enqueueEmbedIndex.mockResolvedValue({ queued: true, task: {} });
+    enqueueVisionIndex.mockResolvedValue({ queued: true, task: {} });
     emptyTrash.mockResolvedValue({ removed: 1 });
   });
 
@@ -63,6 +96,97 @@ describe("FilePage 核心操作", () => {
     await waitFor(() => expect(screen.getByText("资料")).toBeInTheDocument());
     expect(screen.getByText("合同.txt")).toBeInTheDocument();
     expect(screen.getByText(/已用/)).toBeInTheDocument();
+  });
+
+  it("忽略过期的目录列表响应", async () => {
+    const first = deferred<typeof rootListing>();
+    const second = deferred<typeof rootListing>();
+    const directories = {
+      ...rootListing,
+      items: [
+        { name: "目录A", path: "目录A", is_dir: true, size: 0, mtime: 1750000000 },
+        { name: "目录B", path: "目录B", is_dir: true, size: 0, mtime: 1750000000 },
+      ],
+    };
+    listFiles.mockImplementation((requestedPath: string) => {
+      if (!requestedPath) return Promise.resolve(directories);
+      return requestedPath === "目录A" ? first.promise : second.promise;
+    });
+
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("目录A")).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText("目录A"));
+    fireEvent.doubleClick(screen.getByText("目录B"));
+
+    second.resolve({
+      ...rootListing,
+      path: "目录B",
+      items: [{ name: "B.txt", path: "目录B/B.txt", is_dir: false, size: 1, mtime: 1750000000 }],
+    });
+    await waitFor(() => expect(screen.getByText("B.txt")).toBeInTheDocument());
+
+    first.resolve({
+      ...rootListing,
+      path: "目录A",
+      items: [{ name: "A.txt", path: "目录A/A.txt", is_dir: false, size: 1, mtime: 1750000000 }],
+    });
+    await act(async () => { await first.promise; });
+    expect(screen.getByText("B.txt")).toBeInTheDocument();
+    expect(screen.queryByText("A.txt")).not.toBeInTheDocument();
+  });
+
+  it("忽略过期的文件详情响应", async () => {
+    const first = deferred<ReturnType<typeof fileInfo>>();
+    const second = deferred<ReturnType<typeof fileInfo>>();
+    listFiles.mockResolvedValue({
+      ...rootListing,
+      items: [
+        { name: "A.txt", path: "A.txt", is_dir: false, size: 75, mtime: 1750000000 },
+        { name: "B.txt", path: "B.txt", is_dir: false, size: 75, mtime: 1750000000 },
+      ],
+    });
+    getFileInfo.mockImplementation((requestedPath: string) =>
+      requestedPath === "A.txt" ? first.promise : second.promise);
+
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("A.txt")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("A.txt"));
+    fireEvent.click(screen.getByText("B.txt"));
+
+    second.resolve(fileInfo("B.txt", "B 的摘要"));
+    await waitFor(() => expect(screen.getByText("B 的摘要")).toBeInTheDocument());
+    first.resolve(fileInfo("A.txt", "A 的摘要"));
+    await act(async () => { await first.promise; });
+
+    expect(screen.getByText("B 的摘要")).toBeInTheDocument();
+    expect(screen.queryByText("A 的摘要")).not.toBeInTheDocument();
+  });
+
+  it("忽略当前选中文件变化后的全文响应", async () => {
+    const content = deferred<{ content: string; truncated: boolean }>();
+    listFiles.mockResolvedValue({
+      ...rootListing,
+      items: [
+        { name: "A.txt", path: "A.txt", is_dir: false, size: 75, mtime: 1750000000 },
+        { name: "B.txt", path: "B.txt", is_dir: false, size: 75, mtime: 1750000000 },
+      ],
+    });
+    getFileInfo.mockImplementation((requestedPath: string) =>
+      Promise.resolve(fileInfo(requestedPath, `${requestedPath} 的摘要`)));
+    getFileContent.mockReturnValue(content.promise);
+
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("A.txt")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("A.txt"));
+    await waitFor(() => expect(screen.getByText("A.txt 的摘要")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("查看内容"));
+    fireEvent.click(screen.getByText("B.txt"));
+    await waitFor(() => expect(screen.getByText("B.txt 的摘要")).toBeInTheDocument());
+
+    content.resolve({ content: "A 的完整内容", truncated: false });
+    await act(async () => { await content.promise; });
+    expect(screen.getByText("B.txt 的摘要")).toBeInTheDocument();
+    expect(screen.queryByText("A 的完整内容")).not.toBeInTheDocument();
   });
 
   it("重命名成功后派发 files-changed", async () => {
@@ -139,5 +263,74 @@ describe("FilePage 核心操作", () => {
     await waitFor(() =>
       expect(screen.getByText(/目录为空/)).toBeInTheDocument()
     );
+  });
+
+  it("搜索、查看详情和读取完整文本内容", async () => {
+    listFiles.mockImplementation(async (_path: string, query: string) =>
+      query ? { ...rootListing, items: [rootListing.items[1]], query } : rootListing
+    );
+    getFileInfo.mockResolvedValue({
+      path: "合同.txt", name: "合同.txt", size: 75, modified: 1750000000, revision: 3,
+      content_type: "text/plain", preview_kind: "text", snippet: "摘要",
+      indexed: {
+        text_indexed: true, vectorized: true, vector_status: "vectorized",
+        chunk_count: 1, vector_chunks: 1, stored_vector_chunks: 1, embedding_configured: true,
+      },
+    });
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索当前目录及子目录" }), { target: { value: "合同" } });
+    fireEvent.submit(screen.getByRole("search"));
+    await waitFor(() => expect(listFiles).toHaveBeenLastCalledWith("", "合同", "name"));
+
+    fireEvent.click(screen.getByText("合同.txt"));
+    await waitFor(() => expect(screen.getByTitle("文件详情")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("文件详情"));
+    expect(screen.getAllByText("已向量化").length).toBeGreaterThan(0);
+    expect(screen.getByText("版本").parentElement).toHaveTextContent("3");
+
+    fireEvent.click(screen.getByTitle("查看内容"));
+    await waitFor(() => expect(getFileContent).toHaveBeenCalledWith("合同.txt"));
+    expect(screen.getByText("完整合同内容")).toBeInTheDocument();
+  });
+
+  it("用语义模式搜索并展示最佳匹配片段和相关度", async () => {
+    listFiles.mockImplementation(async (_path: string, query: string, mode: string) =>
+      mode === "semantic"
+        ? {
+            ...rootListing,
+            query,
+            mode,
+            items: [{ ...rootListing.items[1], search_score: 0.923, search_snippet: "合同付款节点和验收条件" }],
+          }
+        : rootListing
+    );
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "语义" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "描述你要找的内容" }), {
+      target: { value: "付款和验收" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+
+    await waitFor(() => expect(listFiles).toHaveBeenLastCalledWith("", "付款和验收", "semantic"));
+    expect(screen.getByText("合同付款节点和验收条件")).toBeInTheDocument();
+    expect(screen.getByText("相关度 92.3%")).toBeInTheDocument();
+    expect(screen.getByText("已向量化")).toBeInTheDocument();
+  });
+
+  it("为图片创建视觉索引任务", async () => {
+    getFileInfo.mockResolvedValue({
+      path: "合同.txt", name: "合同.txt", size: 75, modified: 1750000000,
+      preview_kind: "image", snippet: null, indexed: null,
+    });
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("合同.txt"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /视觉索引/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /视觉索引/ }));
+    await waitFor(() => expect(enqueueVisionIndex).toHaveBeenCalledWith(["合同.txt"]));
   });
 });

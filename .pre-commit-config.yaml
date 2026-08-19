@@ -1,16 +1,17 @@
 repos:
   - repo: local
     hooks:
-      - id: ruff
-        name: ruff lint
-        entry: ruff check backend/app/
+      - id: java-compile
+        name: Java compile
+        entry: mvn -q -f backend/pom.xml -DskipTests compile
         language: system
-        types: [python3]
+        files: ^backend/src/.*\.java$
         pass_filenames: false
-      - id: unit-tests
-        name: unit test suites
-        entry: bash -c 'cd backend && for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python3 tests/unit/$t.py || exit 1; done'
+      - id: frontend-lint
+        name: frontend lint
+        entry: npm --prefix frontend run lint
         language: system
+        files: ^frontend/(src|.*\.(json|mts|ts|tsx))
         pass_filenames: false
       - id: secret-scan
         name: secret scan (sk-/jina_/api_key)

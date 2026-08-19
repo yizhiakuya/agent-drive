@@ -34,6 +34,26 @@ describe("chatStream SSE 解析", () => {
     ]);
   });
 
+  it("reasoning 事件按 {text} 契约独立回调（不混入正文）", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: reasoning\ndata: {"text":"先"}\n\n',
+      'event: reasoning\ndata: {"text":"判断范围"}\n\n',
+      'event: text\ndata: {"text":"结果如下"}\n\n',
+    ]));
+    const events: [string, unknown][] = [];
+    const reasoningChunks: string[] = [];
+    await chatStream("hi", [], null, [], (e, d) => {
+      events.push([e, d]);
+      if (e === "reasoning") reasoningChunks.push((d as { text: string }).text);
+    }, new AbortController().signal);
+    expect(events).toEqual([
+      ["reasoning", { text: "先" }],
+      ["reasoning", { text: "判断范围" }],
+      ["text", { text: "结果如下" }],
+    ]);
+    expect(reasoningChunks.join("")).toBe("先判断范围");
+  });
+
   it("跨 chunk 分割的 SSE 事件正确缓冲", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: tex', 't\ndata: {"text":"跨', '块"}\n\n',
@@ -89,6 +109,22 @@ describe("chatStream SSE 解析", () => {
     ]));
     await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
       .rejects.toThrow("SSE text 数据格式错误: {bad}");
+  });
+
+  it("SSE error 事件进入异常路径而不是被当作正常结束", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: error\ndata: {"error":"Provider 连接超时"}\n\n',
+    ]));
+    await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
+      .rejects.toThrow("Provider 连接超时");
+  });
+
+  it("缺少错误消息的 SSE error 使用稳定兜底文案", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: error\ndata: {}\n\n',
+    ]));
+    await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
+      .rejects.toThrow("chat stream failed");
   });
 
   it("没有响应流时明确报错", async () => {

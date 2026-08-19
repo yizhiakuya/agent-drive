@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Agent Drive Java backup
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=agent-drive-java-backup.service
+
+[Install]
+WantedBy=timers.target

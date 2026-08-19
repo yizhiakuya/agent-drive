@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.FileMapper">
+    <select id="selectByPath" resultType="map">
+        SELECT id, path, is_dir, size_bytes, revision, content_md5, content_sha256,
+               created_at, updated_at
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+    </select>
+
+    <select id="selectIndexStatus" resultType="map">
+        SELECT f.revision,
+               CASE WHEN d.id IS NULL THEN false ELSE true END AS text_indexed,
+               COUNT(c.id)::int AS chunk_count,
+               COUNT(c.id) FILTER (WHERE c.embedding IS NOT NULL)::int AS stored_vector_chunks,
+               COUNT(c.id) FILTER (
+                   WHERE c.embedding IS NOT NULL
+                     AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
+                     AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
+               )::int AS vector_chunks
+        FROM files f
+        LEFT JOIN documents d
+          ON d.file_id = f.id
+         AND d.source_revision = f.revision
+        LEFT JOIN document_chunks c
+          ON c.document_id = d.id
+         AND c.source_revision = f.revision
+        WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND f.path = #{path, jdbcType=VARCHAR}
+          AND f.is_dir = false
+        GROUP BY f.id, f.revision, d.id
+    </select>
+
+    <select id="selectIndexDetails" resultType="map">
+        SELECT d.id::text AS document_id,
+               d.source_revision,
+               d.extractor_version,
+               EXTRACT(EPOCH FROM d.updated_at) AS updated,
+               c.id::text AS chunk_id,
+               c.chunk_index,
+               c.chunk_version,
+               c.source_revision AS chunk_source_revision,
+               LEFT(c.content, 4000) AS content,
+               char_length(c.content)::int AS content_length,
+               (c.embedding IS NOT NULL) AS stored_vector,
+               (c.embedding IS NOT NULL
+                AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
+                AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}) AS current_vector,
+               c.embedding_fingerprint
+        FROM files f
+        LEFT JOIN documents d
+          ON d.file_id = f.id
+         AND d.source_revision = f.revision
+        LEFT JOIN document_chunks c
+          ON c.document_id = d.id
+         AND c.source_revision = d.source_revision
+        WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND f.path = #{path, jdbcType=VARCHAR}
+          AND f.is_dir = false
+        ORDER BY c.chunk_index ASC NULLS LAST
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectChildren" resultType="map">
+        SELECT id, path, is_dir, size_bytes, revision, content_md5, content_sha256,
+               created_at, updated_at
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '%')
+        ORDER BY is_dir DESC, lower(path)
+    </select>
+
+    <select id="selectByPaths" resultType="map">
+        SELECT path, is_dir, size_bytes
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path IN
+          <foreach collection="paths" item="path" open="(" separator="," close=")">
+              #{path, jdbcType=VARCHAR}
+          </foreach>
+    </select>
+
+    <insert id="upsertMetadata">
+        INSERT INTO files(user_id, path, is_dir, size_bytes)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{path, jdbcType=VARCHAR},
+                #{isDir}, #{size})
+        ON CONFLICT (user_id, path) DO UPDATE SET
+            user_id = EXCLUDED.user_id,
+            is_dir = EXCLUDED.is_dir,
+            size_bytes = EXCLUDED.size_bytes,
+             updated_at = now()
+    </insert>
+
+    <insert id="upsertMetadataBatch">
+        INSERT INTO files(user_id, path, is_dir, size_bytes)
+        VALUES
+        <foreach collection="items" item="item" separator=",">
+            (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{item.path, jdbcType=VARCHAR},
+             #{item.isDir}, #{item.size})
+        </foreach>
+        ON CONFLICT (user_id, path) DO UPDATE SET
+            user_id = EXCLUDED.user_id,
+            is_dir = EXCLUDED.is_dir,
+            size_bytes = EXCLUDED.size_bytes,
+            updated_at = now()
+    </insert>
+
+    <insert id="upsertContent">
+        INSERT INTO files(user_id, path, is_dir, size_bytes, content_md5, content_sha256)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{path, jdbcType=VARCHAR},
+                false, #{size}, #{md5}, #{sha256})
+        ON CONFLICT (user_id, path) DO UPDATE SET
+            user_id = EXCLUDED.user_id,
+            is_dir = false,
+            size_bytes = EXCLUDED.size_bytes,
+            revision = files.revision + 1,
+            content_md5 = EXCLUDED.content_md5,
+            content_sha256 = EXCLUDED.content_sha256,
+            updated_at = now()
+    </insert>
+
+    <insert id="insertRevision">
+        INSERT INTO file_revisions(file_id, revision, size_bytes, content_md5, content_sha256)
+        SELECT id, revision, #{size}, #{md5}, #{sha256}
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+        ON CONFLICT (file_id, revision) DO UPDATE SET
+            size_bytes = EXCLUDED.size_bytes,
+            content_md5 = EXCLUDED.content_md5,
+            content_sha256 = EXCLUDED.content_sha256
+    </insert>
+
+    <delete id="deletePath">
+        DELETE FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+    </delete>
+
+    <delete id="deletePrefix">
+        DELETE FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{prefix, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+    </delete>
+
+    <select id="selectDedupe" resultType="map">
+        SELECT content_md5, path, file_revision, verified, updated_at
+        FROM upload_dedup
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND content_md5 = #{md5, jdbcType=VARCHAR}
+          AND verified = true
+    </select>
+
+    <insert id="upsertDedupe">
+        INSERT INTO upload_dedup(user_id, content_md5, path, file_revision, verified)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{md5, jdbcType=VARCHAR},
+                #{path, jdbcType=VARCHAR}, #{revision}, #{verified})
+        ON CONFLICT (user_id, content_md5) DO UPDATE SET
+            user_id = EXCLUDED.user_id,
+            path = EXCLUDED.path,
+            file_revision = EXCLUDED.file_revision,
+            verified = EXCLUDED.verified,
+            updated_at = now()
+    </insert>
+
+    <delete id="deleteDedupeByPath">
+        DELETE FROM upload_dedup
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+    </delete>
+
+    <insert id="insertTrash">
+        INSERT INTO trash_entries(trash_id, user_id, original_path, stored_path, file_revision)
+        VALUES (CAST(#{trashId, jdbcType=VARCHAR} AS uuid),
+                CAST(#{userId, jdbcType=VARCHAR} AS uuid),
+                #{originalPath, jdbcType=VARCHAR}, #{storedPath, jdbcType=VARCHAR}, #{revision})
+    </insert>
+
+    <select id="selectTrash" resultType="map">
+        SELECT trash_id, original_path, stored_path, file_revision, deleted_at, expires_at
+        FROM trash_entries
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY deleted_at DESC
+    </select>
+
+    <select id="selectExpiredTrash" resultType="map">
+        SELECT trash_id, original_path, stored_path, file_revision, deleted_at, expires_at
+        FROM trash_entries
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND deleted_at &lt; to_timestamp(#{cutoffEpoch})
+        ORDER BY deleted_at ASC
+    </select>
+
+    <select id="selectTrashByIdentifier" resultType="map">
+        SELECT trash_id, original_path, stored_path, file_revision, deleted_at, expires_at
+        FROM trash_entries
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (CAST(trash_id AS text) = #{identifier, jdbcType=VARCHAR}
+               OR original_path = #{identifier, jdbcType=VARCHAR})
+        ORDER BY deleted_at DESC
+        LIMIT 1
+    </select>
+
+    <delete id="deleteTrash">
+        DELETE FROM trash_entries
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND trash_id = CAST(#{trashId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+
+    <delete id="deleteAllTrash">
+        DELETE FROM trash_entries
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+</mapper>

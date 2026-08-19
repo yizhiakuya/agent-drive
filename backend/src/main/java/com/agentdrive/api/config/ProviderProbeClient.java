@@ -1,0 +1,192 @@
+package com.agentdrive.api.config;
+
+import com.agentdrive.net.HttpClientSupport;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * 用 JDK HTTP Client 探测 LLM Provider 的 {@code /models} 端点。
+ *
+ * <p>请求复用应用代理配置并设置 20 秒超时；Anthropic 使用 {@code x-api-key} 和版本头，
+ * 其他 Provider 使用 Bearer 头。响应支持直接数组和 OpenAI 风格 {@code data} 数组，
+ * 只提取文本模型 ID，错误转换为不含响应正文或 key 的 {@link ProbeResult}。
+ */
+final class ProviderProbeClient {
+    private static final Duration TIMEOUT = Duration.ofSeconds(20);
+
+    private final HttpClient client;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 创建模型探测客户端。
+     *
+     * @param objectMapper 解析 Provider JSON 响应的映射器。
+     */
+    ProviderProbeClient(ObjectMapper objectMapper) {
+        this.client = HttpClientSupport.builder(TIMEOUT).build();
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 请求 Provider 模型列表并转换为统一探测结果。
+     *
+     * @param provider 内部 Provider 标识；anthropic 使用专用鉴权头。
+     * @param baseUrl Provider 根地址，方法会追加 {@code /models}。
+     * @param apiKey 仅用于本次 HTTP 鉴权，不写入结果。
+     * @return 成功时包含模型 ID 列表，HTTP/网络/解析失败时包含安全错误消息。
+     */
+    ProbeResult listModels(String provider, String baseUrl, String apiKey) {
+        final URI endpoint;
+        try {
+            endpoint = endpoint(baseUrl);
+        } catch (IllegalArgumentException error) {
+            return ProbeResult.failure(error.getMessage());
+        }
+        HttpRequest.Builder request = HttpRequest.newBuilder(endpoint)
+                .timeout(TIMEOUT)
+                .header("Accept", "application/json")
+                .GET();
+        if ("anthropic".equals(provider)) {
+            request.header("x-api-key", apiKey)
+                    .header("anthropic-version", "2023-06-01");
+        } else {
+            request.header("Authorization", "Bearer " + apiKey);
+        }
+        try {
+            HttpResponse<String> response = client.send(
+                    request.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return ProbeResult.failure("provider returned HTTP " + response.statusCode());
+            }
+            return ProbeResult.success(parseModels(response.body()));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return ProbeResult.failure("provider request interrupted");
+        } catch (Exception error) {
+            return ProbeResult.failure("provider request failed: " + safeMessage(error));
+        }
+    }
+
+    /**
+     * 校验 Provider 地址并构造模型列表端点。
+     *
+     * @param baseUrl Provider 根 URL。
+     * @return 追加 {@code /models} 的 HTTP(S) URI。
+     * @throws IllegalArgumentException 地址为空、协议不是 HTTP(S) 或含凭据/query/fragment 时抛出。
+     */
+    private URI endpoint(String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalArgumentException("base_url must not be blank");
+        }
+        String value = baseUrl.trim();
+        try {
+            URI base = new URI(value);
+            String scheme = base.getScheme() == null ? "" : base.getScheme().toLowerCase(Locale.ROOT);
+            if (!("http".equals(scheme) || "https".equals(scheme))
+                    || base.getHost() == null
+                    || base.getUserInfo() != null
+                    || base.getFragment() != null
+                    || base.getQuery() != null) {
+                throw new IllegalArgumentException("base_url must be an http(s) URL without credentials, query, or fragment");
+            }
+            return new URI(value.replaceAll("/+$", "") + "/models");
+        } catch (URISyntaxException error) {
+            throw new IllegalArgumentException("base_url is invalid", error);
+        }
+    }
+
+    /**
+     * 从 Provider JSON 中提取模型 ID。
+     *
+     * @param body Provider 返回的 JSON 文本；支持字符串数组、对象数组和 {@code data} 包装。
+     * @return 非空模型 ID 的不可变列表。
+     * @throws IllegalArgumentException JSON 无法解析或不含数组时抛出。
+     */
+    private List<String> parseModels(String body) {
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode models = root != null && root.isArray() ? root : root == null ? null : root.get("data");
+            if (models == null || !models.isArray()) {
+                throw new IllegalArgumentException("provider response does not contain a models array");
+            }
+            List<String> result = new ArrayList<>();
+            for (JsonNode model : models) {
+                JsonNode id = model.isTextual() ? model : model.get("id");
+                if (id != null && id.isTextual() && !id.asText().isBlank()) {
+                    result.add(id.asText());
+                }
+            }
+            return List.copyOf(result);
+        } catch (Exception error) {
+            throw new IllegalArgumentException("provider response has an invalid models shape", error);
+        }
+    }
+
+    /**
+     * 提取适合返回给客户端的异常消息。
+     *
+     * @param error 外部 HTTP/JSON 调用异常。
+     * @return 异常消息，缺失时退回异常简单类名。
+     */
+    private static String safeMessage(Exception error) {
+
+        String message = error.getMessage();
+        return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
+    }
+
+    /**
+     * 模型探测的内部结果；成功时携带模型列表，失败时携带安全错误消息。
+     */
+    record ProbeResult(boolean ok, List<String> models, String error) {
+        /**
+         * 转换为 HTTP/内部 backend API 使用的 JSON 映射。
+         *
+         * @return 成功结果含 {@code models}，失败结果含 {@code error}，两者都含 {@code ok}。
+         */
+        Map<String, Object> asMap() {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("ok", ok);
+            if (ok) {
+                result.put("models", models);
+            } else {
+                result.put("error", error);
+            }
+            return result;
+        }
+
+        /**
+         * 创建成功的模型探测结果。
+         *
+         * @param models 已从 Provider 响应提取的模型 ID。
+         * @return {@code ok=true} 且保存模型列表的结果。
+         */
+        static ProbeResult success(List<String> models) {
+            return new ProbeResult(true, models, null);
+        }
+
+        /**
+         * 创建失败的模型探测结果。
+         *
+         * @param error 不含密钥和完整外部响应正文的错误消息。
+         * @return {@code ok=false} 且模型列表为空的结果。
+         */
+        static ProbeResult failure(String error) {
+            return new ProbeResult(false, List.of(), error);
+        }
+    }
+}

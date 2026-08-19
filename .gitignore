@@ -11,12 +11,14 @@ frontend/dist/
 # 运行时数据（agent 自管理）
 backend/data/
 backend/system/
+legacy-python-data/
 backend/.env
 
 # 工具
 *.log
 .DS_Store
 *.tar
+.cgr-*
 
 # 覆盖率产物
 .coverage

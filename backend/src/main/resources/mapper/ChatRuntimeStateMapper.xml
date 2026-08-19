@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.ChatRuntimeStateMapper">
+    <select id="selectToolReplay" resultType="map">
+        SELECT output, parsed::text AS parsed
+        FROM chat_tool_replays
+        WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND tool_name = #{tool, jdbcType=VARCHAR}
+          AND arguments = CAST(#{arguments, jdbcType=VARCHAR} AS jsonb)
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <insert id="insertToolReplay">
+        INSERT INTO chat_tool_replays(session_id, tool_name, arguments, output, parsed)
+        VALUES (
+            CAST(#{sessionId, jdbcType=VARCHAR} AS uuid),
+            #{tool, jdbcType=VARCHAR},
+            CAST(#{arguments, jdbcType=VARCHAR} AS jsonb),
+            #{output, jdbcType=LONGVARCHAR},
+            CAST(#{parsed, jdbcType=VARCHAR} AS jsonb)
+        )
+        ON CONFLICT (session_id, tool_name, arguments) DO NOTHING
+    </insert>
+
+    <insert id="insertMessage">
+        INSERT INTO chat_messages(session_id, role, content, reasoning, tool_name, arguments, parsed)
+        VALUES (
+            CAST(#{sessionId, jdbcType=VARCHAR} AS uuid),
+            #{role, jdbcType=VARCHAR},
+            #{content, jdbcType=LONGVARCHAR},
+            #{reasoning, jdbcType=LONGVARCHAR},
+            #{tool, jdbcType=VARCHAR},
+            CAST(NULLIF(#{arguments, jdbcType=LONGVARCHAR}, '') AS jsonb),
+            CAST(NULLIF(#{parsed, jdbcType=LONGVARCHAR}, '') AS jsonb)
+        )
+    </insert>
+
+    <update id="updateLastTrace">
+        UPDATE chat_sessions
+        SET last_trace = CAST(#{trace, jdbcType=LONGVARCHAR} AS jsonb), updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <select id="selectPending" resultType="string">
+        SELECT pending_confirmation::text
+        FROM chat_sessions
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <update id="updatePending">
+        UPDATE chat_sessions
+        SET pending_confirmation = CAST(#{pending, jdbcType=VARCHAR} AS jsonb), updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <update id="clearPending">
+        UPDATE chat_sessions
+        SET pending_confirmation = NULL, updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <update id="consumeNonce">
+        UPDATE chat_sessions
+        SET consumed_confirmation_nonces = consumed_confirmation_nonces
+                || jsonb_build_array(#{nonce, jdbcType=VARCHAR}),
+            updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND NOT (consumed_confirmation_nonces
+                @> jsonb_build_array(#{nonce, jdbcType=VARCHAR}))
+    </update>
+</mapper>

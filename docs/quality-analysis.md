@@ -1,82 +1,88 @@
-# 工程质量分析 Agent 协议
+# 工程质量分析协议
 
-> 给仓库内的编码 Agent 与维护者：任何“工程质量 / 可维护性 / 代码质量 / 审查”类任务，
-> 一律按本协议执行。本文件是**持久 agent 规格**——每次直接照做，不要每次重写流程。
+> 本文件是仓库内质量分析 Agent 的长期协议。它规定如何做增量审查，不是某次审查报告。历史结果见 [`archive/README.md`](archive/README.md)。
 
-## 0. 红线（最高优先级）
+## 1. 工作方式
 
-1. **分析阶段只读**：不修改、不移动、不重写任何文件（含“顺手格式化”）。
-2. **先汇报，后动手**：分析完成后输出结构化报告并停下，等待用户确认；
-   只有用户明确说“直接修 / 按你的方案改 / 继续修”之后，才进入修复阶段。
-3. 修复阶段才按 AGENTS.md「修改检查单」走门禁与文档同步（铁律 §0）。
+### 分析阶段
 
-## 1. 基线 vs 增量（避免重复劳动）
+- 只读：不修改、移动、格式化或删除代码/文档。
+- 先报告后修改：完成分析后给出结构化报告；只有用户明确要求“直接修/按方案改/继续修”才进入修复阶段。
+- 架构和技术栈属于基线；无重大架构变更时引用基线，不重复完整重审。
 
-**架构与技术栈属于基线，不每次重审**——正常情况下不会频繁换架构/技术栈。
-日常分析只做“增量检查”，引用基线结论即可。
+### 增量检查
 
-- **基线审计（一次性，或在重大变更时）**：架构分层、模块职责、技术栈选型、
-  依赖清单、部署形态。审计结论记录在下方「基线快照」，带日期；之后直接引用，
-  不再展开分析。
-- **增量检查（每次执行）**，按序完成：
+每次按以下顺序检查：
 
-| # | 检查项 | 方法 |
-|---|--------|------|
-| 1 | 门禁现状 | 跑 AGENTS.md §2 的 backend/frontend/android 门禁，记录红绿 |
-| 2 | 代码风格一致性 | lint/格式化是否全绿；命名、注释语言、图标/token 用法、错误处理风格是否与相邻代码一致 |
-| 3 | 耦合与重复 | 跨模块 import 方向是否符合分层；重复逻辑（如两套文件 UI、重复请求封装）只报告、给抽取建议，不先动手 |
-| 4 | 静态检查与类型 | ruff/mypy/eslint/tsc 的结果（mypy 当前为 0 错误阻断） |
-| 5 | 测试覆盖与缺口 | 全量通过数；本次/近期改动是否有对应回归测试；指出高风险无测试路径 |
-| 6 | 复杂度热点 | 文件行数/函数长度 Top N、嵌套深的模块（只报告，不做重构计划） |
-| 7 | 死代码与残留 | `console.*`、TODO/FIXME、未用导出/导入、失效 eslint-disable、遗留临时文件 |
-| 8 | 文档同步 | 按铁律 §0 抽查：近 N 次提交的行为变更是否同步 docs/AGENTS |
-| 9 | 安全/健壮性抽查 | 对照 AGENTS.md「关键约定与坑位」清单核对相关改动（错误路径、并发、原子性、失败关闭） |
+1. 门禁：Maven test/package、前端 lint/Vitest/build、Android JVM 单测。
+2. 风格：命名、Javadoc、TypeScript/React 约定、UI token、错误处理和相邻代码一致性。
+3. 耦合与重复：模块依赖方向、重复请求封装、重复 UI 和跨层访问。
+4. 静态质量：编译、类型、ESLint、死导出、失效 suppress、TODO/FIXME 和临时文件。
+5. 测试缺口：近期行为变化是否有回归测试，高风险错误路径是否覆盖。
+6. 复杂度：函数/类长度、认知复杂度、循环深度、异常分支和跨模块调用热点。
+7. 文档同步：行为、部署、数据所有权和安全约定是否同步到现行文档。
+8. 安全健壮性：并发、原子性、失败关闭、路径安全、凭据隔离和错误脱敏。
 
-## 2. 标准命令（可直接复制）
+重复逻辑先报告并给出抽取建议；只有用户授权修复后才重构。质量快照文档不随实现改写。
 
-```bash
-# 后端（workdir: backend）
-ruff check app/ && python3 -m mypy app/
-python3 -m pytest tests/unit -q && python3 -m pytest tests/integration -q
-for t in test_agent test_critic test_reliability test_retry test_compress test_write_tools test_memory test_bugfixes; do python3 tests/unit/$t.py || exit 1; done
+## 2. 标准命令
 
-# 前端（workdir: frontend）
-npm run lint && npm test && npm run build
+```powershell
+# Java 后端
+cd backend
+mvn -q test
+mvn -q -DskipTests package
 
-# Android（workdir: frontend/android；本机需 ANDROID_HOME=/root/.bubblewrap/android_sdk）
-ANDROID_HOME=/root/.bubblewrap/android_sdk ANDROID_SDK_ROOT=/root/.bubblewrap/android_sdk bash ./gradlew testDebugUnitTest
+# 前端
+cd ..\frontend
+npm run lint
+npm test
+npm run build
 
-# 复杂度/重复辅助（只读）
-wc -l backend/app/**/*.py frontend/src/**/*.{ts,tsx} 2>/dev/null | sort -rn | head -20
-grep -rn "console\.\|TODO\|FIXME" frontend/src backend/app --include='*.ts' --include='*.tsx' --include='*.py' | grep -v test
+# Android JVM 单测
+cd android
+gradlew.bat testDebugUnitTest
 ```
 
-## 3. 报告模板（固定结构）
+复杂度和残留检查优先使用代码图工具；需要文本/配置搜索时使用 `rg`：
+
+```powershell
+rg -n "console\.|TODO|FIXME" frontend/src backend/src -g "*.ts" -g "*.tsx" -g "*.java" | rg -v test
+```
+
+生产 smoke 由 `scripts/deploy.ps1` 完成：它负责前端/Java 构建、静态资源原子替换、systemd unit 校验、API → Worker 重启和 health 检查。
+
+## 3. 报告模板
 
 ```markdown
 # 工程质量分析报告（YYYY-MM-DD）
 
-## 基线结论（引用 docs/quality-analysis.md 基线快照，不重述）
-架构/技术栈：见快照（无重大变更则一句带过）。
+## 基线结论
+架构/技术栈：引用本节快照；无重大变更则不重复展开。
 
 ## 门禁结果
-| 后端 | ruff/mypy/unit/integration/8 脚本 | ✅/❌（附失败项） |
+| 后端 | Maven test/package | ✅/❌ |
 | 前端 | lint/vitest/build | ✅/❌ |
 | Android | JVM 单测 | ✅/❌ |
 
-## 增量发现（只列增量检查项，按严重度）
-### 明确问题（可复现、给出文件:行号与证据）
-### 建议（风格/耦合/测试缺口，不构成 bug）
-### 已达标（一句话确认，不要铺开）
+## 增量发现
+### 明确问题
+给出文件、行号、复现证据和影响。
+### 建议
+区分风格、耦合、复杂度和测试缺口，不把建议写成 bug。
+### 已达标
+只列与本轮检查直接相关的结论。
 
-## 建议的下一步（分组列优先级，等用户挑选；本阶段不实施）
-P0 / P1 / P2 …
+## 下一步
+按 P0/P1/P2 分组，等待用户选择后再修改。
 ```
 
-## 4. 基线快照（记录一次，后续直接引用）
+## 4. 当前基线快照
 
-> 审计日期：2026-08-16（随重大架构/技术栈变更时更新本节，并同步 AGENTS.md §1 文档地图）
+> 审计基线：2026-08-19。重大架构或技术栈变更时更新此处，并同步 [`AGENTS.md`](../AGENTS.md)。
 
-- **架构**：FastAPI 单体后端（`app/api|agent|storage|tasks|auth|llm|ingest|core` 分层，API 与任务 Worker 进程分离）+ Next.js 16 静态导出前端（zustand 状态 + 类型化事件总线 + 身份隔离缓存 API 层）+ Capacitor 7 Android 原生壳（WorkManager 相册同步）。详见 `docs/architecture.md`。
-- **技术栈**：Python 3.10+（FastAPI/uvicorn/pytest/ruff/mypy）；TypeScript 5 + React 19 + Tailwind 4 + shadcn/ui（radix 底座，2026-08-16 引入，规范 docs/frontend-design.md）+ Vitest；Java 17 + AndroidX Security Crypto / WorkManager。
-- **审计结论**：分层清晰、锁序与原子性约定完整、CI 覆盖三方门禁；无变更不重审。
+- **架构**：Java 21 + Spring Boot/WebFlux API 与独立 PostgreSQL Worker；Next.js 16 静态导出前端；Capacitor 7 Android 壳。详见 [`architecture.md`](architecture.md)。
+- **技术栈**：Java 21、Spring Modulith、LangChain4j、MyBatis-Plus、Flyway、PostgreSQL/pgvector、Tika/Tesseract；TypeScript 5、React 19、Tailwind 4、shadcn/ui、Vitest；AndroidX Security Crypto/WorkManager。
+- **当前达标项**：backend_api 已按 catalog/router 和领域 handler 分层；聊天流已拆出事件、状态和帧模块；前端文件页有请求代次保护；文件列表使用有界 top-k 和批量 metadata upsert；Agent 工具不捕获 JVM `Error`；锁序、原子发布、失败关闭和数据库集成测试已纳入门禁。
+- **主要复杂度热点**：文件存储、Agent runtime、文件页、聊天流和 Android `SyncEngine`。后续重构应以测试和行为不变量为前提，不在质量分析阶段直接改写。
+- **生产状态**：Java API/Worker 已运行，生产入口为 nginx `13311`；旧 Python source/unit 不属于运行时，旧资料只在 fixture/cutover backup 中保留。

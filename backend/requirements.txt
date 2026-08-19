@@ -1,2 +1,0 @@
-# 依赖以 pyproject.toml 为准（单一真相源）
-# 安装: pip install -e ".[dev]"   (开发) 或 pip install -e . (运行时)

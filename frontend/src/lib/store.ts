@@ -1,5 +1,10 @@
 "use client";
 import { create } from "zustand";
+import {
+  createPendingFrontendAction,
+  FrontendActionPayload,
+  PendingFrontendAction,
+} from "./frontend-actions";
 
 type Tab = "chat" | "files" | "tasks" | "settings";
 export type AuthMode = "loading" | "setup" | "login" | "ready" | "rescan"; // rescan=原生 App 待扫码授权
@@ -11,6 +16,7 @@ interface AppState {
   tab: Tab;
   sessionId: string | null;
   sessionsVersion: number; // 会话列表刷新信号
+  frontendActions: PendingFrontendAction[]; // Agent 请求浏览器执行的待处理动作
   authMode: AuthMode; // loading=启动中 / setup=首次设密 / login=登录 / ready=已认证
   setConfigured: (v: boolean) => void;
   setLoading: (v: boolean) => void;
@@ -18,6 +24,8 @@ interface AppState {
   setTab: (t: Tab) => void;
   setSessionId: (id: string | null) => void;
   bumpSessions: () => void;
+  enqueueFrontendAction: (action: FrontendActionPayload) => void;
+  consumeFrontendAction: (id: string) => void;
   setAuthMode: (m: AuthMode) => void;
 }
 
@@ -28,6 +36,7 @@ export const useAppStore = create<AppState>((set) => ({
   tab: "chat",
   sessionId: null,
   sessionsVersion: 0,
+  frontendActions: [],
   authMode: "loading",
   setConfigured: (v) => set({ configured: v }),
   setLoading: (v) => set({ loading: v }),
@@ -35,5 +44,11 @@ export const useAppStore = create<AppState>((set) => ({
   setTab: (t) => set({ tab: t }),
   setSessionId: (id) => set({ sessionId: id }),
   bumpSessions: () => set((s) => ({ sessionsVersion: s.sessionsVersion + 1 })),
+  enqueueFrontendAction: (action) => set((s) => ({
+    frontendActions: [...s.frontendActions, createPendingFrontendAction(action)],
+  })),
+  consumeFrontendAction: (id) => set((s) => ({
+    frontendActions: s.frontendActions.filter((action) => action.id !== id),
+  })),
   setAuthMode: (m) => set({ authMode: m }),
 }));

@@ -1,267 +1,100 @@
-# 🏗️ Agent Drive 架构设计 v2.0
+# Agent Drive 架构
 
-> 更新于 2026-08-14：前端迁移 Next.js 16；全站认证、设备注册表、上传去重、Capacitor 安卓原生壳落地；
-> 同日新增 SQLite WAL 持久任务系统、独立 Worker、任务中心，以及带源版本/模型指纹/原子发布的向量索引生命周期。
-> 认证设计见 docs/security.md，安卓方案见 docs/android.md。
+> 现行事实（2026-08-19）。生产后端已经是 Java 21；本文不描述已经删除的 Python 实现。迁移和切换证据见 [`java-migration-architecture.md`](java-migration-architecture.md)。
 
-## 一、架构分层（严格单向依赖）
+## 1. 运行拓扑
 
-```
-┌─────────────────────────────────────────────────┐
-│  Presentation 表现层                              │
-│  frontend (Next.js 16 · Tailwind 4 · TS · zustand · shadcn/ui)  │
-│  静态导出 out/ 由 backend 单服务托管               │
-├─────────────────────────────────────────────────┤
-│  Interface 接口层（含应用编排）                    │
-│  api/v1 (FastAPI) · schemas (Pydantic)           │
-│  职责: 协议转换 · 参数校验 · 版本管理 · 用例编排    │
-├─────────────────────────────────────────────────┤
-│  Domain 领域层                                    │
-│  agent/ (loop · tools · memory · prompt)         │
-│  tasks/ (service · registry · runner · handlers) │
-│  auth/ (密码·令牌·配对码) · devices/ (注册表)      │
-│  llm/  (providers · manager)                     │
-│  storage/ (local · upload_index)                 │
-│  ingest/ (pipeline)                               │
-│  职责: 核心业务逻辑，不依赖 HTTP/框架               │
-├─────────────────────────────────────────────────┤
-│  Infrastructure 基础设施层                        │
-│  core/ (config · logging · errors · container)   │
-│  tasks/store.py (SQLite WAL) · 本地文件系统         │
-│  职责: 技术支撑，被上层依赖                       │
-└─────────────────────────────────────────────────┘
-依赖规则: 上层依赖下层，下层绝不依赖上层；同层可依赖。
+```text
+公网 HTTPS :13311
+      │ nginx
+      ▼
+Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
+      │                              │
+      └── frontend/out               └── 结构化状态、任务、索引
+
+Java Worker ─────────────────────── PostgreSQL leases/events/outbox
+      │
+      └── owner 文件系统、Tika/Tesseract、embedding/vision provider
 ```
 
-## 二、模块职责边界
+API 和 Worker 是同一个模块化单体的两种进程模式：API 负责 HTTP、SSE、静态前端和轻量请求编排；Worker 负责租约任务、计划调度、文件抽取和索引。生产 API 不内嵌 Worker，Worker 不监听公网端口。
 
-| 模块 | 职责 | 禁止 |
+## 2. 后端模块
+
+源码位于 `backend/src/main/java/com/agentdrive`：
+
+| 模块 | 职责 | 约束 |
 |------|------|------|
-| `core/config.py` | 全部配置（env + 默认值），单例 | 业务逻辑 |
-| `core/container.py` | 依赖注入，对象组装 | 具体实现细节 |
-| `api/v1/*` | HTTP 协议层 | 业务逻辑 |
-| `schemas/*` | 请求/响应模型 | 框架耦合 |
-| `agent/` | Agent 决策循环、工具、记忆 | HTTP、存储细节 |
-| `llm/` | LLM 协议适配 | 业务逻辑 |
-| `storage/` | 文件持久化（接口+实现） | 决策逻辑 |
-| `auth/` | 密码（PBKDF2）、会话令牌（HMAC）、设备令牌、配对码（扫码即授权）、限速 | HTTP 细节（由 api 层承载） |
-| `devices/` | 设备登记/心跳（JSON 持久化） | 认证逻辑 |
-| `storage/upload_index.py` | 上传去重索引（秒传：md5→路径） | 业务决策 |
-| `ingest/` | 文本/PDF/OCR 提取、全文 sidecar、版本化向量和检索 | HTTP、任务调度 |
-| `tasks/service.py` | 受限业务入队、存储变更转索引任务、默认计划 | 任意用户代码执行 |
-| `tasks/store.py` | SQLite schema、状态迁移、租约、事件、计划、Worker 心跳 | 文件/LLM 业务逻辑 |
-| `tasks/runner.py` / `handlers.py` | lane 并发、重试/取消、内置任务执行 | HTTP 协议 |
+| `api` | WebFlux controller、SSE、上传下载、静态资源和 SPA fallback | 处理协议/鉴权入口，不直接拼 SQL 或决定领域规则 |
+| `agent` | LangChain4j runtime、tool catalog、确认、replay、reasoning | owner、凭据和权限由运行时注入，不暴露给模型 |
+| `auth` | 用户、Cookie/Bearer session、设备令牌、配对码、限速 | 认证数据异常失败关闭 |
+| `config` | LLM、embedding、vision 配置和模型探测 | API key 加密存储，只返回掩码 |
+| `files` / `storage` | 文件用例、metadata、revision、回收站、路径安全、原子发布 | 公共路径是 owner 内相对 POSIX 路径 |
+| `devices` | 设备登记、撤销、心跳和同步状态 | 所有查询按 owner 限定 |
+| `tasks` | 状态机、租约、事件、schedule、outbox 和 Worker handler | PostgreSQL 是任务唯一真相源 |
+| `index` | Tika/Tesseract 抽取、全文、chunk、embedding、vision | 只在 Worker 执行，不进入上传请求路径 |
+| `infrastructure` | MyBatis、Flyway、PostgreSQL、HTTP client、加密和启动适配器 | 为上层提供实现，不反向承载业务决策 |
 
-## 三、关键设计决策
+跨模块写操作通过 application service、PostgreSQL 事务和 owner-scoped outbox 连接。Spring Modulith 用于验证模块依赖，部署形态仍是单体 API + 单体 Worker。
 
-### 3.1 依赖注入（core/container.py）
-所有服务通过 Container 组装，显式声明依赖，便于测试替身：
-```python
-container = Container(settings)
-agent_service = container.agent_factory()
-```
-禁止：模块级全局单例、循环导入、隐式状态。
+## 3. 状态所有权
 
-### 3.2 配置管理（core/config.py）
-- `Settings` (pydantic-settings)：env 优先，`.env` 支持，默认值兜底
-- 敏感信息（API Key）只存 `system/agent-config.json`（agent 自管理），不进 env
-- 环境变量统一前缀 `AGENT_DRIVE_`，例如 `AGENT_DRIVE_APP_ENV=dev|test|prod`
+PostgreSQL 保存所有结构化运行状态，包括：
 
-### 3.3 日志系统（core/logging.py）
+- `users`、`sessions`、`devices`、`pairing_codes`；
+- `chat_sessions`、`chat_messages`、`chat_tool_replays`；
+- `files`、`file_revisions`、`trash_entries`、`upload_dedup`；
+- `tasks`、`task_events`、`task_schedules`、`task_workers`、`outbox_events`；
+- `documents`、`document_chunks`、embedding metadata、`agent_preferences` 和 provider 配置。
 
-**统一出口**：`setup_logging()`（Container 初始化时调用，幂等）在 root 挂唯一 handler，
-所有 logger（agent_drive.*、uvicorn.*、第三方库）共用同一出口：
-- prod：单行 JSON `{ts, level, logger, at, msg, rid, data, exc}`（含异常堆栈）；
-dev/test：可读文本（含 rid）
-- uvicorn 在 import 前已配置私有 handler，setup_logging 会清掉它们统一走 root；
-`uvicorn.access` 同时断开传播（本机 uvicorn 用 hasHandlers() 判断是否自记访问日志，
-会沿父链看到 root handler 而恒为 True），HTTP 访问日志唯一来源是
-`AccessLogMiddleware`（最外层纯 ASGI 中间件）：真实 IP（X-Real-IP）/请求 ID/状态码/
-耗时；health 探活只记 DEBUG
-- query string 不进日志（设备令牌走 `?token=` 参数，防泄入日志）
+实际二进制文件以及用户可见的 `AGENT.md`、`USER.md`、`MEMORY.md` 仍在 owner-scoped 本地文件系统。`legacy-python-data/` 和服务器 `/opt/agent-drive-java/backups/` 只用于人工恢复或一次性迁移，不进入服务运行路径；旧 SQLite、JSON auth/device/upload index 不是生产真相源。
 
-**日志命名约定**：业务 logger 一律 `logging.getLogger("agent_drive.<子系统>")`
-（如 agent_drive.tasks / agent_drive.api.files / agent_drive.http）；结构化字段走
-`extra={"data": {...}}`；文本按敏感键名（api_key/password/token/…）自动脱敏
+## 4. API 与 Agent 契约
 
-**审计日志**（system/audit.log）：JSONL 追加（ts/event/result），只记 auth 与 Agent
-操作事件；flock 多进程安全（API + Worker 并发写）+ fsync；1MB 轮转保留 5 份
+- 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
+- Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
+- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件。
+- 模型只看到稳定的 `backend_api`、`frontend_api` 及 plan/skills 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
+- 非 red 工具按 `session_id + tool + arguments` 使用持久 replay；red 写操作使用签名确认和一次性 nonce。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
+- provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
 
-**查询**：服务器上 `scripts/logs.sh api|worker|audit`（journalctl + 内置过滤器，
-支持 -l 级别/-m 关键词/-f 跟踪）
+## 5. 文件、上传与索引
 
-### 3.4 异常体系（core/errors.py）
-```
-AppError (基类)
-├── ConfigError      # 配置缺失/非法
-├── AuthError        # 凭据问题
-├── NotFoundError    # 文件/会话不存在
-├── PermissionError  # 越权/越界
-├── ToolError        # 工具执行失败（结构化，Agent 可读）
-└── LLMError         # LLM 调用失败（含类型：timeout/protocol/quota）
-```
-API 层统一转换为 HTTP 响应；Agent 层转换为工具结果。
+文件 mutation 使用 owner 目录、组件级路径校验、symlink 拒绝、`.storage.lock`、0600 staging、fsync 和原子 link/replace。上传由服务端流式复算 MD5；`noclobber` 原子发布，不使用“先 exists 再写”的 TOCTOU 流程。
 
-### 3.5 LLM 抽象（llm/）
-- `base.py`: Provider 协议（chat/test_connection/list_models——设置页模型列表探测用）
-- `providers/`: 每协议一个文件，互不感知
-- `manager.py`: 配置读写 + 工厂 + 测试
-- embedding provider 为独立工厂；任务执行前可热刷新配置，模型切换会改变索引指纹
+文件列表的 name 搜索最多保留 1000 个 top-k 候选，并只批量同步缺失或变化的 metadata。semantic 搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，按文件去重并返回最佳 `search_score/search_snippet`。
 
-### 3.6 存储抽象（storage/）
-- `base.py`: 仅历史说明 docstring（Storage 协议抽象已移除——全仓无消费者，勿重建死抽象）
-- `local.py`: 本地文件系统实现。路径拒绝穿越和任一 symlink 组件；临时文件 0600，发布用 `dirfd + O_NOFOLLOW + os.replace/os.link`，父组件校验与写入不再有 symlink TOCTOU；复合写由进程内锁 + Linux `flock` 串行化
-- 覆盖/创建/文本追加均先写临时文件、`fsync` 后原子发布；文件以 `link/replace` 为可见性提交点，提交后的目录 `fsync` 或临时链接清理失败不会把已发布内容伪报为失败。追加锁覆盖“读旧值→追加→替换”全过程，避免并发追加丢内容。目录复制先在隐藏 staging 目录完整构建并 fsync，再用 Linux `renameat2` 原子 no-replace/exchange 一次发布；不支持原子系统调用时仅在 mutation lock 内做 no-replace/可回滚重命名（协作进程间安全，对不遵守 flock 的外部写入者仍有竞态窗口；生产部署为 Linux renameat2），并在挪动旧目标前 durable 写 recovery marker：重启会恢复尚未提交的旧目录或清理已提交后的 backup。提交点后的清理失败不会伪报复制失败；无 marker 的 `.copy-old.*` 因无法证明可删而保守保留
-- `.index`、`.trash`、`.storage.lock` 和在途 `.upload/.copy` 命名空间在公共 `resolve`/文件 API 层直接拒绝，仅内部流程可显式访问
-- 回收站 `.trash` 的输入路径和 metadata 内路径都重新校验；每次删除生成唯一 `trash_id`，同一路径多个历史版本可独立恢复；元数据也原子发布。恢复 API 正式使用 `trash_id`，暂兼容旧 `path`；孤儿 metadata 不展示并由清空操作回收
-- `upload_index.py`: 秒传去重索引（md5→path，双向映射）；sidecar `0600` 文件锁下每次 reload→modify→fsync→replace，支持 Linux 多进程实例。只有服务端实算 hash 的 `verified` 条目可用于免传，且必须绑定发布 revision，外部/并发覆盖后 lookup 自动失效
-- 索引生命周期自动同步：`container` 组装时 `storage.attach_index()` 反向注入，rename/move/删除/回收站/覆盖写等内容变更自动递归 `forget_path` 失效对应条目；存储与索引统一采用 storage→index 锁序，发布覆盖期间不会暴露陈旧秒传命中。上传发布成功后的 `record` 登记是优化项，登记失败只记 warning 不使上传报错（避免客户端重试经 noclobber 落成重复照片）；verified 查询靠 exists+revision 自愈陈旧条目
-- 搜索索引生命周期：`storage.attach_change_listener(tasks.handle_storage_change)` 在内容变更后同步失效旧 sidecar，再按文件/目录入队增量索引或批量重建；内部命名空间和 staging 永不触发递归任务
-- 业务代码直接依赖 `local.LocalStorage`（当前唯一实现，由 container 统一组装）
+写入、移动、复制或删除先使旧全文/向量失效，再由 outbox 入队 `index.file`。Worker 负责 Tika/Tesseract 抽取、chunk 和 embedding；单文件抽取失败标记为 skipped，不阻断全量 rebuild。`index.vision` 在写入图片描述前校验 source revision，避免旧结果覆盖新文件。
 
-### 3.7 Agent 通用后端工具（agent/tools/）
-- 运行时只向 LLM 注册一个业务工具 `backend_api`，另保留 `plan`/`skills` 这类 Agent 辅助工具；文件、配置、任务、设备、会话等能力不再逐个暴露为 Agent 工具。
-- `backend_api` 从当前 FastAPI 应用的 `openapi()` 构建 HTTP 目录：`action=discover` 按意图搜索最多 6 个紧凑 operation，返回 `METHOD /api/v1/path` 标识、参数和请求体 Schema；`action=call` 只能调用目录中的 operation。
-- 尚未暴露 HTTP 路由的既有内部能力由同一目录以 `INTERNAL name` 兼容 operation 提供，仍只能调用预先登记的函数；模型看不到兼容注册表，也不能访问任意 Python 入口。
-- HTTP 目录只允许 `/api/v1/*` 业务路由，排除认证、聊天递归和 health；不接受模型提供的任意 URL、Authorization、Cookie 或其他请求头。FastAPI 本身继续负责 Pydantic/参数校验。
-- 聊天请求只复制当前请求的 Cookie/Bearer 到进程内 ASGI 调用，凭据不进入工具 Schema、提示词、operation 结果或模型上下文；Worker 使用仅存在于进程内的随机 gateway token。
-- 工具风险按实际 operation 动态计算：GET 与模型探测为 green，低风险探测为 yellow，写入/删除默认 red；`AgentLoop` 在确认前按调用参数计算等级，red 仍走签名确认和确定性重放。
-- 返回值统一 JSON 化、密钥脱敏、二进制响应只返回元数据；响应和 discovery 受 Agent 输出预算限制。旧 `files.py`/`system.py` 等实现仅作为无 HTTP 路由能力的隐藏兼容适配，不会以独立工具注册给模型。
+## 6. 任务与 Worker
 
-### 3.8 持久后台任务（tasks/）
+任务通过 PostgreSQL 状态机和租约运行：
 
-```
-API / 文件写入 / 定时计划
-          │ 受限 TaskService 入队
-          ▼
- system/tasks.sqlite3 (WAL)
- jobs + job_events + schedules + workers
-          │ claim(lane, lease)
-          ▼
- 独立 Worker ──▶ handler ──▶ 进度/结果/重试
-```
+- `FOR UPDATE SKIP LOCKED` 领取 queued/retry_wait 任务；lease 和 heartbeat 防止 Worker 崩溃后永久卡住。
+- partial unique index 保证活跃 dedupe；相同进度不重复写事件；API 只统计顶层任务，子任务进度汇总到父任务。
+- `outbox_events` 可靠投递文件变更和索引任务；Worker 每 2 秒刷新 `task_workers`，API 以最近 10 秒心跳判断在线。
+- 任务事件从尾部订阅，不回放全库；终态历史保留最近记录并由维护任务清理过期数据。
 
-- **状态机**：`queued → running → succeeded|failed|cancelled`，瞬态错误进入 `retry_wait`；运行中取消先到 `cancelling`，由处理器协作检查
-- **可靠领取**：`BEGIN IMMEDIATE` 串行化 claim；Worker 持续刷新任务租约和自身在线心跳，空闲等待兼容 Python 3.10 的 `asyncio.TimeoutError`。进程崩溃后租约过期自动恢复，达到 `max_attempts` 则失败，不会无限循环
-- **去重**：活跃任务的 `dedupe_key` 使用 SQLite 部分唯一索引；索引键包含路径、源版本和 embedding 指纹，同一版本只执行一次
-- **lane**：`index`、`orchestration`、`maintenance`、`automation` 独立并发；批量重建是 orchestration 父任务，拆成 `index.file` 子任务，避免父任务占住索引执行位
-- **总览与覆盖率**：列表和状态计数只展示顶层任务，批量子任务汇总到父任务进度，避免重复计数；索引覆盖率需要扫描文件树，API 缓存 15 秒以限制大网盘上的刷新开销
-- **事件与保留**：相同进度不重复落事件；SSE 无游标连接从当前尾部开始。每日维护保留至少最近 2000 条终态任务，并清理超过 30 天的旧历史；仍保留子任务时不会先删父任务，避免子任务漂成顶层记录
-- **运行形态**：dev 默认 API 内嵌 Worker；prod API 禁用内嵌执行，由 `python -m app.tasks.worker` / `agent-drive-worker.service` 单独运行
+当前任务类型包括 `index.file`、`index.embed`、`index.vision`、`index.rebuild`、`index.cleanup`、`maintenance.daily` 和 `automation.run`。HTTP 请求只入队，不串行执行 OCR、embedding 或 vision。
 
-### 3.9 向量索引一致性（ingest/）
+## 7. 前端与 Android
 
-- 全文元数据保存 `source_revision(size:mtime_ns)` 与 `extractor_version`；向量元数据再保存 provider/model/base URL 生成的 fingerprint、维度与 `chunk_version`
-- 文档向量调用 `retrieval.passage`，查询向量调用 `retrieval.query`；模型或切块策略变化后旧向量自动失效
-- `.npy` 与 `.vector.json` 均通过同目录临时文件 + `os.replace` 原子发布；检索必须同时通过源版本、指纹、维度和块数检查
-- 上传请求只写文件并入队；PDF/OCR 提取在线程池执行。重命名、移动、删除、覆盖会先失效旧索引，读路径不会返回陈旧向量
+Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
-### 3.10 版本化 API
-- `/api/v1/*`，版本路由聚合在 `api/v1/router.py`
-- 错误语义化：存储层异常映射 404/409/403、裸 OSError（磁盘/IO 故障）映射 500 重试（files.py `_friendly`），未匹配的 `/api` 路径返回 JSON 404（SPA fallback 不吐 HTML）；客户端把永久 4xx 当可跳过照片，服务端瞬时故障绝不能落入 4xx
-- 上传端点：multipart 文件按 1MiB 分块流入数据根内 0600 临时文件，同时实算 MD5 和执行 413 限幅；声明 MD5 不一致即拒绝并清理。成功后原子发布、条件写 verified/revision 索引并返回后台索引任务 ID，不在请求事件循环执行 ingest
-- `GET /files/dedupe?md5=...` 是无副作用的 verified-only 免传预检；未命中 404。Android 先预检，真正上传仍由服务端复算，永不信任客户端 hash
-- 任务端点：`/tasks` 列表/详情/SSE，受限的重建和清理命令，以及取消/重试；不提供任意 task type/payload 创建接口
-- 破坏性变更升 v2，不破坏客户端
+文件页的列表、详情、全文和索引刷新使用独立请求代次与当前路径校验；ChatPanel 保持常驻挂载，`useChatStream` 负责 Abort、流代次和 80ms 帧节流。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 
-## 四、目录结构（目标态）
+Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
 
-```
-backend/
-├── app/
-│   ├── main.py              # 入口：组装 Container + 启动
-│   ├── core/                # 基础设施
-│   │   ├── config.py  logging.py  errors.py  container.py
-│   ├── api/
-│   │   ├── v1/              # 版本化路由
-│   │   │   ├── router.py  auth.py  chat.py  config.py  files.py
-│   │   │   ├── sessions.py  automation.py  devices.py  tasks.py
-│   │   └── deps.py          # 依赖获取 + get_owner 统一鉴权
-│   ├── schemas/             # Pydantic 模型
-│   │   ├── chat.py  config.py  files.py  sessions.py
-│   ├── agent/               # 领域：Agent（单一职责拆分）
-│   │   ├── loop.py           #   编排引擎（_execute 统一生成器）
-│   │   ├── prompt.py         #   提示词工程
-│   │   ├── context.py        #   上下文管理（token 预算截断）
-│   │   ├── confirm.py        #   高风险操作确认判定
-│   │   ├── router.py         #   意图路由（闲聊/任务；任务会话短消息续接由 loop._execute 按会话 last_routed 裁决）
-│   │   ├── skills.py         #   技能包注册表
-│   │   ├── tools/  registry.py  files.py  system.py  analytics.py
-│   │   ├── memory/  preferences.py  sessions.py
-│   │   ├── onboarding.py  prompt.py  router.py  skills.py
-│   │   ├── scheduler.py        # M3: 规则自动执行(每天 03:30)
-│   │   └── tools/  files.py  system.py  analytics.py
-│   │               plan.py  memory.py  registry.py
-│   ├── auth/               # 认证（纯标准库，零新依赖）
-│   │   └── store.py          #   密码/会话令牌/设备令牌/配对码/限速
-│   ├── devices/             # 设备注册表 registry.py
-│   ├── llm/
-│   │   ├── base.py  manager.py  embeddings.py
-│   │   └── providers/  openai_compat.py  responses.py  anthropic.py
-│   ├── storage/  base.py  local.py（原子写+符号链接拒绝） upload_index.py（秒传去重）
-│   ├── ingest/  pipeline.py    # 提取 + 全文/版本化向量 sidecar
-│   └── tasks/
-│   │   ├── models.py  store.py  registry.py  runner.py
-│   │   └── service.py  handlers.py  worker.py
-├── tests/
-│   ├── conftest.py
-│   ├── unit/  test_agent test_critic test_reliability test_retry
-│   │          test_compress test_write_tools test_memory
-│   │          test_bugfixes test_ingest_m2 test_auth
-│   │          test_devices test_upload_index test_storage_safety test_tasks
-│   └── integration/  test_api.py  test_tasks_api.py
-├── scripts/  mock_llm.py  benchmark_real.py  backup.sh
-├── system/  agent-config.json  tasks.sqlite3（运行时，gitignored）
-├── data/    文件工作区 + Agent/(AGENT.md/USER.md/MEMORY.md/notes)
-├── pyproject.toml  .env.example  Dockerfile
-└── requirements.txt（doc-only，pyproject 为唯一真相源）
+## 8. 生产运行与验证
 
-frontend/（Next.js 16 App Router + TS + Tailwind v4 + shadcn/ui，设计规范见 docs/frontend-design.md）
-├── src/
-│   ├── app/  layout.tsx  page.tsx  globals.css(@theme 设计 token)
-│   ├── components/
-│   │   ├── ui/  shadcn/ui 组件库（button/input/select/combobox/card/badge/switch/skeleton/alert/separator）
-│   │   ├── chat/  ChatPanel.tsx  ToolStep.tsx  ContextBar.tsx  PlanCard.tsx
-│   │   ├── files/  FilePage.tsx  FilePanel.tsx
-│   │   ├── sessions/  SessionList.tsx
-│   │   ├── settings/  SettingsPage.tsx  ConnectAppCard.tsx
-│   │   │            DevicesCard.tsx  PhotoSyncCard.tsx
-│   │   ├── tasks/  TaskPage.tsx
-│   │   ├── onboarding/  Onboarding.tsx（仅 web 渲染）
-│   │   ├── auth/  LoginCard.tsx  RescanCard.tsx  ServerNotReadyCard.tsx
-│   │   ├── PullToRefresh.tsx（全局下拉刷新）
-│   │   └── ToastStack.tsx
-│   ├── lib/  store.ts(zustand)  events.ts(事件总线常量)
-│   │         format.ts(工具函数)  api/(client/chat/files/config/sessions/devices/auth/tasks)
-│   │         native/(server-config photo-sync 插件桥)
-│   └── （vitest 测试与源码同目录）
-├── out/  next build 静态导出（backend 托管）
-├── android/  Capacitor 7 原生壳（扫码配对/相册同步/设备令牌，见 docs/android.md）
-└── next.config.ts(output:'export')  vitest.config.mts  capacitor.config.ts
-```
+- API：`deploy/agent-drive-java.service`，`127.0.0.1:8000`，`--app.mode=api`。
+- Worker：`deploy/agent-drive-java-worker.service`，`--app.mode=worker`，无 HTTP 监听。
+- artifact：`/opt/agent-drive-java/agent-drive-backend.jar`；数据根：`/opt/agent-drive-java/data`。
+- 密钥：`/etc/agent-drive-java/java.env`，权限 0600；外部 HTTP(S) 代理来自 `/etc/agent-drive/proxy.env`，systemd 清除 SOCKS 环境变量。
+- 公网：nginx `13311` → API `8000`；生产部署优先使用 `scripts/deploy.ps1`，它负责构建、原子替换、unit 校验、API → Worker 重启和 health 检查。
 
-生产部署为两个 systemd 进程：`agent-drive.service` 托管 uvicorn API + 静态 out/，
-`agent-drive-worker.service` 执行持久任务且不监听端口。两者读取 0600 的
-`/etc/agent-drive/proxy.env`，仅使用 HTTP(S) proxy 并清除 `ALL_PROXY`；nginx 13311 仍是唯一公网入口。
-`scripts/backup.sh` 对任务数据库做 SQLite 在线一致性快照后再归档。docker compose 仅作备用开发形态。
+详细认证和暴露面规则见 [`security.md`](security.md)，生产切换证据见 [`java-migration-architecture.md`](java-migration-architecture.md)。
 
-## 五、扩展点与演进状态（2026-08-14）
+## 9. 当前边界
 
-| 扩展 | 状态 | 接入点 |
-|------|------|--------|
-| 语义搜索 | ✅ 已落地 | ingest/pipeline + llm/embeddings（Jina 云）+ 带版本/指纹的原子 `.index` sidecar（规模化迁 pgvector） |
-| 持久任务系统 | ✅ 已落地 | tasks/ SQLite WAL、独立 Worker、租约/心跳/恢复、去重、取消/重试、父子任务、定时计划、任务中心 |
-| 规则自动执行 | ✅ 已落地 | agent/scheduler.py 入队 automation.run + /automation/latest 主动汇报 |
-| 文件理解 | ✅ 已落地 | M2a 摄入(PDF/OCR/文本) + M2b 语义 + M2c 问答 |
-| 回收站 | ✅ 已落地 | storage .trash(30天自动清) + list_trash/restore_file/empty_trash 工具 + /files/trash API |
-| 影音在线播放 | ✅ 已落地 | preview_kind video/audio + raw 端点 media_type + 前端 <video>/<audio> |
-| 分享到网盘 | ✅ 已落地 | Web Share Target(manifest share_target) + /files/upload-share 端点 |
-| 文件页人工操作 | ✅ 已落地 | /files/rename|move|copy|delete|mkdir API + 前端工具栏/回收站面板 |
-| 流式输出与思考过程 | ✅ 已落地 | SSE `/chat/stream` + `text/reasoning/tool_*` 事件 + 前端 `chatStream/useChatStream`；思考等级 `auto/low/medium/high` 透传至 Provider，reasoning 默认收叠并可恢复 |
-| 向量库迁移 | 待规模需求 | db/(pgvector, compose 已备) |
-| 音视频转写 | 未做（资源评估后） | ingest 加 whisper 解析器 |
-| **认证（单用户）** | ✅ 已落地 | auth/store.py（纯标准库 PBKDF2/HMAC）+ api/v1/auth.py + deps.get_owner 统一鉴权（Cookie/Bearer/?token=）；扫码配对免密，详见 docs/security.md |
-| 多用户 | 未做（个人项目） | 若需要：auth 层扩展 user 维度 |
-| **安卓原生壳** | ✅ 已落地 | frontend/android（Capacitor 7）：扫码配对、相册自动同步（WorkManager+秒传去重+整秒检查点+进度可视）、设备心跳、下拉刷新，详见 docs/android.md |
-| **上传去重（秒传）** | ✅ 已落地 | `/files/dedupe` verified-only 预检 + `/files/upload` 服务端流式实算 MD5；索引绑定文件 revision 并随内容变更自动失效 |
-| S3 存储 | 未做 | 若做：新增实现类并在 container 切换组装点（业务直接依赖 LocalStorage，无协议抽象） |
+当前只支持 owner-scoped 本地文件系统，不提供 S3；认证模型面向个人单用户，虽已按 owner 设计数据边界；没有 iOS 客户端和音视频转写。上述能力不应在文档或 Agent 契约中被描述为已实现。

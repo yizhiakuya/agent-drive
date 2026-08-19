@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: agent-drive
+  profiles:
+    default: api
+  flyway:
+    enabled: false
+  datasource:
+    url: ${AGENT_DRIVE_DATABASE_URL:jdbc:postgresql://127.0.0.1:5432/agent_drive}
+    username: ${AGENT_DRIVE_DATABASE_USERNAME:agent_drive}
+    password: ${AGENT_DRIVE_DATABASE_PASSWORD:}
+
+server:
+  port: ${PORT:8000}
+
+logging:
+  level:
+    com.agentdrive.api.chat: ${AGENT_DRIVE_CHAT_LOG_LEVEL:INFO}
+    com.agentdrive.agent: ${AGENT_DRIVE_AGENT_LOG_LEVEL:INFO}
+
+app:
+  mode: ${AGENT_DRIVE_MODE:api}
+  cookie-secure: ${AGENT_DRIVE_COOKIE_SECURE:false}
+  confirmation-key: ${AGENT_DRIVE_CONFIRMATION_KEY:}
+  llm-config-encryption-key: ${AGENT_DRIVE_LLM_CONFIG_KEY:}
+  system-prompt: ${AGENT_DRIVE_SYSTEM_PROMPT:}
+  max-chat-steps: ${AGENT_DRIVE_MAX_CHAT_STEPS:100}
+  data-dir: ${AGENT_DRIVE_DATA_DIR:data}
+  frontend-dir: ${AGENT_DRIVE_FRONTEND_DIR:../frontend/out}
+  max-upload-mb: ${AGENT_DRIVE_MAX_UPLOAD_MB:300}

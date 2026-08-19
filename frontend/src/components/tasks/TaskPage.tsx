@@ -43,6 +43,8 @@ const FILTER_STATUS: Record<Filter, string> = {
 const TASK_LABELS: Record<string, string> = {
   "index.file": "文件索引",
   "index.rebuild": "重建搜索索引",
+  "index.embed": "文件向量化",
+  "index.vision": "图片视觉索引",
   "index.cleanup": "清理失效索引",
   "maintenance.daily": "系统维护",
   "automation.run": "自动化规则",

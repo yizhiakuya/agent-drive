@@ -65,4 +65,30 @@ export const rebuildIndex = (force: boolean) =>
     body: JSON.stringify({ force }),
   });
 
+/**
+ * 为指定文件排入全文抽取和文本 embedding 任务。
+ *
+ * @param files owner 根目录下的相对文件路径列表。
+ * @param force 是否忽略已有的当前版本向量并重新生成。
+ * @returns 是否创建了新任务及任务记录；已有相同活跃任务时 queued 为 false。
+ */
+export const enqueueEmbedIndex = (files: string[], force = false) =>
+  api<{ queued: boolean; task: TaskRecord }>("/tasks/embed-index", {
+    method: "POST",
+    body: JSON.stringify({ files, force }),
+  });
+
+/**
+ * 为指定图片排入视觉描述、全文索引和 embedding 任务。
+ *
+ * @param files owner 根目录下的相对图片路径列表。
+ * @param force 是否忽略已有的当前视觉模型向量并重新识别。
+ * @returns 是否创建了新任务及任务记录；视觉识别在 Worker 中异步执行。
+ */
+export const enqueueVisionIndex = (files: string[], force = false) =>
+  api<{ queued: boolean; task: TaskRecord }>("/tasks/vision-index", {
+    method: "POST",
+    body: JSON.stringify({ files, force }),
+  });
+
 export const taskEventsUrl = () => apiPath("/tasks/events");

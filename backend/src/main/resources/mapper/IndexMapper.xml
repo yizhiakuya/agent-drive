@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.IndexMapper">
+    <select id="selectFile" resultType="map">
+        SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+          AND is_dir = false
+    </select>
+
+    <select id="selectFiles" resultType="map">
+        SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND is_dir = false
+          AND (#{prefix, jdbcType=VARCHAR} IS NULL OR path = #{prefix, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+        ORDER BY path ASC
+    </select>
+
+    <select id="semanticSearch" resultType="map">
+        WITH ranked AS (
+            SELECT f.id::text AS file_id,
+                   f.path,
+                   f.size_bytes AS size,
+                   EXTRACT(EPOCH FROM f.updated_at) AS mtime,
+                   c.chunk_index,
+                   LEFT(c.content, 4000) AS search_snippet,
+                   (1 - (c.embedding &lt;=&gt; CAST(#{vector, jdbcType=LONGVARCHAR} AS vector)))::double precision AS search_score,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY f.id
+                       ORDER BY c.embedding &lt;=&gt; CAST(#{vector, jdbcType=LONGVARCHAR} AS vector), c.chunk_index ASC
+                   ) AS file_rank
+            FROM document_chunks c
+            JOIN documents d ON d.id = c.document_id
+            JOIN files f ON f.id = d.file_id
+            WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND f.is_dir = false
+              AND d.source_revision = f.revision
+              AND c.source_revision = d.source_revision
+              AND c.embedding IS NOT NULL
+              AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
+              <if test="prefix != null and prefix != ''">
+              AND (f.path = #{prefix, jdbcType=VARCHAR}
+                   OR f.path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+              </if>
+        )
+        SELECT file_id, path, size, mtime, chunk_index, search_snippet, search_score
+        FROM ranked
+        WHERE file_rank = 1
+        ORDER BY search_score DESC, lower(path) ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="upsertDocument" resultType="map">
+        INSERT INTO documents(file_id, source_revision, extractor_version, content)
+        SELECT f.id, #{sourceRevision}, #{extractorVersion, jdbcType=VARCHAR}, #{content, jdbcType=LONGVARCHAR}
+        FROM files f
+        WHERE f.id = CAST(#{fileId, jdbcType=VARCHAR} AS uuid)
+          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ON CONFLICT (file_id, source_revision, extractor_version) DO UPDATE SET
+            content = EXCLUDED.content,
+            updated_at = now()
+        RETURNING id::text AS id
+    </select>
+
+    <delete id="deleteChunks">
+        DELETE FROM document_chunks
+        WHERE document_id = CAST(#{documentId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+
+    <delete id="deleteOtherDocuments">
+        DELETE FROM documents d
+        USING files f
+        WHERE d.file_id = f.id
+          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND d.file_id = CAST(#{fileId, jdbcType=VARCHAR} AS uuid)
+          AND (d.source_revision &lt;&gt; #{sourceRevision}
+               OR d.extractor_version &lt;&gt; #{extractorVersion, jdbcType=VARCHAR})
+    </delete>
+
+    <insert id="insertChunk">
+        INSERT INTO document_chunks(document_id, chunk_index, source_revision, chunk_version, content)
+        VALUES (CAST(#{documentId, jdbcType=VARCHAR} AS uuid), #{chunkIndex}, #{sourceRevision},
+                #{chunkVersion, jdbcType=VARCHAR}, #{content, jdbcType=LONGVARCHAR})
+        ON CONFLICT (document_id, chunk_index, chunk_version) DO UPDATE SET
+            source_revision = EXCLUDED.source_revision,
+            content = EXCLUDED.content,
+            embedding = NULL,
+            embedding_fingerprint = NULL
+    </insert>
+
+    <delete id="cleanup">
+        DELETE FROM documents d
+        USING files f
+        WHERE d.file_id = f.id
+          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND d.source_revision &lt;&gt; f.revision
+    </delete>
+
+    <select id="selectChunks" resultType="map">
+        SELECT c.id::text AS id, c.content, c.source_revision, c.chunk_version,
+               d.id::text AS document_id, f.path
+        FROM document_chunks c
+        JOIN documents d ON d.id = c.document_id
+        JOIN files f ON f.id = d.file_id
+        WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND d.source_revision = f.revision
+          AND c.source_revision = d.source_revision
+          <if test="paths != null and paths.size() > 0">
+          AND f.path IN
+          <foreach collection="paths" item="path" open="(" separator="," close=")">
+              #{path, jdbcType=VARCHAR}
+          </foreach>
+          </if>
+          AND (#{fingerprint, jdbcType=VARCHAR} IS NULL
+               OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR})
+        ORDER BY c.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="clearEmbeddings">
+        UPDATE document_chunks c
+        SET embedding = NULL,
+            embedding_fingerprint = NULL
+        FROM documents d
+        JOIN files f ON f.id = d.file_id
+        WHERE c.document_id = d.id
+          AND d.source_revision = f.revision
+          AND c.source_revision = d.source_revision
+          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          <if test="paths != null and paths.size() > 0">
+          AND f.path IN
+          <foreach collection="paths" item="path" open="(" separator="," close=")">
+              #{path, jdbcType=VARCHAR}
+          </foreach>
+          </if>
+    </update>
+
+    <update id="updateEmbedding">
+        UPDATE document_chunks c
+        SET embedding = CAST(#{vector, jdbcType=LONGVARCHAR} AS vector),
+            embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
+        FROM documents d
+        JOIN files f ON f.id = d.file_id
+        WHERE c.id = CAST(#{chunkId, jdbcType=VARCHAR} AS uuid)
+          AND c.document_id = d.id
+          AND d.source_revision = f.revision
+          AND c.source_revision = d.source_revision
+          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </update>
+</mapper>

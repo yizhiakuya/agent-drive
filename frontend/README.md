@@ -1,50 +1,57 @@
-# frontend — Agent Drive 前端（Next.js 16）
+# Agent Drive 前端
 
-> Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 + shadcn/ui + zustand + Capacitor 7
-> UI 规范见 docs/frontend-design.md；新控件一律 components/ui/，禁止内联自造。
-> 静态导出 `out/`，由 backend（FastAPI）单服务托管；同时打包进安卓 App（Capacitor 原生壳）。
+Next.js 16 App Router + React 19 + TypeScript 5 + Tailwind 4 + shadcn/ui + zustand + Capacitor 7。
 
-## 开发
+生产使用 Next 静态导出 `out/`，由 Java WebFlux API 托管；Android 壳通过 Capacitor 复用同一份 web 资源。分层和请求生命周期见 [`docs/frontend-architecture.md`](../docs/frontend-architecture.md)，UI 约定见 [`docs/frontend-design.md`](../docs/frontend-design.md)。
+
+## 开发与验证
 
 ```bash
 npm install
-npm run dev                    # next dev :3000（默认同源 /api/v1）
-NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 npm run dev   # 直连后端开发
+npm run dev -- -p 3333
 
-npm run build                  # 静态导出 out/（backend 托管）
-npm test                       # vitest（SSE、API 身份/缓存竞态、上传与组件）
-npx cap sync android           # 拷贝 web 资源进安卓工程（frontend/android）
+npm run lint
+npm test
+npm run build
+npm run verify:build
 ```
 
-## 结构
+默认开发页面使用同源 `/api/v1`。直连本地 API 时设置 `NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1`。`npm run build` 输出静态 `out/`，不要手工删除 `.well-known/assetlinks.json`。
 
+Android 资源同步：
+
+```bash
+npx cap sync android
+cd android
+gradlew.bat testDebugUnitTest
 ```
+
+## 当前结构
+
+```text
 src/
-├── app/                # layout（主题/安全区）+ page（认证门控/三 tab/下拉刷新）
+├── app/              # layout、viewport、认证门控和主页面
 ├── components/
-│   ├── ui/             # shadcn/ui 组件库（button/input/select/combobox/card/badge/switch/skeleton/alert/separator）
-│   ├── chat/           # 对话面板 + 工具轨迹/计划/上下文条
-│   ├── files/          # 文件页/侧栏面板
-│   ├── sessions/       # 会话列表
-│   ├── settings/       # LLM/向量化(仅 web)、连接 App、设备列表、相册同步(仅 App)
-│   ├── onboarding/     # AI 配置向导（仅 web 显示）
-│   ├── auth/           # 登录/设密、重扫码、服务器未就绪提示
-│   └── PullToRefresh   # 全局下拉刷新
+│   ├── ui/           # shadcn/ui 基础控件
+│   ├── auth/         # 登录、设密、重扫码
+│   ├── chat/         # ChatPanel、工具轨迹、SSE 流状态
+│   ├── files/        # 文件页、预览、详情、回收站
+│   ├── sessions/     # 会话列表
+│   ├── settings/     # provider、设备、同步设置
+│   └── tasks/        # 任务中心
 └── lib/
-    ├── api/            # client(基座+鉴权) chat files config sessions devices auth
-    ├── native/         # Capacitor 插件桥：server-config / photo-sync
-    └── store events format
+    ├── api/          # 类型化 API client
+    ├── native/       # ServerConfig、PhotoSync 插件桥
+    ├── store.ts      # zustand 状态和 frontend action 队列
+    ├── events.ts     # 类型化事件总线
+    └── format.ts     # 展示格式化
 ```
 
-## 鉴权约定
+## 关键约定
 
-- web/PWA：HttpOnly Cookie（登录/设密页）；普通 API、上传与 Chat SSE 的 401 都通过 `EV.unauthorized` 全局回登录页；旧身份迟到的 401 不影响已切换的新身份
-- API GET 缓存按 base + credential generation + cache generation + path 隔离；凭据切换和每个写请求的开始/结束（含 HTTP 错误、网络失败和 Abort）各自失效，交错写也不会让旧 GET 快照继续缓存
-- Chat SSE 解析支持 LF/CRLF/CR、跨 chunk 换行与 UTF-8、多行 `data:`、流末尾无空行事件；非 2xx 保留字符串或结构化后端 `detail` 为 `ApiError`
-- 原生 App：扫码配对换设备令牌（Bearer）；配置存独立 EncryptedSharedPreferences，升级兼容旧明文与 1.0.27 同文件密文（同键密文优先于更老明文残留；独立新旧密文冲突则保留双方并失败关闭）；存储错误会 reject 并显示而不会降级明文或静默使用默认地址。无令牌 → 重扫码页（密码登录为逃生口）。登出先清除加密令牌：离线/5xx 明示服务端吊销状态未知，401/403 视为凭据已不可用
-- AI 配置界面仅 web 渲染；App 内提示"配置在网页端管理"
-
-## 相关文档
-
-- 架构：`docs/architecture.md` / `docs/frontend-architecture.md`（历史分析存档 + 现状速览）
-- 安卓原生壳：`docs/android.md` · 认证设计：`docs/security.md`
+- 新控件必须复用 `components/ui`；主题 token 只来自 `app/globals.css` 的 `:root`。
+- API client 负责 base、身份、401、GET cache generation 和写请求失效；业务组件不直接 `fetch`。
+- Chat SSE 解析支持跨 chunk 换行/UTF-8、多行 data 和尾事件；`useChatStream` 负责 Abort、stream generation、reasoning 和 80ms 帧节流。
+- `FilePage` 的列表、详情、全文和索引请求使用请求代次，迟到响应不能覆盖新目录或新选中文件。
+- Web 使用 HttpOnly Cookie，App 使用扫码兑换的 Bearer 设备令牌；AI 配置只在 Web 设置页提供。
+- 修改静态代码后必须递增 `public/sw.js` 的 cache 版本。生产发布使用顶层 `scripts/deploy.ps1`，不要用 `out\*` 通配符上传。
