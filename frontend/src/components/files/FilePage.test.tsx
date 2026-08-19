@@ -98,6 +98,21 @@ describe("FilePage 核心操作", () => {
     expect(screen.getByText(/已用/)).toBeInTheDocument();
   });
 
+  it("选择文件时操作栏保留固定高度占位", async () => {
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    const toolbar = screen.getByTestId("file-selection-toolbar");
+    expect(toolbar).toHaveClass("h-12", "sm:h-9", "overflow-hidden");
+    expect(toolbar).not.toHaveTextContent("已选");
+
+    fireEvent.click(screen.getByText("合同.txt"));
+
+    expect(screen.getByTestId("file-selection-toolbar")).toBe(toolbar);
+    expect(toolbar).toHaveTextContent("已选: 合同.txt");
+    expect(toolbar).toHaveClass("h-12", "sm:h-9", "overflow-hidden");
+  });
+
   it("忽略过期的目录列表响应", async () => {
     const first = deferred<typeof rootListing>();
     const second = deferred<typeof rootListing>();

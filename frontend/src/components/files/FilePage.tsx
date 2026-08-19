@@ -454,27 +454,32 @@ export default function FilePage() {
           {activeSearchMode === "semantic" ? "语义搜索" : "名称/路径搜索"}“{activeQuery}”，结果包含当前目录子树
         </div>}
 
-        {selected && (
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2 text-xs">
-            <span className="mr-1 max-w-40 truncate font-medium text-text" title={selected.path}>已选: {selected.path.split("/").pop()}</span>
-            {selected.info && <Button variant="outline" size="sm" disabled={indexing !== null}
-                    onClick={() => void enqueueSelectedIndex("embed")} title="为当前文件创建文本向量索引">
-              <RefreshCw className={`size-3.5 ${indexing === "embed" ? "animate-spin" : ""}`} /> 向量化
-            </Button>}
-            {selected.info?.preview_kind === "image" && <Button variant="outline" size="sm" disabled={indexing !== null}
-                    onClick={() => void enqueueSelectedIndex("vision")} title="为当前图片创建视觉索引">
-              <Eye className={`size-3.5 ${indexing === "vision" ? "animate-pulse" : ""}`} /> 视觉索引
-            </Button>}
-            <Button variant="outline" size="sm"
-                    onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}><Pencil className="size-3.5" /> 重命名</Button>
-            <Button variant="outline" size="sm"
-                    onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}><MoveRight className="size-3.5" /> 移动</Button>
-            <Button variant="outline" size="sm"
-                    onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}><Copy className="size-3.5" /> 复制到</Button>
-            <Button variant="destructive" size="sm"
-                    onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}><Trash2 className="size-3.5" /> 删除</Button>
-          </div>
-        )}
+        <div
+          data-testid="file-selection-toolbar"
+          className={`h-12 shrink-0 overflow-hidden border-b text-xs sm:h-9 ${selected ? "border-border" : "border-transparent"}`}
+        >
+          {selected && (
+            <div className="flex h-full items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+              <span className="mr-1 max-w-40 truncate font-medium text-text" title={selected.path}>已选: {selected.path.split("/").pop()}</span>
+              {selected.info && <Button variant="outline" size="sm" disabled={indexing !== null}
+                      onClick={() => void enqueueSelectedIndex("embed")} title="为当前文件创建文本向量索引">
+                <RefreshCw className={`size-3.5 ${indexing === "embed" ? "animate-spin" : ""}`} /> 向量化
+              </Button>}
+              {selected.info?.preview_kind === "image" && <Button variant="outline" size="sm" disabled={indexing !== null}
+                      onClick={() => void enqueueSelectedIndex("vision")} title="为当前图片创建视觉索引">
+                <Eye className={`size-3.5 ${indexing === "vision" ? "animate-pulse" : ""}`} /> 视觉索引
+              </Button>}
+              <Button variant="outline" size="sm"
+                      onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}><Pencil className="size-3.5" /> 重命名</Button>
+              <Button variant="outline" size="sm"
+                      onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}><MoveRight className="size-3.5" /> 移动</Button>
+              <Button variant="outline" size="sm"
+                      onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}><Copy className="size-3.5" /> 复制到</Button>
+              <Button variant="destructive" size="sm"
+                      onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}><Trash2 className="size-3.5" /> 删除</Button>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-0.5 text-xs flex-wrap" aria-label="当前位置">
           <Button variant="ghost" size="sm" className={`px-1.5 ${!path ? "font-semibold text-text" : "text-muted"}`} onClick={() => load("")}><Home className="size-3.5" /> 根目录</Button>
           {crumbs.map((c, i) => (

@@ -131,6 +131,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **文件页请求生命周期**：`FilePage` 的列表、选中文件详情、完整文本和索引刷新都必须使用请求代次/当前路径校验；迟到响应不得覆盖新目录、新选中项或卸载后的状态。目录/文件切换要使旧内容与索引请求失效，文件变更事件负责统一刷新，勿在同一 mutation 后再手动重复 `load`
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
 - **移动端文件工具栏**：`<640px` 保持 3×2、44px 高触控网格；`<360px` 顶栏只视觉隐藏 Agent Drive 文字（保留无障碍文本），320/407px 必须无横向滚动
+- **文件选择操作栏**：FilePage 的“已选”区域必须始终保留固定高度；桌面端单行，移动端横向滚动不换行，详情异步加载不能导致文件列表再次下移
 - **Next viewport**：Next.js 16 在 `layout.tsx` 用独立 `export const viewport: Viewport`；勿放回 `metadata.viewport`（构建会警告并可能被忽略）
 - **版本号**：每次发版 `frontend/android/app/build.gradle` 的 versionCode/versionName 同步 +1
 - **PowerShell/SSH 转义坑**：ssh 内嵌 curl 的 JSON 用 stdin 管道（`... | ssh megumin "curl --data-binary @-"`），不要 `\"` 转义；需要执行包含 heredoc、`$()`、SQL 或带空格 header 的远端 Bash 时，先在本地 base64 编码脚本，再用 `ssh megumin "echo <base64> | base64 -d | bash"`，避免 PowerShell/OpenSSH 二次拆词。
