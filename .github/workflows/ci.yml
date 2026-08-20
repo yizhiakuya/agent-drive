@@ -42,6 +42,9 @@ jobs:
           AGENT_DRIVE_DATABASE_PASSWORD: agent_drive_test
           AGENT_DRIVE_JDBC_TEST_URL: jdbc:postgresql://localhost:5432/agent_drive
           SPRING_FLYWAY_ENABLED: "true"
+          SPRING_PROFILES_ACTIVE: db,java-files
+          AGENT_DRIVE_CONFIRMATION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+          AGENT_DRIVE_LLM_CONFIG_KEY: ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=
         run: mvn -q test
 
       - name: Java package
@@ -75,11 +78,26 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend/android
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build web assets for Capacitor
+        working-directory: frontend
+        run: npm run build
+
+      - name: Sync Capacitor Android project
+        working-directory: frontend
+        run: npx cap sync android
 
       - uses: actions/setup-java@v4
         with:
@@ -89,7 +107,9 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - name: Make gradlew executable
+        working-directory: frontend/android
         run: chmod +x gradlew
 
       - name: JVM unit tests (migration/checkpoint/config)
+        working-directory: frontend/android
         run: ./gradlew testDebugUnitTest

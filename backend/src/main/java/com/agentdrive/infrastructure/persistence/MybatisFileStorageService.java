@@ -544,6 +544,7 @@ public class MybatisFileStorageService implements FileStorageService {
                     throw new FileStorageException(409, "目标是目录: " + requested);
                 }
                 createParent(target);
+                syncParentMetadata(ownerId, target.getParent());
                 moveIntoPlace(temp, target, noclobber);
                 mapper.upsertContent(ownerId.toString(), relative(ownerId, target), size, digests.md5(), digests.sha256());
                 mapper.insertRevision(ownerId.toString(), relative(ownerId, target), size, digests.md5(), digests.sha256());
@@ -1558,6 +1559,22 @@ public class MybatisFileStorageService implements FileStorageService {
             if (!Files.exists(candidate, LinkOption.NOFOLLOW_LINKS)) return candidate;
         }
         throw new FileStorageException(409, "同名冲突过多");
+    }
+
+    /**
+     * 将上传目标的 owner 父目录逐级同步到 metadata，供后续目录操作做归属校验。
+     * @param ownerId 文件所属 owner。
+     * @param parent 上传目标的物理父目录。
+     */
+    private void syncParentMetadata(UUID ownerId, Path parent) {
+        Path ownerRoot = ownerRoot(ownerId);
+        if (parent == null || parent.equals(ownerRoot) || !parent.startsWith(ownerRoot)) return;
+        Path relative = ownerRoot.relativize(parent);
+        Path current = ownerRoot;
+        for (Path component : relative) {
+            current = current.resolve(component);
+            mapper.upsertMetadata(ownerId.toString(), relative(ownerId, current), true, 0);
+        }
     }
 
     /**
