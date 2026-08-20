@@ -23,6 +23,12 @@ class JavaChatContextIntegrationTest {
     @Autowired
     private OperationCatalog operations;
 
+    @Autowired
+    private com.agentdrive.agent.ReadSkillTool readSkillTool;
+
+    @Autowired
+    private com.agentdrive.skills.SkillRegistry skillRegistry;
+
     @Test
     void loadsPersistentRuntimeAndOwnerScopedConfigOperation() {
         assertThat(runtime).isInstanceOf(LangChainAgentRuntime.class);
@@ -49,6 +55,10 @@ class JavaChatContextIntegrationTest {
         assertThat(operations.find("PUT /api/v1/schedules/{name}")).isPresent();
         assertThat(operations.find("DELETE /api/v1/schedules/{name}")).isPresent();
         assertThat(operations.find("POST /api/v1/files/delete")).isPresent();
+        assertThat(operations.find("GET /api/v1/skills")).isPresent();
+        assertThat(operations.find("PUT /api/v1/skills/{name}")).isPresent();
+        assertThat(readSkillTool).isNotNull();
+        assertThat(skillRegistry).isNotNull();
         assertThat(backendApiTool.definitionFor(new com.agentdrive.agent.BackendApiRequest(
                 "call", null, "GET /api/v1/config", null, null, null, null
         ))).isNotNull();

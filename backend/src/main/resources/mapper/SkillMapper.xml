@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agentdrive.infrastructure.persistence.mapper.SkillMapper">
+    <sql id="skill_columns">
+        id::text AS id, name, description, instructions, enabled, version,
+        EXTRACT(EPOCH FROM created_at) AS created_at,
+        EXTRACT(EPOCH FROM updated_at) AS updated_at
+    </sql>
+
+    <select id="selectAll" resultType="map">
+        SELECT <include refid="skill_columns"/>
+        FROM agent_skills
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY name ASC
+    </select>
+
+    <select id="selectByName" resultType="map">
+        SELECT <include refid="skill_columns"/>
+        FROM agent_skills
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND name = #{name, jdbcType=VARCHAR}
+    </select>
+
+    <select id="upsert" resultType="map">
+        WITH owner_lock AS (
+            SELECT pg_advisory_xact_lock(hashtextextended(#{userId, jdbcType=VARCHAR}, 0))
+        )
+        INSERT INTO agent_skills(user_id, name, description, instructions, enabled)
+        SELECT CAST(#{userId, jdbcType=VARCHAR} AS uuid),
+               #{name, jdbcType=VARCHAR},
+               #{description, jdbcType=VARCHAR},
+               #{instructions, jdbcType=LONGVARCHAR},
+               #{enabled}
+        FROM owner_lock
+        WHERE EXISTS (
+            SELECT 1 FROM agent_skills
+            WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND name = #{name, jdbcType=VARCHAR}
+        ) OR (
+            SELECT count(*) FROM agent_skills
+            WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ) &lt; #{maxSkills}
+        ON CONFLICT (user_id, name) DO UPDATE SET
+            description = EXCLUDED.description,
+            instructions = EXCLUDED.instructions,
+            enabled = EXCLUDED.enabled,
+            version = agent_skills.version + 1,
+            updated_at = now()
+        RETURNING <include refid="skill_columns"/>
+    </select>
+
+    <delete id="delete">
+        DELETE FROM agent_skills
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND name = #{name, jdbcType=VARCHAR}
+    </delete>
+</mapper>

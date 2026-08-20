@@ -16,6 +16,7 @@ import com.agentdrive.outbox.OutboxStore;
 import com.agentdrive.devices.DeviceStore;
 import com.agentdrive.auth.PasswordHasher;
 import com.agentdrive.files.FileStorageService;
+import com.agentdrive.skills.SkillRepository;
 import com.agentdrive.infrastructure.persistence.MybatisAuthAccountStore;
 import com.agentdrive.infrastructure.persistence.MybatisChatRuntimeStateStore;
 import com.agentdrive.infrastructure.persistence.MybatisConversationSessionStore;
@@ -25,6 +26,7 @@ import com.agentdrive.infrastructure.persistence.MybatisTaskStore;
 import com.agentdrive.infrastructure.persistence.MybatisTaskWorkerStore;
 import com.agentdrive.infrastructure.persistence.MybatisOutboxStore;
 import com.agentdrive.infrastructure.persistence.MybatisScheduleStore;
+import com.agentdrive.infrastructure.persistence.MybatisSkillRepository;
 import com.agentdrive.infrastructure.persistence.MybatisIndexStore;
 import com.agentdrive.infrastructure.persistence.MybatisEmbeddingConfigStore;
 import com.agentdrive.infrastructure.persistence.MybatisVisionConfigStore;
@@ -42,6 +44,7 @@ import com.agentdrive.infrastructure.persistence.mapper.TaskMapper;
 import com.agentdrive.infrastructure.persistence.mapper.TaskWorkerMapper;
 import com.agentdrive.infrastructure.persistence.mapper.OutboxMapper;
 import com.agentdrive.infrastructure.persistence.mapper.ScheduleMapper;
+import com.agentdrive.infrastructure.persistence.mapper.SkillMapper;
 import com.agentdrive.infrastructure.persistence.mapper.IndexMapper;
 import com.agentdrive.infrastructure.persistence.mapper.EmbeddingConfigMapper;
 import com.agentdrive.infrastructure.persistence.mapper.VisionConfigMapper;
@@ -184,6 +187,16 @@ public class ApplicationConfiguration {
     @Bean
     MybatisScheduleStore mybatisScheduleStore(ScheduleMapper mapper, ObjectMapper objectMapper, TaskStore tasks) {
         return new MybatisScheduleStore(mapper, objectMapper, tasks);
+    }
+
+    /**
+     * 装配 owner-scoped 自定义 Skill repository。
+     * @param mapper 读写 agent_skills 表的 Mapper
+     * @return 使用 PostgreSQL 数量保护和版本递增语义的 repository
+     */
+    @Bean
+    SkillRepository skillRepository(SkillMapper mapper) {
+        return new MybatisSkillRepository(mapper);
     }
 
     /**

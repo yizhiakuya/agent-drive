@@ -11,7 +11,7 @@ Agent Drive 的唯一后端是 Java 21 Maven 工程：
 | Web | Spring Boot 3.5.x + WebFlux |
 | 模块边界 | Spring Modulith 1.4.x，模块化单体，不拆网络微服务 |
 | Agent | LangChain4j 1.19.x，原生 structured tool calling |
-| 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V11 |
+| 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V13 |
 | 文件 | Java NIO owner-scoped 本地文件系统 |
 | 抽取 | Apache Tika + Tesseract/Tess4J |
 | 构建 | Maven；API 与 Worker 共用 artifact |
@@ -63,11 +63,11 @@ API 不直接写 SQL、操作物理路径或调用模型 SDK；Agent 不直接�
 
 ## 4. 数据与安全边界
 
-PostgreSQL 的结构化状态包括认证、会话、设备、文件 metadata/revision/trash/dedupe、任务和事件、schedule、Worker heartbeat、outbox、文档/chunk、embedding metadata、Agent preference 以及加密 provider 配置。
+PostgreSQL 的结构化状态包括认证、会话、设备、Skill、文件 metadata/revision/trash/dedupe、任务和事件、schedule、Worker heartbeat、outbox、文档/chunk、embedding metadata、Agent preference 以及加密 provider 配置。
 
 文件 mutation 保持以下不变量：公共路径为 owner 内相对 POSIX 路径；组件级拒绝 traversal 和 symlink；staging 使用 0600；发布使用 fsync、原子 move/link 和 `.storage.lock`；上传由服务端复算 MD5；`noclobber` 不使用先检查再写入的 TOCTOU 流程。上传、移动、复制、回收站删除/恢复在可见发布前隐藏旧目标，并把 storage lock 持有到 Spring 事务完成；回滚恢复旧磁盘状态，提交后清理 backup，提交后的 artifact 清理失败不反转成功结果。
 
-认证使用 PBKDF2 密码 hash、HttpOnly Cookie session、Bearer session/device token 和一次性 pairing code。模型可见工具只有统一的 `backend_api`/`frontend_api` envelope，不能提供任意 URL、请求头、Cookie、Bearer、JavaScript 或 Java 类名。具体安全边界见 [`security.md`](security.md)。
+认证使用 PBKDF2 密码 hash、HttpOnly Cookie session、Bearer session/device token 和一次性 pairing code。模型可见工具是统一的 `backend_api`/`frontend_api` envelope 与只读 `read_skill`；Skill 指令不扩展工具权限，模型不能提供任意 URL、请求头、Cookie、Bearer、JavaScript 或 Java 类名。具体安全边界见 [`security.md`](security.md)。
 
 ## 5. API、Agent 和任务契约
 

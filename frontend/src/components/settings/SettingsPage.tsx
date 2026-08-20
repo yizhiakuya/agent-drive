@@ -5,6 +5,7 @@ import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
+import SkillsManager from "./SkillsManager";
 import { Capacitor } from "@capacitor/core";
 import { apiErrorMessage, authenticatedFetch, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
@@ -526,6 +527,7 @@ export default function SettingsPage() {
         </section>
       )}
 
+      <SkillsManager />
       <ConnectAppCard />
       <DevicesCard />
       <PhotoSyncCard />

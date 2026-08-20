@@ -20,6 +20,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 - LLM provider、embedding 和 vision 配置、模型目录 probe、连接测试和按文件索引任务。
 - 会话、摘要、用户偏好、reasoning、工具轨迹和确定性 replay 的持久化。
 - 任务状态、进度、取消、重试、schedule、Worker 在线状态和自动化报告。
+- owner-scoped Skill 的发现、读取、创建、编辑、启停和删除；内置 API Skill 与 operation catalog 同源。
 - Web 的 `frontend_api` 动作：只操作当前浏览器 registry 已登记的页面能力。
 - 高风险写操作确认、nonce 防重放、路径安全、结果校验和审计日志。
 
@@ -38,9 +39,11 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 | `backend_api` | 后端 HTTP 和登记的内部 operation | 先 discover，再调用精确 operation；参数由 Schema 校验 |
 | `frontend_api` | 当前浏览器页面动作 | 只能使用 registry 中 exact operation，结果以 `frontend_action` 交给本地 handler |
 | `plan` | 保存和推进用户目标 | 只记录计划状态，不代替业务 mutation |
-| `read_skill` | 按需加载技能说明 | 只读登记的 skill，不执行任意文件/代码 |
+| `read_skill` | 分页发现并读取启用 Skill | 只读 owner registry；Skill 只指导已登记工具，不执行任意文件/代码 |
 
 `backend_api` 使用 `action=discover|call` 信封。HTTP operation 标识为 `METHOD /api/v1/path`，内部 operation 标识为 `INTERNAL name`。discover 以 `discovery_offset` 和 `discovery_limit` 分页，默认返回 6 项、单页最多 20 项；每页同时返回完整匹配数、实际窗口、`has_more` 和 `next_offset`。模型必须在分页完成后才能把聚合结果称为完整匹配集。模型不能直接选择 Java 方法、React handler、文件系统绝对路径或未登记能力。
+
+`read_skill` 使用 `action=discover|read`。discover 只返回启用 Skill 摘要，read 读取精确名称的完整 Markdown 指令；内置 `agent-drive-api` 从当前 operation catalog 动态生成，`skill-authoring` 说明自定义 Skill 生命周期，自定义 Skill 存于 PostgreSQL 并按 owner 隔离。Skill 不增加工具、权限或凭据，只减少稳定工作流的重复说明。
 
 ## 4. 执行循环
 
@@ -66,6 +69,7 @@ Chat SSE 事件为 `text`、`reasoning`、`tool_start`、`tool_trace`、`fronten
 |----|------|----------|
 | 会话 | 消息、摘要、reasoning、tool trace、last trace | PostgreSQL `chat_sessions` / `chat_messages` |
 | 偏好 | 语言、整理风格、命名规则 | PostgreSQL `agent_preferences` |
+| Skill | owner 自定义说明、Markdown 指令、启停和版本 | PostgreSQL `agent_skills` + 应用内置 provider |
 | 文件知识 | 文档、chunk、source revision、embedding fingerprint | owner 文件系统 + PostgreSQL/pgvector |
 
 会话消息、摘要、工具轨迹、日志和 Agent memory 落库前脱敏；pending confirmation 的原始参数只保存在受保护的 replay/confirmation 存储中，用于签名校验和确定性重放。

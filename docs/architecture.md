@@ -32,6 +32,7 @@ API 和 Worker 是同一个模块化单体的两种进程模式：API 负责 HTT
 | `files` / `storage` | 文件用例、metadata、revision、回收站、路径安全、原子发布 | 公共路径是 owner 内相对 POSIX 路径 |
 | `devices` | 设备登记、撤销、心跳和同步状态 | 所有查询按 owner 限定 |
 | `tasks` | 状态机、租约、事件、schedule、outbox 和 Worker handler | PostgreSQL 是任务唯一真相源 |
+| `skills` | owner Skill registry、内置 provider、校验和分页 | 自定义 Skill 在 PostgreSQL；内置 Skill 由代码动态生成 |
 | `index` | Tika/Tesseract 抽取、全文、chunk、embedding、vision | 只在 Worker 执行，不进入上传请求路径 |
 | `infrastructure` | MyBatis、Flyway、PostgreSQL、HTTP client、加密和启动适配器 | 为上层提供实现，不反向承载业务决策 |
 
@@ -45,6 +46,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - `chat_sessions`、`chat_messages`、`chat_tool_replays`；
 - `files`、`file_revisions`、`trash_entries`、`upload_dedup`；
 - `tasks`、`task_events`、`task_schedules`、`task_workers`、`outbox_events`；
+- `agent_skills`（owner 自定义 Skill、启停状态和版本）；
 - `documents`、`document_chunks`、embedding metadata、`agent_preferences` 和 provider 配置。
 
 实际二进制文件以及用户可见的 `AGENT.md`、`USER.md`、`MEMORY.md` 仍在 owner-scoped 本地文件系统。`legacy-python-data/` 和服务器 `/opt/agent-drive-java/backups/` 只用于人工恢复或一次性迁移，不进入服务运行路径；旧 SQLite、JSON auth/device/upload index 不是生产真相源。
@@ -54,7 +56,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
 - Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件；前端收到传输异常时先冲刷并取消当前 80ms 帧，再保留已生成正文/工具轨迹并追加错误提示。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
-- 模型只看到稳定的 `backend_api`、`frontend_api` 及 plan/skills 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；backend discover 使用 offset/limit 分页并返回 total/has_more/next_offset，单页最多 20 项。模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
+- 模型只看到稳定的 `backend_api`、`frontend_api`、`read_skill` 及 plan 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；backend discover 使用 offset/limit 分页并返回 total/has_more/next_offset，单页最多 20 项。`read_skill` 只读当前 owner 已启用 registry，Skill 指令不能新增工具或权限。模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
 - 非 red 工具按 `session_id + tool + arguments` 使用持久 replay；red 写操作使用签名确认和一次性 nonce。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
 - provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。`model` 只覆盖当前请求，动态 resolver 始终从 owner 已保存配置取得 Provider 地址和 API key。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
 
@@ -83,7 +85,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 ## 7. 前端与 Android
 
-Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
+Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置、Skill 和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
 文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 作为流式 `busy` 的唯一状态源，负责 Abort、流代次和 80ms 帧节流。ChatPanel 的会话历史、聊天模型目录，以及 SettingsPage 的 LLM/视觉模型目录请求都必须在响应提交前校验请求代次和当前配置边界，避免切换会话或接口后迟到响应污染界面。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 

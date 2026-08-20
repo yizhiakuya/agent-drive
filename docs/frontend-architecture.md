@@ -12,7 +12,7 @@ frontend/src/
 │   ├── chat/            # ChatPanel、工具轨迹、流事件/状态/帧模块
 │   ├── files/           # FilePage、FilePanel、FilePreview、FileDetails
 │   ├── sessions/        # 会话列表和摘要刷新
-│   ├── settings/        # provider、embedding、设备和同步设置
+│   ├── settings/        # provider、embedding、Skill、设备和同步设置
 │   ├── tasks/           # 任务列表、详情和状态流
 │   ├── workspace/       # 工作区面板收缩、拖拽调整和键盘分隔轨道
 │   ├── onboarding/      # web-only AI 配置引导
@@ -63,6 +63,8 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 `FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
 
 `FilePanel` 对目录列表和文件详情使用独立请求代次；`TaskPage` 的任务筛选列表、`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
+
+`SkillsManager` 独立维护列表与详情请求代次，搜索和分页读取摘要，选中后才加载完整 instructions。内置 Skill 只读且始终启用；自定义 Skill 支持新建、编辑、启停和删除，mutation 后重拉当前查询。新建名称保存后不可改名，避免把 rename 隐式实现成跨记录覆盖。
 
 任务中心列表由 `listTasks` 提供顶层任务摘要，并通过 `has_more` 判断是否还有下一页；Worker 的 `progress` 事件触发列表刷新，已展开的任务随后重新读取 `getTaskDetail`，因此详情区能持续显示当前阶段、当前对象、计数/百分比、执行输入、结果、失败原因、时间/尝试次数和子任务进度。确定总量显示百分比，未知总量显示不定进度和阶段提示；详情请求使用独立请求代次，快速切换任务或卸载页面时，迟到详情不得覆盖当前展开任务；结构化 JSON 展示必须经过 `formatJson` 脱敏。
 

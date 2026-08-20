@@ -44,7 +44,8 @@ public final class OperationCatalog {
             Map.entry("审计", "audit"),
             Map.entry("创建", "create"),
             Map.entry("查询", "query"),
-            Map.entry("设置", "setting")
+            Map.entry("设置", "setting"),
+            Map.entry("技能", "skill")
     );
 
     private final List<OperationDefinition> operations;
@@ -75,6 +76,14 @@ public final class OperationCatalog {
      */
     public Optional<OperationDefinition> find(String operation) {
         return Optional.ofNullable(byName.get(operation));
+    }
+
+    /**
+     * 返回完整且冻结的登记目录，供内置 Skill 等确定性消费者使用。
+     * @return 按登记顺序排列的 operation
+     */
+    public List<OperationDefinition> operations() {
+        return operations;
     }
 
     /**

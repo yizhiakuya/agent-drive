@@ -49,6 +49,7 @@ vi.mock("@/lib/store", () => ({
 vi.mock("./ConnectAppCard", () => ({ default: () => null }));
 vi.mock("./DevicesCard", () => ({ default: () => null }));
 vi.mock("./PhotoSyncCard", () => ({ default: () => null }));
+vi.mock("./SkillsManager", () => ({ default: () => null }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
