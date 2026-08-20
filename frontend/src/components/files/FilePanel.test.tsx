@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import FilePanel from "./FilePanel";
+import type { FileInfo } from "@/lib/api/files";
 
 vi.mock("@/lib/api/files", () => ({
   listFiles: vi.fn(async () => ({
@@ -20,6 +21,12 @@ vi.mock("@/lib/api/files", () => ({
   fileDownloadUrl: (p: string) => `/dl?path=${p}`,
 }));
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 describe("FilePanel（Next 版）", () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
@@ -38,6 +45,35 @@ describe("FilePanel（Next 版）", () => {
     await act(async () => {});
     expect(screen.getByText("房屋租赁合同内容")).toBeInTheDocument();
     expect(screen.getByLabelText("关闭预览")).toBeInTheDocument();
+  });
+
+  it("忽略过期的文件详情响应", async () => {
+    const first = deferred<FileInfo>();
+    const second = deferred<FileInfo>();
+    const filesApi = await import("@/lib/api/files");
+    vi.mocked(filesApi.listFiles).mockResolvedValue({
+      path: "/",
+      items: [
+        { name: "A.txt", path: "A.txt", is_dir: false, size: 1, mtime: 1750000000 },
+        { name: "B.txt", path: "B.txt", is_dir: false, size: 1, mtime: 1750000000 },
+      ],
+      disk: { used: 1, total: 100, free: 99 },
+    });
+    vi.mocked(filesApi.getFileInfo).mockImplementation((path) => path === "A.txt" ? first.promise : second.promise);
+
+    render(<FilePanel />);
+    await act(async () => {});
+    fireEvent.click(screen.getByText("A.txt"));
+    fireEvent.click(screen.getByText("B.txt"));
+
+    second.resolve({ name: "B.txt", path: "B.txt", size: 1, modified: 1, preview_kind: "text", snippet: "B 摘要", indexed: null });
+    await act(async () => { await second.promise; });
+    expect(screen.getByText("B 摘要")).toBeInTheDocument();
+
+    first.resolve({ name: "A.txt", path: "A.txt", size: 1, modified: 1, preview_kind: "text", snippet: "A 摘要", indexed: null });
+    await act(async () => { await first.promise; });
+    expect(screen.getByText("B 摘要")).toBeInTheDocument();
+    expect(screen.queryByText("A 摘要")).not.toBeInTheDocument();
   });
 
   it("折叠切换", async () => {

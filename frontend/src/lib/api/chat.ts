@@ -9,6 +9,7 @@ export const chat = (
   confirmations: Record<string, unknown>[] = [],
   thinkingLevel = "auto",
   frontendCapabilities: FrontendCapability[] = [],
+  model = "",
 ) => api("/chat", {
   method: "POST",
   body: JSON.stringify({
@@ -18,6 +19,7 @@ export const chat = (
     confirmations,
     thinking_level: thinkingLevel,
     frontend_capabilities: frontendCapabilities,
+    model: model || undefined,
   }),
 });
 
@@ -30,6 +32,7 @@ export async function chatStream(
   signal: AbortSignal,
   thinkingLevel = "auto",
   frontendCapabilities: FrontendCapability[] = [],
+  model = "",
 ): Promise<Record<string, unknown> | null> {
   const res = await authenticatedFetch("/chat/stream", {
     method: "POST",
@@ -41,6 +44,7 @@ export async function chatStream(
       confirmations,
       thinking_level: thinkingLevel,
       frontend_capabilities: frontendCapabilities,
+      model: model || undefined,
     }),
     signal,
   });

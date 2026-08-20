@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listFiles, uploadFile, getFileInfo, FileInfo, fileDownloadUrl } from "@/lib/api/files";
+import { listFiles, uploadFile, getFileInfo, type FileInfo, type FileItem, fileDownloadUrl } from "@/lib/api/files";
 import FilePreview from "./FilePreview";
 import { indexStatusLabel } from "./FileDetails";
 import { fmtSize } from "@/lib/format";
@@ -20,28 +20,42 @@ interface FilePanelProps {
 
 export default function FilePanel({ collapsed, width = WORKSPACE_PANEL_LIMITS.files.defaultWidth, onResize, onToggle }: FilePanelProps) {
   const [path, setPath] = useState("");
-  const [items, setItems] = useState<{ name: string; path: string; is_dir: boolean; size: number }[]>([]);
+  const [items, setItems] = useState<FileItem[]>([]);
   const [disk, setDisk] = useState<{ used: number; total: number; free: number } | null>(null);
   const [localCollapsed, setLocalCollapsed] = useState(false);
   const [selected, setSelected] = useState<{ path: string; info: FileInfo | null; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pathRef = useRef("");
+  const listRequestRef = useRef(0);
+  const selectionRequestRef = useRef(0);
   const isCollapsed = collapsed ?? localCollapsed;
   const toggle = onToggle ?? (() => setLocalCollapsed((value) => !value));
 
+  /**
+   * 刷新当前目录。目录切换和全局文件变更可能并发发生，只有最后一次列表请求可以提交 items/path/disk。
+   */
   const load = useCallback(async (p: string) => {
+    const request = ++listRequestRef.current;
     try {
       const r = await listFiles(p);
+      if (request !== listRequestRef.current) return;
       setItems(r.items);
       setDisk(r.disk);
       setPath(r.path);
       pathRef.current = r.path;
     } catch (e) {
-      emitToast({ kind: "error", text: `文件列表加载失败：${String(e)}` });
+      if (request === listRequestRef.current) {
+        emitToast({ kind: "error", text: `文件列表加载失败：${String(e)}` });
+      }
     }
   }, []);
 
   useEffect(() => { load(""); }, [load]);
+
+  useEffect(() => () => {
+    listRequestRef.current += 1;
+    selectionRequestRef.current += 1;
+  }, []);
 
   useEffect(() => {
     function onFilesChanged() { load(pathRef.current); }
@@ -64,16 +78,24 @@ export default function FilePanel({ collapsed, width = WORKSPACE_PANEL_LIMITS.fi
     }
   }
 
-  async function openItem(it: { name: string; path: string; is_dir: boolean; size: number }) {
+  /**
+   * 选择文件先立即显示占位，再异步读取详情；选择目录则切换列表并清空预览。
+   * selectionRequestRef 防止用户快速连续点击时，旧文件详情覆盖新选择。
+   */
+  async function openItem(it: FileItem) {
+    const request = ++selectionRequestRef.current;
     if (it.is_dir) {
-      load(it.path);
       setSelected(null);
+      void load(it.path);
       return;
     }
     setSelected({ path: it.path, info: null, text: "" });
     try {
       const data = await getFileInfo(it.path);
-      setSelected((s) => ({ path: s?.path || it.path, info: data, text: data.preview_kind === "text" ? (data.snippet || "") : "" }));
+      if (request !== selectionRequestRef.current) return;
+      setSelected((s) => s?.path === it.path
+        ? { path: it.path, info: data, text: data.preview_kind === "text" ? (data.snippet || "") : "" }
+        : s);
     } catch { /* 忽略 */ }
   }
 

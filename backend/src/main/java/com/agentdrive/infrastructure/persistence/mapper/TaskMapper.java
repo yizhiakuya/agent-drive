@@ -21,7 +21,7 @@ public interface TaskMapper {
      * @param statuses 可选状态过滤；为 {@code null} 或空列表时不添加状态条件。
      * @param type 可选任务类型；为空时不添加 {@code kind} 条件。
      * @param includeChildren 是否同时返回 {@code parent_id} 非空的子任务。
-     * @param limit 本次最多处理的条目数量。
+     * @param limit 本次最多处理的条目数量；任务列表 API 允许传入 201 作为 has_more 探测值。
      * @param offset 分页读取的起始偏移量。
      * @return 按 SQL 投影返回的任务行；没有匹配项时返回空列表。
      */

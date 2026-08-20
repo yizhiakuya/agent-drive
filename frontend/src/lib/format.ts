@@ -29,43 +29,61 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
+type ToolArgFormatter = (args: Record<string, unknown>, path: string) => string;
+
+const TOOL_ARG_FORMATTERS: Record<string, ToolArgFormatter> = {
+  delete_file: (_args, path) => `删除 ${path}`,
+  read_file: (_args, path) => `读取 ${path}`,
+  read_document: (_args, path) => `读取 ${path}`,
+  write_file: (_args, path) => `写入 ${path}`,
+  append_file: (_args, path) => `追加 ${path}`,
+  copy_file: (args) => `复制 ${args.src} → ${args.dst}`,
+  move_file: (args) => `移动 ${args.src} → ${args.dst_dir}/`,
+  rename_file: (args) => `重命名 ${args.src} → ${args.dst}`,
+  create_folder: (_args, path) => `新建文件夹 ${path}`,
+  list_files: (_args, path) => path ? `列出 ${path}` : "列出根目录",
+  search_files: (_args, path) => `搜索 ${path}`,
+  search_content: (args, path) => `内容搜索 "${args.query || path}"`,
+  semantic_search: (args, path) => `语义搜索 "${args.query || path}"`,
+  set_plan: () => "制定执行计划",
+  update_plan: () => "更新执行计划",
+  remember: (args) => `记住 "${String(args.content || args.text || "").slice(0, 20)}…"`,
+  memory_search: (_args, path) => `记忆检索 ${path}`,
+  memory_get: (_args, path) => `记忆检索 ${path}`,
+  read_skill: (_args, path) => `加载技能 ${path}`,
+  get_storage_info: () => "查看存储用量",
+  get_system_status: () => "查看系统状态",
+  view_audit_log: () => "查看审计日志",
+  analyze_failures: () => "分析失败记录",
+  run_automation_now: () => "执行自动化规则",
+  configure_embeddings: (args) => `配置向量服务 ${String(args.model || "")}`,
+};
+
 /** 工具参数人类可读化（"删除 a.txt" 而非 {"path":"a.txt"}） */
 export function fmtToolArgs(tool: string, args: Record<string, unknown>): string {
-  const a = args || {};
-  const p = String(a.path ?? a.src ?? a.query ?? a.name ?? "");
-  switch (tool) {
-    case "delete_file": return `删除 ${p}`;
-    case "read_file": case "read_document": return `读取 ${p}`;
-    case "write_file": return `写入 ${p}`;
-    case "append_file": return `追加 ${p}`;
-    case "copy_file": return `复制 ${a.src} → ${a.dst}`;
-    case "move_file": return `移动 ${a.src} → ${a.dst_dir}/`;
-    case "rename_file": return `重命名 ${a.src} → ${a.dst}`;
-    case "create_folder": return `新建文件夹 ${p}`;
-    case "list_files": return p ? `列出 ${p}` : "列出根目录";
-    case "search_files": return `搜索 ${p}`;
-    case "search_content": return `内容搜索 "${a.query || p}"`;
-    case "semantic_search": return `语义搜索 "${a.query || p}"`;
-    case "set_plan": return "制定执行计划";
-    case "update_plan": return "更新执行计划";
-    case "remember": return `记住 "${String(a.content || a.text || "").slice(0, 20)}…"`;
-    case "memory_search": case "memory_get": return `记忆检索 ${p}`;
-    case "read_skill": return `加载技能 ${p}`;
-    case "get_storage_info": return "查看存储用量";
-    case "get_system_status": return "查看系统状态";
-    case "view_audit_log": return "查看审计日志";
-    case "analyze_failures": return "分析失败记录";
-    case "run_automation_now": return "执行自动化规则";
-    case "configure_embeddings": return `配置向量服务 ${String(a.model || "")}`;
-    default: return maskSecretsJson(a);
-  }
+  const normalized = args || {};
+  const path = String(normalized.path ?? normalized.src ?? normalized.query ?? normalized.name ?? "");
+  return TOOL_ARG_FORMATTERS[tool]?.(normalized, path) ?? maskSecretsJson(normalized);
 }
 
-/** JSON 展示脱敏：键名含 key/token/secret/password 的值一律 ***（工具参数/确认卡展示用）。 */
+/**
+ * JSON 展示脱敏：敏感键的值一律替换为 ***，仅用于界面展示，不能当作安全存储或日志脱敏的替代。
+ */
 export function maskSecretsJson(obj: unknown): string {
   return JSON.stringify(obj, (k, v) =>
     typeof k === "string" && /key|token|secret|password|authorization/i.test(k) ? "***" : v
   );
+}
+
+/** 将任务 payload/result 脱敏后格式化为可阅读的 JSON；非 JSON 值保留可展示的降级文本。 */
+export function formatJson(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const masked = maskSecretsJson(value);
+  try {
+    return JSON.stringify(JSON.parse(masked), null, 2) ?? "";
+  } catch {
+    return masked;
+  }
 }
 
 export const STEP_STATUS: Record<string, [string, string]> = {

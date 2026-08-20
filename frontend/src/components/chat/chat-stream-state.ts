@@ -23,6 +23,7 @@ export function replaceAssistantMessage(messages: Message[], content: string, re
 }
 
 export function removeEmptyAssistantMessages(messages: Message[]): Message[] {
+  // 工具调用可能先创建空 assistant 占位；工具步骤或停止提示已能表达过程时应移除它，避免空白气泡。
   return messages.filter((message) => !isEmptyAssistantMessage(message));
 }
 

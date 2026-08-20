@@ -3,6 +3,66 @@
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.agentdrive.infrastructure.persistence.mapper.IndexMapper">
+    <select id="selectStats" resultType="map">
+        WITH current_documents AS (
+            SELECT DISTINCT ON (d.file_id)
+                   d.id,
+                   d.file_id
+            FROM documents d
+            JOIN files f ON f.id = d.file_id
+            WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND f.is_dir = false
+              AND d.source_revision = f.revision
+            ORDER BY d.file_id, d.updated_at DESC, d.id DESC
+        ), chunk_stats AS (
+            SELECT cd.file_id,
+                   COUNT(c.id)::int AS chunk_count,
+                   COUNT(c.id) FILTER (
+                       WHERE c.embedding IS NOT NULL
+                         AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
+                         AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
+                   )::int AS current_vector_chunks,
+                   COUNT(c.id) FILTER (
+                       WHERE c.embedding IS NOT NULL
+                         AND (#{fingerprint, jdbcType=VARCHAR} IS NULL
+                              OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR})
+                   )::int AS stale_vector_chunks
+            FROM current_documents cd
+            LEFT JOIN document_chunks c
+              ON c.document_id = cd.id
+             AND c.source_revision = (
+                 SELECT f.revision FROM files f WHERE f.id = cd.file_id
+             )
+            GROUP BY cd.file_id
+        )
+        SELECT COUNT(*) FILTER (WHERE f.is_dir = false)::int AS eligible_files,
+               COUNT(cs.file_id)::int AS extracted_files,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND cs.file_id IS NOT NULL
+                     AND cs.chunk_count &gt; 0
+                     AND cs.current_vector_chunks = cs.chunk_count
+               )::int AS vector_files,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND cs.file_id IS NOT NULL
+                     AND cs.chunk_count = 0
+               )::int AS non_vectorizable_files,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND cs.file_id IS NOT NULL
+                     AND cs.chunk_count &gt; 0
+                     AND cs.current_vector_chunks &lt; cs.chunk_count
+               )::int AS missing_vectors,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND cs.stale_vector_chunks &gt; 0
+               )::int AS stale_vectors
+        FROM files f
+        LEFT JOIN chunk_stats cs ON cs.file_id = f.id
+        WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
     <select id="selectFile" resultType="map">
         SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256
         FROM files

@@ -72,6 +72,37 @@ public class MybatisTaskWorkerStore implements TaskWorkerStore {
     }
 
     /**
+     * 持久化任务阶段进度，同时续租任务并追加可供 SSE 订阅的 progress 事件。
+     * 计数和文案在进入 Mapper 前归一化，避免负数或过长的 Worker 文案污染任务详情。
+     *
+     * @param workerId 当前租约持有者的 Worker ID。
+     * @param taskId 已领取任务的 UUID 文本。
+     * @param current 当前阶段已处理数量。
+     * @param total 当前阶段总数量，未知时为 0。
+     * @param message 当前阶段和对象说明。
+     * @param leaseSeconds 新租约秒数。
+     * @return 数据库实际更新任务时为 {@code true}。
+     */
+    @Override
+    public boolean updateProgress(String workerId, String taskId, int current, int total,
+                                  String message, int leaseSeconds) {
+        int safeTotal = Math.max(0, total);
+        int safeCurrent = Math.max(0, current);
+        if (safeTotal > 0) safeCurrent = Math.min(safeCurrent, safeTotal);
+        String safeMessage = progressMessage(message);
+        int updated = mapper.updateProgress(requireWorkerId(workerId), taskId, safeCurrent, safeTotal,
+                safeMessage, Math.max(5, Math.min(3600, leaseSeconds)));
+        if (updated > 0) {
+            mapper.insertEvent(taskId, "progress", json(Map.of(
+                    "current", safeCurrent,
+                    "total", safeTotal,
+                    "message", safeMessage
+            )));
+        }
+        return updated > 0;
+    }
+
+    /**
      * 在 Worker 仍持有租约时将任务置为 succeeded，并记录事件。
      * @param workerId 当前 Worker 的 ID。
      * @param taskId 已领取任务的 UUID 文本。
@@ -133,5 +164,17 @@ public class MybatisTaskWorkerStore implements TaskWorkerStore {
             throw new IllegalArgumentException("workerId must not be blank");
         }
         return workerId.trim();
+    }
+
+    /**
+     * 限制进度文案长度并统一空值，避免异常路径把大段 provider 响应写入任务表。
+     *
+     * @param message Worker 提供的阶段文案。
+     * @return 最多 500 个 Java 字符的非空文案。
+     */
+    private String progressMessage(String message) {
+        if (message == null || message.isBlank()) return "处理中";
+        String trimmed = message.trim();
+        return trimmed.substring(0, Math.min(500, trimmed.length()));
     }
 }

@@ -26,6 +26,27 @@ public class MybatisIndexStore implements IndexStore {
     }
 
     /**
+     * 读取 owner 当前 revision 的全盘索引统计。
+     * @param userId 文件归属 owner 的 UUID。
+     * @param fingerprint 当前 embedding 指纹；为空时不计有效向量。
+     * @return 规范化后的索引统计。
+     */
+    @Override
+    public Stats statistics(UUID userId, String fingerprint) {
+        requireUser(userId);
+        Map<String, Object> row = mapper.selectStats(userId.toString(), fingerprint);
+        if (row == null) return new Stats(0, 0, 0, 0, 0, 0);
+        return new Stats(
+                intValue(row.get("eligible_files")),
+                intValue(row.get("extracted_files")),
+                intValue(row.get("vector_files")),
+                intValue(row.get("non_vectorizable_files")),
+                intValue(row.get("missing_vectors")),
+                intValue(row.get("stale_vectors"))
+        );
+    }
+
+    /**
      * 查询 owner 某个文件的索引元数据。
      * @param userId 文件所属 owner 的 UUID。
      * @param path owner 文件树中的相对路径。
@@ -172,5 +193,16 @@ public class MybatisIndexStore implements IndexStore {
      */
     private static void requireUser(UUID userId) {
         if (userId == null) throw new IllegalArgumentException("userId must not be null");
+    }
+
+    /** 将 MyBatis 数字值安全转换为非负统计数。 */
+    private static int intValue(Object value) {
+        if (value == null) return 0;
+        try {
+            return Math.max(0, value instanceof Number number
+                    ? number.intValue() : Integer.parseInt(String.valueOf(value)));
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
     }
 }

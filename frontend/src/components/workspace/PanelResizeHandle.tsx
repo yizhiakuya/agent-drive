@@ -18,6 +18,10 @@ function clamp(width: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(width)));
 }
 
+/**
+ * 统一处理会话栏和文件栏的拖拽、键盘调宽和收缩操作。
+ * 左栏与右栏的 pointer delta 方向相反，必须在这里集中换算，避免两个面板出现不同的交互口径。
+ */
 export default function PanelResizeHandle({
   panel,
   width,
@@ -34,6 +38,7 @@ export default function PanelResizeHandle({
 
   useEffect(() => {
     if (!dragging) return;
+    // 监听 document 而不是手柄本身，保证指针拖出窄分隔轨道后仍能持续调整宽度。
     const onPointerMove = (event: PointerEvent) => {
       const delta = event.clientX - startXRef.current;
       const direction = isLeftPanel ? 1 : -1;
@@ -103,7 +108,9 @@ export default function PanelResizeHandle({
       title="拖动调整宽度，按 Enter 收起"
       className={cn(
         "group absolute inset-y-0 z-20 hidden w-3 -translate-x-1/2 cursor-col-resize touch-none outline-none md:block",
-        isLeftPanel ? "right-0" : "left-0",
+        // Keep the hit area centered on the panel's outer edge. The right-anchored
+        // session handle needs a full-handle offset because it is translated left.
+        isLeftPanel ? "-right-3" : "left-0",
         dragging ? "cursor-col-resize" : "",
       )}
       onPointerDown={onPointerDown}

@@ -1,27 +1,17 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatStream } from "@/lib/api/chat";
-import { emitFilesChanged } from "@/lib/events";
 import { getFrontendCapabilities, normalizeFrontendAction } from "@/lib/frontend-actions";
 import { useAppStore } from "@/lib/store";
 import type { PlanStep } from "./PlanCard";
 import { createChatStreamFrame, type ChatStreamFrame } from "./chat-stream-frame";
 import { parseChatStreamEvent } from "./chat-stream-events";
-import {
-  appendToolStep,
-  buildChatHistory,
-  completeToolStep,
-  planFromToolTrace,
-  removeEmptyAssistantMessages,
-} from "./chat-stream-state";
+import { dispatchChatStreamEvent } from "./chat-stream-dispatch";
+import { buildChatHistory, removeEmptyAssistantMessages } from "./chat-stream-state";
 import type { ContextUsage, Message, PendingConfirmation, ThinkingLevel } from "./chat-types";
 
 export type { ContextUsage, Message, PendingConfirmation, ThinkingLevel } from "./chat-types";
 export { chatTextDelta } from "./chat-stream-events";
-
-const FILES_TOOLS = ["list_files", "search_files", "read_file", "write_file", "append_file",
-  "copy_file", "create_folder", "rename_file", "move_file", "delete_file", "get_storage_info",
-  "read_document", "search_content", "semantic_search", "index_stats"];
 
 interface UseChatStreamOptions {
   /** 当前消息历史透视图（send 发起时采样，用于构造 history） */
@@ -39,8 +29,8 @@ interface UseChatStreamOptions {
 }
 
 interface UseChatStreamReturn {
-  /** 发送一条消息（可选自定义消息与确认信息）。发送前 UI 输入框清空由调用方负责。 */
-  send: (message?: string, confirmations?: Record<string, unknown>[], thinkingLevel?: ThinkingLevel) => Promise<void>;
+  /** 发送一条消息（可选自定义消息、确认信息和本轮模型）。发送前 UI 输入框清空由调用方负责。 */
+  send: (message?: string, confirmations?: Record<string, unknown>[], thinkingLevel?: ThinkingLevel, model?: string) => Promise<void>;
   /** 中止当前进行中的流，并追加「已停止」提示。 */
   stop: () => void;
   /** 静默中止（会话切换/卸载），不追加提示。 */
@@ -84,7 +74,9 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     message?: string,
     confirmations: Record<string, unknown>[] = [],
     thinkingLevel: ThinkingLevel = "auto",
+    model = "",
   ) {
+    // 每次发送绑定一个 generation；停止、切会话或卸载都会递增它，旧流即使晚到也不能回写新会话。
     const msg = message ?? "";
     if (!msg || busy) return;
     const history = buildChatHistory(messages);
@@ -103,38 +95,24 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       setMessages,
     });
     frameRef.current = frame;
+    // 将协议事件集中交给 dispatcher，保证文本/思考/工具步骤共享同一个帧和消息状态机。
+    const eventHandlers = {
+      frame,
+      setMessages,
+      setPlan,
+      onFrontendAction: (data: Record<string, unknown>) => {
+        const action = normalizeFrontendAction(data);
+        if (action) useAppStore.getState().enqueueFrontendAction(action);
+      },
+    };
 
     try {
       const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
         if (generation !== streamGenerationRef.current) return;
         const streamEvent = parseChatStreamEvent(event, data);
         if (!streamEvent) return;
-        switch (streamEvent.type) {
-          case "text":
-            frame.appendText(streamEvent.delta);
-            break;
-          case "reasoning":
-            frame.appendReasoning(streamEvent.delta);
-            break;
-          case "frontend_action": {
-            const action = normalizeFrontendAction(streamEvent.data);
-            if (action) useAppStore.getState().enqueueFrontendAction(action);
-            break;
-          }
-          case "tool_start":
-            frame.beginToolStep();
-            setMessages((messages) => appendToolStep(messages, streamEvent.data));
-            break;
-          case "tool_trace": {
-            const { trace } = streamEvent;
-            if (FILES_TOOLS.includes(trace.tool)) emitFilesChanged();
-            setMessages((messages) => completeToolStep(messages, trace));
-            const nextPlan = planFromToolTrace(trace);
-            if (nextPlan) setPlan(nextPlan);
-            break;
-          }
-        }
-      }, controller.signal, thinkingLevel, getFrontendCapabilities());
+        dispatchChatStreamEvent(streamEvent, eventHandlers);
+      }, controller.signal, thinkingLevel, getFrontendCapabilities(), model);
 
       if (generation !== streamGenerationRef.current) return;
       // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）

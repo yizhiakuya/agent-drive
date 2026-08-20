@@ -9,11 +9,19 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
+export interface TaskProgress {
+  current: number;
+  total: number;
+  message: string;
+}
+
+/** 列表和详情共用的任务快照；payload/result/error 供详情页解释实际执行结果。 */
 export interface TaskRecord {
   id: string;
   type: string;
   lane: string;
   status: TaskStatus;
+  payload: Record<string, unknown> | null;
   result: Record<string, unknown> | null;
   error: string | null;
   priority: number;
@@ -23,7 +31,7 @@ export interface TaskRecord {
   attempts: number;
   max_attempts: number;
   cancel_requested: boolean;
-  progress: { current: number; total: number; message: string };
+  progress: TaskProgress;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -47,11 +55,29 @@ export interface TaskOverview {
 
 interface TaskListResponse {
   items: TaskRecord[];
+  has_more: boolean;
   overview: TaskOverview;
 }
 
-export const listTasks = (status = "") =>
-  api<TaskListResponse>(`/tasks${status ? `?status=${encodeURIComponent(status)}` : ""}`, { cache: "no-store" });
+/** owner-scoped 详情接口返回的完整任务和父任务下的子任务摘要。 */
+export interface TaskDetailResponse {
+  task: TaskRecord;
+  children: TaskRecord[];
+}
+
+/** 读取顶层任务列表；列表只用于概览，详情字段通过 getTaskDetail 按需读取。 */
+export const listTasks = (status = "", options?: { limit?: number; offset?: number }) => {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (options?.limit !== undefined) params.set("limit", String(options.limit));
+  if (options?.offset !== undefined) params.set("offset", String(options.offset));
+  const query = params.toString();
+  return api<TaskListResponse>(`/tasks${query ? `?${query}` : ""}`, { cache: "no-store" });
+};
+
+/** 按任务 ID 读取 payload/result/error/children；不缓存，避免展开后看到过期执行结果。 */
+export const getTaskDetail = (id: string) =>
+  api<TaskDetailResponse>(`/tasks/${encodeURIComponent(id)}`, { cache: "no-store" });
 
 export const cancelTask = (id: string) =>
   api<{ task: TaskRecord }>(`/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" });

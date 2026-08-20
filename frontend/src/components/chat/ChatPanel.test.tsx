@@ -9,6 +9,17 @@ vi.mock("@/lib/api/chat", () => ({
   chatStream: (...args: unknown[]) => chatStream(...args),
 }));
 
+const getConfig = vi.fn(async () => ({
+  configured: true,
+  llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "default-model", api_key_masked: "sk-..." },
+  embeddings: null,
+}));
+const listModels = vi.fn(async () => ({ ok: true, models: ["default-model", "fast-model"] }));
+vi.mock("@/lib/api/config", () => ({
+  getConfig: () => getConfig(),
+  listModels: () => listModels(),
+}));
+
 const api = vi.fn(async (path: string, options?: RequestInit) => { void path; void options; return { report: null }; });
 vi.mock("@/lib/api/client", () => ({
   api: (...args: [string, RequestInit?]) => api(...args),
@@ -35,6 +46,12 @@ describe("ChatPanel 主流程", () => {
     Element.prototype.scrollIntoView = vi.fn();
     // 默认无报告，避免 automation/latest 拉取干扰断言。
     api.mockResolvedValue({ report: null });
+    getConfig.mockResolvedValue({
+      configured: true,
+      llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "default-model", api_key_masked: "sk-..." },
+      embeddings: null,
+    });
+    listModels.mockResolvedValue({ ok: true, models: ["default-model", "fast-model"] });
   });
 
   afterEach(() => {
@@ -58,9 +75,11 @@ describe("ChatPanel 主流程", () => {
     const inputBar = screen.getByTestId("chat-input-bar");
     const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
     expect(inputBar).not.toHaveClass("border-t", "border-border");
-    expect(composer).toHaveClass("transition-[border-color,box-shadow]", "focus-within:ring-2", "focus-within:ring-accent/10");
+    expect(composer).toHaveClass("transition-[border-color,box-shadow]", "has-[[data-slot=chat-input]:focus]:ring-2", "has-[[data-slot=chat-input]:focus]:ring-accent/10");
+    expect(composer).not.toHaveClass("focus-within:border-accent");
     expect(textarea).toHaveClass("py-0.5");
     expect(textarea).toHaveAttribute("rows", "1");
+    expect(textarea).toHaveAttribute("data-slot", "chat-input");
 
     textarea.focus();
     expect(textarea).toHaveFocus();
@@ -236,5 +255,25 @@ describe("ChatPanel 主流程", () => {
     fireEvent.click(screen.getByText("深度", { exact: true }));
     await typeAndSend("复杂任务");
     expect(chatStream.mock.calls[0][6]).toBe("high");
+  });
+
+  it("选择聊天模型后随请求发送", async () => {
+    chatStream.mockResolvedValue(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+
+    const modelInput = screen.getByRole("combobox", { name: "聊天模型" });
+    fireEvent.focus(modelInput);
+    const modelTrigger = modelInput
+      .closest('[data-slot="input-group"]')
+      ?.querySelector('button');
+    expect(modelTrigger).not.toBeNull();
+    fireEvent.click(modelTrigger!);
+    await waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("option", { name: "fast-model" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("option", { name: "fast-model" }));
+
+    await typeAndSend("用快速模型回答");
+    expect(chatStream.mock.calls[0][8]).toBe("fast-model");
   });
 });

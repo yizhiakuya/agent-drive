@@ -79,6 +79,80 @@ class TaskControllerContractTest {
                 .expectStatus().isBadRequest();
     }
 
+    @Test
+    void returnsOwnerScopedTaskDetailsAndChildren() {
+        UUID owner = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.detail = Map.of(
+                "id", taskId.toString(),
+                "type", "index.rebuild",
+                "status", "failed",
+                "payload", Map.of("force", true, "prefix", "docs/"),
+                "result", Map.of("indexed", 8),
+                "error", "embedding provider returned 502"
+        );
+        tasks.children = List.of(Map.of(
+                "id", childId.toString(),
+                "type", "index.file",
+                "status", "failed",
+                "error", "extractor timed out",
+                "progress", Map.of("current", 1, "total", 2, "message", "处理中文档")
+        ));
+
+        client(owner, tasks).get().uri("/api/v1/tasks/{taskId}", taskId)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.task.id").isEqualTo(taskId.toString())
+                .jsonPath("$.task.payload.force").isEqualTo(true)
+                .jsonPath("$.task.result.indexed").isEqualTo(8)
+                .jsonPath("$.task.error").isEqualTo("embedding provider returned 502")
+                .jsonPath("$.children[0].id").isEqualTo(childId.toString())
+                .jsonPath("$.children[0].progress.message").isEqualTo("处理中文档");
+
+        assertThat(tasks.detailOwner).isEqualTo(owner);
+        assertThat(tasks.childrenOwner).isEqualTo(owner);
+        assertThat(tasks.childrenParent).isEqualTo(taskId);
+    }
+
+    @Test
+    void reportsWhetherTaskListHasAnotherPageWithoutReturningTheProbeRow() {
+        UUID owner = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.listRows = List.of(
+                Map.of("id", "task-1", "type", "index.file"),
+                Map.of("id", "task-2", "type", "index.file")
+        );
+
+        client(owner, tasks).get().uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/tasks")
+                        .queryParam("limit", 1)
+                        .build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.items.length()").isEqualTo(1)
+                .jsonPath("$.items[0].id").isEqualTo("task-1")
+                .jsonPath("$.has_more").isEqualTo(true);
+
+        assertThat(tasks.listLimit).isEqualTo(2);
+    }
+
+    @Test
+    void returnsNotFoundAndDoesNotReadChildrenForUnknownTask() {
+        UUID owner = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+
+        client(owner, tasks).get().uri("/api/v1/tasks/{taskId}", UUID.randomUUID())
+                .exchange()
+                .expectStatus().isNotFound();
+
+        assertThat(tasks.childrenOwner).isNull();
+        assertThat(tasks.childrenParent).isNull();
+    }
+
     private WebTestClient client(UUID owner, StubTasks tasks) {
         CredentialAuthenticator authenticator = credential ->
                 "session-token".equals(credential)
@@ -94,11 +168,19 @@ class TaskControllerContractTest {
         private UUID owner;
         private String type;
         private Map<String, Object> payload;
+        private Map<String, Object> detail;
+        private List<Map<String, Object>> children = List.of();
+        private List<Map<String, Object>> listRows = List.of();
+        private int listLimit;
+        private UUID detailOwner;
+        private UUID childrenOwner;
+        private UUID childrenParent;
 
         @Override
         public List<Map<String, Object>> list(UUID userId, List<String> statuses, String type,
-                                              boolean includeChildren, int limit, int offset) {
-            return List.of();
+                                               boolean includeChildren, int limit, int offset) {
+            this.listLimit = limit;
+            return listRows;
         }
 
         @Override
@@ -108,12 +190,15 @@ class TaskControllerContractTest {
 
         @Override
         public Map<String, Object> get(UUID userId, UUID taskId) {
-            return null;
+            this.detailOwner = userId;
+            return detail;
         }
 
         @Override
         public List<Map<String, Object>> childSummary(UUID userId, UUID parentId) {
-            return List.of();
+            this.childrenOwner = userId;
+            this.childrenParent = parentId;
+            return children;
         }
 
         @Override

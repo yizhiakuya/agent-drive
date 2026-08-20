@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getConfig, getVisionConfig, saveEmbeddings, saveVision, configureLLM, listModels, listVisionModels } from "@/lib/api/config";
 import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
@@ -35,6 +35,7 @@ export default function SettingsPage() {
   const [visionModelsOpen, setVisionModelsOpen] = useState(false);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
   const isNative = Capacitor.isNativePlatform();
+  const loadRequestRef = useRef(0);
 
   async function logout() {
     const native = Capacitor.isNativePlatform();
@@ -74,24 +75,33 @@ export default function SettingsPage() {
     }
   }
 
-  async function load() {
+  /**
+   * 并行读取普通模型和视觉模型配置。请求代次同时覆盖全局刷新与保存后的重载，
+   * 避免较早响应把用户刚选中的表单值或新配置状态覆盖掉。
+   */
+  const load = useCallback(async () => {
+    const request = ++loadRequestRef.current;
     try {
       const [d, vision] = await Promise.all([getConfig(), getVisionConfig()]);
+      if (request !== loadRequestRef.current) return;
       setCfg(d);
       setVisionCfg(vision);
       if (d.llm) setLlmForm((f) => ({ ...f, type: d.llm!.type, base_url: d.llm!.base_url, model: d.llm!.model }));
       if (d.embeddings) setEmbForm((f) => ({ ...f, provider: d.embeddings!.provider, base_url: d.embeddings!.base_url, model: d.embeddings!.model }));
       if (vision.configured) setVisionForm((f) => ({ ...f, provider: vision.provider, base_url: vision.base_url, model: vision.model }));
     } catch (e) {
-      setMsg({ kind: "error", text: String(e) });
+      if (request === loadRequestRef.current) setMsg({ kind: "error", text: String(e) });
     }
-  }
-  useEffect(() => { load(); }, []);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => {
+    loadRequestRef.current += 1;
+  }, []);
   useEffect(() => {
-    const h = () => load(); // 全局刷新
+    const h = () => { void load(); }; // 全局刷新
     window.addEventListener(EV.refresh, h);
     return () => window.removeEventListener(EV.refresh, h);
-  }, []);
+  }, [load]);
 
   async function saveLlm() {
     setLlmMsg(null);
@@ -109,7 +119,7 @@ export default function SettingsPage() {
       if (r.ok === false) {
         setLlmMsg({ kind: "error", text: `保存失败：${r.error || r.test?.error || "连接测试失败"}` });
       } else setLlmMsg({ kind: "ok", text: "LLM 配置已保存并测试通过" });
-      load();
+      await load();
     } catch (e) { setLlmMsg({ kind: "error", text: String(e) }); }
     finally { setSaving(null); }
   }
@@ -159,7 +169,7 @@ export default function SettingsPage() {
         if (d.rebuild_task) emitTasksChanged();
       }
       else setEmbMsg({ kind: "error", text: JSON.stringify(d) });
-      load();
+      await load();
     } catch (e) { setEmbMsg({ kind: "error", text: String(e) }); }
     finally { setSaving(null); }
   }
@@ -275,7 +285,8 @@ export default function SettingsPage() {
             <span className="text-xs text-muted">模型</span>
             <Combobox
             onValueChange={(v) => setLlmForm((f) => ({ ...f, model: v == null ? "" : String(v) }))}
-            onInputValueChange={(v) => { if (v !== "") setLlmForm((f) => ({ ...f, model: v })); }}
+            inputValue={llmForm.model}
+            onInputValueChange={(v) => setLlmForm((f) => ({ ...f, model: v }))}
             open={modelsOpen}
             onOpenChange={setModelsOpen}
             items={modelList ? modelList.map((m) => ({ value: m, label: m })) : []}
@@ -353,7 +364,8 @@ export default function SettingsPage() {
             <span className="text-xs text-muted">视觉模型</span>
             <Combobox
               onValueChange={(v) => setVisionForm((f) => ({ ...f, model: v == null ? "" : String(v) }))}
-              onInputValueChange={(v) => { if (v !== "") setVisionForm((f) => ({ ...f, model: v })); }}
+              inputValue={visionForm.model}
+              onInputValueChange={(v) => setVisionForm((f) => ({ ...f, model: v }))}
               open={visionModelsOpen}
               onOpenChange={setVisionModelsOpen}
               items={visionModelList ? visionModelList.map((model) => ({ value: model, label: model })) : []}

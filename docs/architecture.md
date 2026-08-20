@@ -53,10 +53,10 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 - 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
-- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件。
+- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件；`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
 - 模型只看到稳定的 `backend_api`、`frontend_api` 及 plan/skills 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
 - 非 red 工具按 `session_id + tool + arguments` 使用持久 replay；red 写操作使用签名确认和一次性 nonce。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
-- provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
+- provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。`model` 只覆盖当前请求，动态 resolver 始终从 owner 已保存配置取得 Provider 地址和 API key。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
 
 ## 5. 文件、上传与索引
 
@@ -71,9 +71,9 @@ PostgreSQL 保存所有结构化运行状态，包括：
 任务通过 PostgreSQL 状态机和租约运行：
 
 - `FOR UPDATE SKIP LOCKED` 领取 queued/retry_wait 任务；lease 和 heartbeat 防止 Worker 崩溃后永久卡住。
-- partial unique index 保证活跃 dedupe；相同进度不重复写事件；API 只统计顶层任务，子任务进度汇总到父任务。
+- partial unique index 保证活跃 dedupe；Worker 按阶段/文件/embedding 批次节流写入 `progress_current`、`progress_total`、`progress_message`，进度更新与租约续期同一条原子 SQL 完成，并通过 `progress` 事件通知前端；相同进度不重复写事件。API 只统计顶层任务，子任务进度汇总到父任务。
 - `outbox_events` 可靠投递文件变更和索引任务；Worker 每 2 秒刷新 `task_workers`，API 以最近 10 秒心跳判断在线。
-- 任务事件从尾部订阅，不回放全库；终态历史保留最近记录并由维护任务清理过期数据。
+- 任务列表接口通过多取一条返回 `has_more`，前端任务页按此加载更多记录；任务事件从尾部订阅，不回放全库；终态历史保留最近记录并由维护任务清理过期数据。
 
 当前任务类型包括 `index.file`、`index.embed`、`index.vision`、`index.rebuild`、`index.cleanup`、`maintenance.daily` 和 `automation.run`。HTTP 请求只入队，不串行执行 OCR、embedding 或 vision。
 

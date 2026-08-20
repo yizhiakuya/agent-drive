@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import PanelResizeHandle from "@/components/workspace/PanelResizeHandle";
 import { WORKSPACE_PANEL_LIMITS } from "@/lib/workspace-layout";
 
+// 标记跨组件实例共享的标题生成，避免并发 load 为同一空标题会话重复发起写请求。
 const summarizingSessions = new Set<string>();
 
 interface SessionListProps {
@@ -27,6 +28,10 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
   const isCollapsed = collapsed ?? localCollapsed;
   const toggle = onToggle ?? (() => setLocalCollapsed((value) => !value));
 
+  /**
+   * 加载会话并在必要时补齐空标题。每次重拉都必须完成“列表写入 -> 总结 -> 再拉列表”的同一序列，
+   * 否则总结请求落库后可能被旧 GET 的响应覆盖，用户会暂时看不到新标题。
+   */
   async function load() {
     const sequence = ++loadSequenceRef.current;
     // 两次列表写入都必须留在同一请求序列内，防止旧请求的列表覆盖新列表。

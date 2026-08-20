@@ -3,6 +3,7 @@ package com.agentdrive.tasks;
 import com.agentdrive.files.FileStorageService;
 import com.agentdrive.index.IndexingService;
 import com.agentdrive.index.EmbeddingService;
+import com.agentdrive.progress.TaskProgressReporter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -64,13 +65,13 @@ class IndexTaskHandlerTest {
                 "payload_json", "{\"path\":\"notes.txt\"}"
         ));
         when(indexing.indexFile(owner, "notes.txt")).thenReturn(Map.of("indexed", true));
-        when(embeddings.embed(owner, List.of("notes.txt"), 64, false))
+        when(embeddings.embed(eq(owner), eq(List.of("notes.txt")), eq(64), eq(false), any(TaskProgressReporter.class)))
                 .thenReturn(Map.of("vectorized", true, "embedded", 1));
         IndexTaskHandler handler = new IndexTaskHandler(workers, indexing, new ObjectMapper(), embeddings);
 
         org.assertj.core.api.Assertions.assertThat(handler.runOnce("worker")).isTrue();
 
-        verify(embeddings).embed(owner, List.of("notes.txt"), 64, false);
+        verify(embeddings).embed(eq(owner), eq(List.of("notes.txt")), eq(64), eq(false), any(TaskProgressReporter.class));
         verify(workers).succeed(eq("worker"), eq(taskId), eq(Map.of(
                 "indexed", true, "embedding", Map.of("vectorized", true, "embedded", 1))));
     }
@@ -89,13 +90,13 @@ class IndexTaskHandlerTest {
         ));
         when(indexing.indexFile(owner, "a.txt")).thenReturn(Map.of("path", "a.txt", "indexed", true));
         when(indexing.indexFile(owner, "b.md")).thenReturn(Map.of("path", "b.md", "indexed", true));
-        when(embeddings.embed(owner, files, 64, false))
+        when(embeddings.embed(eq(owner), eq(files), eq(64), eq(false), any(TaskProgressReporter.class)))
                 .thenReturn(Map.of("vectorized", true, "embedded", 2));
         IndexTaskHandler handler = new IndexTaskHandler(workers, indexing, new ObjectMapper(), embeddings);
 
         org.assertj.core.api.Assertions.assertThat(handler.runOnce("worker")).isTrue();
 
-        verify(embeddings).embed(owner, files, 64, false);
+        verify(embeddings).embed(eq(owner), eq(files), eq(64), eq(false), any(TaskProgressReporter.class));
         verify(workers).succeed(eq("worker"), eq(taskId), eq(Map.of(
                 "files", List.of(
                         Map.of("path", "a.txt", "indexed", true),

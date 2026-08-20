@@ -1,5 +1,8 @@
 package com.agentdrive.infrastructure.persistence;
 
+import com.agentdrive.index.EmbeddingFingerprint;
+import com.agentdrive.index.EmbeddingRuntimeConfig;
+import com.agentdrive.index.IndexStore;
 import com.agentdrive.infrastructure.persistence.mapper.TaskMapper;
 import com.agentdrive.tasks.TaskStore;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -11,7 +14,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
@@ -21,8 +27,12 @@ import java.time.temporal.ChronoUnit;
  * deduplicated 事件写入；cancel/retry 也把状态变更与事件放在同一事务中。</p>
  */
 public class MybatisTaskStore implements TaskStore {
+    private static final long INDEX_STATS_CACHE_NANOS = TimeUnit.SECONDS.toNanos(15);
     private final TaskMapper mapper;
     private final ObjectMapper objectMapper;
+    private final IndexStore index;
+    private final EmbeddingRuntimeConfig embeddingConfigs;
+    private final ConcurrentHashMap<UUID, CachedIndexStats> indexStatsCache = new ConcurrentHashMap<>();
 
     /**
      * 保存任务 Mapper 和 JSON 映射器。
@@ -30,8 +40,22 @@ public class MybatisTaskStore implements TaskStore {
      * @param objectMapper 编解码任务 payload、result 和 event data 的映射器。
      */
     public MybatisTaskStore(TaskMapper mapper, ObjectMapper objectMapper) {
+        this(mapper, objectMapper, null, null);
+    }
+
+    /**
+     * 创建带索引总览统计的任务存储。
+     * @param mapper 读写任务、子任务汇总和事件表的 Mapper。
+     * @param objectMapper 编解码任务 payload、result 和 event data 的映射器。
+     * @param index 读取 owner 全盘索引统计的存储；为空时保留兼容的空统计。
+     * @param embeddingConfigs 读取当前 owner embedding 配置并生成有效性指纹的端口。
+     */
+    public MybatisTaskStore(TaskMapper mapper, ObjectMapper objectMapper,
+                            IndexStore index, EmbeddingRuntimeConfig embeddingConfigs) {
         this.mapper = Objects.requireNonNull(mapper, "mapper must not be null");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
+        this.index = index;
+        this.embeddingConfigs = embeddingConfigs;
     }
 
     /**
@@ -40,7 +64,7 @@ public class MybatisTaskStore implements TaskStore {
      * @param statuses 可选状态过滤列表。
      * @param type 可选任务类型过滤。
      * @param includeChildren 是否将子任务纳入查询。
-     * @param limit 请求条数，最终限制在 1 到 200。
+     * @param limit 请求条数，最终限制在 1 到 201；201 供列表 API 多取一条判断 {@code has_more}。
      * @param offset 分页偏移，负值按 0 处理。
      * @return 统一字段名并解析 JSON payload/result 的任务列表。
      */
@@ -49,7 +73,7 @@ public class MybatisTaskStore implements TaskStore {
                                           boolean includeChildren, int limit, int offset) {
         requireUser(userId);
         return mapper.selectTasks(userId.toString(), statuses, type, includeChildren,
-                        Math.max(1, Math.min(limit, 200)), Math.max(0, offset))
+                        Math.max(1, Math.min(limit, 201)), Math.max(0, offset))
                 .stream().map(this::task).toList();
     }
 
@@ -70,8 +94,17 @@ public class MybatisTaskStore implements TaskStore {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("counts", counts);
         result.put("workers", Map.of("online", workerCount > 0, "count", workerCount));
-        result.put("index", Map.of());
+        result.put("index", indexOverview(userId));
         return result;
+    }
+
+    /**
+     * 清除 owner 的短期索引统计缓存，使文件变更后下次概览立即读取数据库。
+     * @param userId 发生文件变更的 owner UUID。
+     */
+    @Override
+    public void invalidateOverview(UUID userId) {
+        if (userId != null) indexStatsCache.remove(userId);
     }
 
     /**
@@ -283,6 +316,43 @@ public class MybatisTaskStore implements TaskStore {
     }
 
     /**
+     * 组装任务中心使用的索引概览；全盘统计最多缓存 15 秒，任务状态计数仍每次实时读取。
+     * @param userId 当前 owner UUID。
+     * @return 含索引统计、embedding 配置状态和模型名的映射。
+     */
+    private Map<String, Object> indexOverview(UUID userId) {
+        Optional<EmbeddingRuntimeConfig.Config> config = embeddingConfigs == null
+                ? Optional.empty() : embeddingConfigs.find(userId);
+        boolean configured = config.isPresent()
+                && config.get().apiKey() != null
+                && !config.get().apiKey().isBlank();
+        String fingerprint = configured
+                ? EmbeddingFingerprint.of(config.get().provider(), config.get().baseUrl(), config.get().model())
+                : null;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (index != null) {
+            result.putAll(cachedStats(userId, fingerprint).asMap());
+        }
+        result.put("embedding_configured", configured);
+        result.put("model", config.map(EmbeddingRuntimeConfig.Config::model).orElse(""));
+        return result;
+    }
+
+    /** 读取或刷新 owner 的短期索引统计缓存。 */
+    private IndexStore.Stats cachedStats(UUID userId, String fingerprint) {
+        long now = System.nanoTime();
+        CachedIndexStats cached = indexStatsCache.get(userId);
+        if (cached != null && cached.expiresAtNanos() > now
+                && Objects.equals(cached.fingerprint(), fingerprint)) {
+            return cached.stats();
+        }
+        IndexStore.Stats stats = index.statistics(userId, fingerprint);
+        indexStatsCache.put(userId, new CachedIndexStats(fingerprint, stats, now + INDEX_STATS_CACHE_NANOS));
+        return stats;
+    }
+
+    /**
      * 序列化任务 payload。
      * @param value 要写入任务表的输入对象。
      * @return JSON 文本。
@@ -303,5 +373,9 @@ public class MybatisTaskStore implements TaskStore {
      */
     private static void requireUser(UUID userId) {
         if (userId == null) throw new IllegalArgumentException("userId must not be null");
+    }
+
+    /** 一条带配置指纹和过期时间的索引统计缓存项。 */
+    private record CachedIndexStats(String fingerprint, IndexStore.Stats stats, long expiresAtNanos) {
     }
 }

@@ -22,6 +22,7 @@ export function createChatStreamFrame({
   setMessages,
   delayMs = 80,
 }: ChatStreamFrameOptions): ChatStreamFrame {
+  // 流事件按帧批量提交，避免每个 token 都触发消息列表重渲染；flush 负责收尾时不丢最后一帧。
   let reply = "";
   let reasoning = "";
   let timer: ReturnType<typeof setTimeout> | null = null;

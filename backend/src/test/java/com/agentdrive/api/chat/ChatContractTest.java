@@ -18,6 +18,15 @@ class ChatContractTest {
         assertThat(request.thinkingLevel()).isEqualTo("auto");
         assertThat(request.history()).isEmpty();
         assertThat(request.confirmations()).isEmpty();
+        assertThat(request.model()).isEmpty();
+    }
+
+    @Test
+    void requestNormalizesSelectedModelWithoutChangingProviderFields() {
+        ChatRequest request = new ChatRequest(
+                "hello", null, null, null, null, null, null, null, "  fast-model  ");
+
+        assertThat(request.model()).isEqualTo("fast-model");
     }
 
     @Test

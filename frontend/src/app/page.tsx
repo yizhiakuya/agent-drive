@@ -88,6 +88,7 @@ export default function Home() {
     saveWorkspaceLayout(workspaceLayout, storage);
   }, [workspaceLayout, workspaceLayoutReady]);
 
+  /** 持久化前先按面板边界收敛宽度，保证拖拽、键盘调整和恢复旧布局共享同一约束。 */
   const resizePanel = useCallback((panel: WorkspacePanel, width: number) => {
     setWorkspaceLayout((current) => ({
       ...current,

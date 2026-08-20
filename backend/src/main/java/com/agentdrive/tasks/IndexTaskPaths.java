@@ -10,7 +10,8 @@ import java.util.Set;
 
 /**
  * 统一校验文件列表索引任务的路径，并生成稳定的任务去重键。
- * 只接受 owner 存储根下的相对用户路径，拒绝 traversal 和内部 staging 目录。
+ * 只接受 owner 存储根下的相对用户路径，规范化分隔符、去除重复项，最多保留
+ * {@value #MAX_FILES} 条；同时拒绝 traversal 和内部 staging 目录。
  */
 public final class IndexTaskPaths {
     public static final int MAX_FILES = 1000;

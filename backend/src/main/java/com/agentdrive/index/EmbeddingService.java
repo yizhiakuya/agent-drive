@@ -3,6 +3,7 @@ package com.agentdrive.index;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.agentdrive.net.HttpClientSupport;
+import com.agentdrive.progress.TaskProgressReporter;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -12,7 +13,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -73,6 +73,21 @@ public interface EmbeddingService {
     Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force);
 
     /**
+     * 执行向量化并报告批次进度；默认实现保持外部实现与旧调用方兼容。
+     *
+     * @param userId embedding 配置所属用户的 UUID。
+     * @param paths 要处理的用户相对文件路径列表；空列表表示全部文件。
+     * @param limit 每批最多处理的 chunk 数。
+     * @param force 是否先清除目标范围的旧向量。
+     * @param progress 当前任务进度回调，可为空。
+     * @return 向量化结果及处理统计。
+     */
+    default Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force,
+                                      TaskProgressReporter progress) {
+        return embed(userId, paths, limit, force);
+    }
+
+    /**
      * 为语义搜索问题生成查询向量。
      * Provider 请求必须使用 {@code retrieval.query} 任务类型，并返回与文档 embedding
      * 相同模型配置的 fingerprint，避免跨模型混合检索。
@@ -125,11 +140,35 @@ public interface EmbeddingService {
          */
         @Override
         public Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force) {
+            return embed(userId, paths, limit, force, TaskProgressReporter.noop());
+        }
+
+        /**
+         * 执行向量化循环并在每个 provider 批次前后报告阶段信息。
+         * 总 chunk 数由索引查询动态产生，因此处理期间使用不定总量，完成时再落为确定计数。
+         *
+         * @param userId 文件归属用户的 UUID。
+         * @param paths 要筛选的用户相对路径列表。
+         * @param limit 每轮查询上限，最终会限制在 1 到 64 之间。
+         * @param force 是否清除并重算所选文件已有向量。
+         * @param progress 当前任务进度回调，可为空。
+         * @return provider 调用和索引写回的累计结果。
+         */
+        @Override
+        public Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force,
+                                         TaskProgressReporter progress) {
+            TaskProgressReporter reporter = progress == null ? TaskProgressReporter.noop() : progress;
             Optional<EmbeddingRuntimeConfig.Config> configured = configs.find(userId);
-            if (configured.isEmpty()) return Map.of("vectorized", false, "reason", "embedding_not_configured");
+            if (configured.isEmpty()) {
+                reporter.report(0, 0, "向量化未执行：未配置向量服务");
+                return Map.of("vectorized", false, "reason", "embedding_not_configured");
+            }
             EmbeddingRuntimeConfig.Config config = configured.get();
             String apiKey = config.apiKey();
-            if (apiKey.isBlank()) return Map.of("vectorized", false, "reason", "embedding_not_configured");
+            if (apiKey.isBlank()) {
+                reporter.report(0, 0, "向量化未执行：未配置向量服务");
+                return Map.of("vectorized", false, "reason", "embedding_not_configured");
+            }
             String fingerprint = fingerprint(config);
             List<String> selectedPaths = paths == null ? List.of() : List.copyOf(paths);
             if (force) index.clearEmbeddings(userId, selectedPaths);
@@ -137,22 +176,31 @@ public interface EmbeddingService {
             int batchSize = Math.max(1, Math.min(limit, MAX_BATCH_SIZE));
             int embedded = 0;
             int batches = 0;
+            reporter.report(0, 0, selectedPaths.isEmpty()
+                    ? "向量化：准备处理全部文本块"
+                    : "向量化：准备处理 " + selectedPaths.size() + " 个文件");
             try {
                 while (true) {
                     List<Map<String, Object>> chunks = selectedPaths.isEmpty()
                             ? index.chunks(userId, selectionFingerprint, batchSize)
                             : index.chunks(userId, selectionFingerprint, selectedPaths, batchSize);
                     if (chunks.isEmpty()) {
+                        reporter.report(embedded, embedded, embedded == 0
+                                ? "向量化：没有待处理文本块"
+                                : "向量化：已完成，共写入 " + embedded + " 个文本块");
                         return Map.of(
                                 "vectorized", true,
                                 "embedded", embedded,
                                 "batches", batches,
                                 "selected_files", selectedPaths.size(),
                                 "fingerprint", fingerprint
-                        );
+                            );
                     }
+                    reporter.report(embedded, 0, "向量化：正在处理第 " + (batches + 1)
+                            + " 批（" + chunks.size() + " 个文本块）");
                     Map<String, Object> batch = embedBatch(userId, config, apiKey, chunks, fingerprint);
                     if (!Boolean.TRUE.equals(batch.get("vectorized"))) {
+                        reporter.report(embedded, 0, "向量化失败：" + batch.get("reason"));
                         Map<String, Object> result = new LinkedHashMap<>(batch);
                         result.put("embedded", embedded + number(batch.get("embedded")));
                         result.put("batches", batches);
@@ -166,11 +214,15 @@ public interface EmbeddingService {
                     }
                     embedded += batchEmbedded;
                     batches++;
+                    reporter.report(embedded, 0, "向量化：第 " + batches + " 批完成，已写入 "
+                            + embedded + " 个文本块");
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
+                reporter.report(embedded, 0, "向量化已中断");
                 return failure("embedding_interrupted", embedded, batches, selectedPaths.size(), fingerprint);
             } catch (Exception error) {
+                reporter.report(embedded, 0, "向量化失败：" + safeMessage(error));
                 Map<String, Object> result = failure("embedding_failed", embedded, batches,
                         selectedPaths.size(), fingerprint);
                 result.put("error", safeMessage(error));
@@ -364,16 +416,7 @@ public interface EmbeddingService {
          * @throws IllegalStateException JDK 不支持 SHA-256 时抛出。
          */
         private String fingerprint(EmbeddingRuntimeConfig.Config config) {
-            try {
-                byte[] digest = MessageDigest.getInstance("SHA-256").digest(
-                        (config.provider() + "|" + config.baseUrl() + "|" + config.model())
-                                .getBytes(StandardCharsets.UTF_8));
-                StringBuilder result = new StringBuilder(digest.length * 2);
-                for (byte value : digest) result.append(String.format("%02x", value));
-                return result.toString();
-            } catch (Exception error) {
-                throw new IllegalStateException("cannot fingerprint embedding configuration", error);
-            }
+            return EmbeddingFingerprint.of(config.provider(), config.baseUrl(), config.model());
         }
 
         /**

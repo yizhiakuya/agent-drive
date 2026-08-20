@@ -147,8 +147,9 @@ public class ApplicationConfiguration {
      * @return 带任务数量限制、去重事件和事务边界的任务存储。
      */
     @Bean
-    MybatisTaskStore mybatisTaskStore(TaskMapper mapper, ObjectMapper objectMapper) {
-        return new MybatisTaskStore(mapper, objectMapper);
+    MybatisTaskStore mybatisTaskStore(TaskMapper mapper, ObjectMapper objectMapper,
+                                      IndexStore index, EmbeddingRuntimeConfig embeddingConfigs) {
+        return new MybatisTaskStore(mapper, objectMapper, index, embeddingConfigs);
     }
 
     /**
@@ -286,9 +287,9 @@ public class ApplicationConfiguration {
     @Profile({"java-files", "java-auth", "java-chat"})
     FileStorageService fileStorageService(FileMapper mapper, AppProperties properties, OutboxStore outbox,
                                           EmbeddingRuntimeConfig embeddingConfigs,
-                                          SemanticSearchService semanticSearch) {
+                                          SemanticSearchService semanticSearch, TaskStore tasks) {
         return new MybatisFileStorageService(mapper, Path.of(properties.dataDir()), properties.maxUploadBytes(),
-                outbox, embeddingConfigs, semanticSearch);
+                outbox, embeddingConfigs, semanticSearch, tasks);
     }
 
     /**

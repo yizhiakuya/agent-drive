@@ -2,9 +2,11 @@ package com.agentdrive.infrastructure.persistence;
 
 import com.agentdrive.files.FileStorageException;
 import com.agentdrive.files.FileStorageService;
+import com.agentdrive.index.EmbeddingFingerprint;
 import com.agentdrive.index.EmbeddingRuntimeConfig;
 import com.agentdrive.index.SemanticSearchService;
 import com.agentdrive.outbox.OutboxStore;
+import com.agentdrive.tasks.TaskStore;
 import org.springframework.transaction.annotation.Transactional;
 import com.agentdrive.infrastructure.persistence.mapper.FileMapper;
 import org.slf4j.Logger;
@@ -82,6 +84,7 @@ public class MybatisFileStorageService implements FileStorageService {
     private final OutboxStore outbox;
     private final EmbeddingRuntimeConfig embeddingConfigs;
     private final SemanticSearchService semanticSearch;
+    private final TaskStore tasks;
     private final ReentrantLock mutationLock = new ReentrantLock();
 
     /**
@@ -141,12 +144,29 @@ public class MybatisFileStorageService implements FileStorageService {
     public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
                                      OutboxStore outbox, EmbeddingRuntimeConfig embeddingConfigs,
                                      SemanticSearchService semanticSearch) {
+        this(mapper, root, maxUploadBytes, outbox, embeddingConfigs, semanticSearch, null);
+    }
+
+    /**
+     * 创建带任务总览缓存失效通知的文件服务。
+     * @param mapper 读写文件 metadata、revision、trash 和 dedupe 的 Mapper。
+     * @param root 所有 owner 目录的父路径。
+     * @param maxUploadBytes 单个上传临时文件允许发布的最大字节数。
+     * @param outbox 内容变化后写入索引/同步事件的 outbox。
+     * @param embeddingConfigs 读取当前 owner embedding 配置的运行时端口。
+     * @param semanticSearch owner-scoped pgvector 语义搜索服务。
+     * @param tasks 文件变更后需要失效索引概览缓存的任务存储，可为空。
+     */
+    public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
+                                     OutboxStore outbox, EmbeddingRuntimeConfig embeddingConfigs,
+                                     SemanticSearchService semanticSearch, TaskStore tasks) {
         this.mapper = mapper;
         this.root = root.toAbsolutePath().normalize();
         this.maxUploadBytes = maxUploadBytes;
         this.outbox = outbox;
         this.embeddingConfigs = embeddingConfigs;
         this.semanticSearch = semanticSearch;
+        this.tasks = tasks;
         try {
             Files.createDirectories(this.root);
         } catch (IOException error) {
@@ -314,7 +334,10 @@ public class MybatisFileStorageService implements FileStorageService {
                 changed.add(mapOf("path", entry.relativePath(), "isDir", entry.directory(), "size", entry.size()));
             }
         }
-        if (!changed.isEmpty()) mapper.upsertMetadataBatch(ownerId.toString(), changed);
+        if (!changed.isEmpty()) {
+            mapper.upsertMetadataBatch(ownerId.toString(), changed);
+            invalidateOverview(ownerId);
+        }
     }
 
     /** 判断数据库中已有 metadata 是否仍与物理文件状态一致。 */
@@ -919,9 +942,15 @@ public class MybatisFileStorageService implements FileStorageService {
      * @param idempotencyKey 事件去重键。
      */
     private void publishChange(UUID ownerId, String action, List<String> paths, String idempotencyKey) {
+        invalidateOverview(ownerId);
         if (outbox == null || paths == null || paths.isEmpty()) return;
         outbox.enqueue(ownerId, "file.changed", "file", paths.get(0), idempotencyKey,
                 mapOf("action", action, "paths", paths));
+    }
+
+    /** 文件 metadata 或内容变化后使任务中心的索引统计立即失效。 */
+    private void invalidateOverview(UUID ownerId) {
+        if (tasks != null) tasks.invalidateOverview(ownerId);
     }
 
     /**
@@ -1425,26 +1454,8 @@ public class MybatisFileStorageService implements FileStorageService {
      */
     private String currentEmbeddingFingerprint(UUID ownerId) {
         if (embeddingConfigs == null) return null;
-        return embeddingConfigs.find(ownerId).map(config -> fingerprint(
+        return embeddingConfigs.find(ownerId).map(config -> EmbeddingFingerprint.of(
                 config.provider(), config.baseUrl(), config.model())).orElse(null);
-    }
-
-    /**
-     * 计算 embedding provider、地址和模型的 SHA-256 指纹。
-     *
-     * @param provider provider 标识。
-     * @param baseUrl provider 基地址。
-     * @param model embedding 模型名。
-     * @return 小写十六进制指纹。
-     */
-    private String fingerprint(String provider, String baseUrl, String model) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(
-                    (provider + "|" + baseUrl + "|" + model).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return hex(digest);
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("SHA-256 is unavailable", error);
-        }
     }
 
     /**

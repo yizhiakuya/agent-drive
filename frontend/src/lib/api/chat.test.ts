@@ -21,6 +21,18 @@ function byteResponse(chunks: Uint8Array[]) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("chatStream SSE 解析", () => {
+  it("把选定模型放入聊天请求体", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: done\ndata: {"session_id":"model-session"}\n\n',
+    ]));
+
+    await chatStream("hi", [], null, [], () => {}, new AbortController().signal,
+      "auto", [], "fast-model");
+
+    const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: "fast-model" });
+  });
+
   it("解析 text 事件并流式回调", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: text\ndata: {"text":"你好"}\n\n',

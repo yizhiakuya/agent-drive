@@ -3,6 +3,7 @@ package com.agentdrive.api.chat;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 import java.util.List;
 import java.util.Map;
@@ -25,7 +26,8 @@ public record ChatRequest(
         @Pattern(regexp = "auto|low|medium|high") String thinkingLevel,
         @com.fasterxml.jackson.annotation.JsonIgnore UUID authenticatedUserId,
         @com.fasterxml.jackson.annotation.JsonIgnore String requestId,
-        @JsonProperty("frontend_capabilities") List<Map<String, Object>> frontendCapabilities
+        @JsonProperty("frontend_capabilities") List<Map<String, Object>> frontendCapabilities,
+        @JsonProperty("model") @Size(max = 256) String model
 ) {
     /**
      * 创建未注入认证 owner 的客户端请求。
@@ -41,7 +43,7 @@ public record ChatRequest(
                        List<Map<String, Object>> confirmations,
                        String sessionId,
                        String thinkingLevel) {
-        this(message, history, confirmations, sessionId, thinkingLevel, null, null, null);
+        this(message, history, confirmations, sessionId, thinkingLevel, null, null, null, null);
     }
 
     /**
@@ -63,7 +65,31 @@ public record ChatRequest(
                        UUID authenticatedUserId,
                        String requestId) {
         this(message, history, confirmations, sessionId, thinkingLevel,
-                authenticatedUserId, requestId, null);
+                authenticatedUserId, requestId, null, null);
+    }
+
+    /**
+     * 保留旧的八参数内部构造器，并使用默认模型。
+     *
+     * @param message 本轮消息
+     * @param history 客户端历史
+     * @param confirmations 本轮确认参数
+     * @param sessionId 会话 ID
+     * @param thinkingLevel 思考等级
+     * @param authenticatedUserId 服务端认证 owner
+     * @param requestId 服务端请求关联 ID
+     * @param frontendCapabilities 当前浏览器注册的前端动作能力清单
+     */
+    public ChatRequest(String message,
+                       List<Map<String, Object>> history,
+                       List<Map<String, Object>> confirmations,
+                       String sessionId,
+                       String thinkingLevel,
+                       UUID authenticatedUserId,
+                       String requestId,
+                       List<Map<String, Object>> frontendCapabilities) {
+        this(message, history, confirmations, sessionId, thinkingLevel,
+                authenticatedUserId, requestId, frontendCapabilities, null);
     }
 
     /**
@@ -77,6 +103,7 @@ public record ChatRequest(
      * @param authenticatedUserId 服务端解析出的 owner UUID，不接受 JSON 注入。
      * @param requestId 服务端生成或复用的请求关联 ID，不接受 JSON 注入。
      * @param frontendCapabilities 当前浏览器注册的前端动作能力清单。
+     * @param model 本轮聊天要使用的模型 ID；为空时沿用 owner 的默认模型。
      */
     public ChatRequest {
         history = history == null ? List.of() : List.copyOf(history);
@@ -86,6 +113,7 @@ public record ChatRequest(
                 .filter(java.util.Objects::nonNull)
                 .map(java.util.Map::copyOf)
                 .toList();
+        model = model == null ? "" : model.trim();
     }
 
     /**
@@ -96,7 +124,7 @@ public record ChatRequest(
      */
     public ChatRequest withSessionId(String normalizedSessionId) {
         return new ChatRequest(message, history, confirmations, normalizedSessionId, thinkingLevel,
-                authenticatedUserId, requestId, frontendCapabilities);
+                authenticatedUserId, requestId, frontendCapabilities, model);
     }
 
     /**
@@ -107,7 +135,7 @@ public record ChatRequest(
      */
     public ChatRequest withAuthenticatedUserId(UUID userId) {
         return new ChatRequest(message, history, confirmations, sessionId, thinkingLevel,
-                userId, requestId, frontendCapabilities);
+                userId, requestId, frontendCapabilities, model);
     }
 
     /**
@@ -121,6 +149,6 @@ public record ChatRequest(
      */
     public ChatRequest withRequestId(String correlationId) {
         return new ChatRequest(message, history, confirmations, sessionId, thinkingLevel,
-                authenticatedUserId, correlationId, frontendCapabilities);
+                authenticatedUserId, correlationId, frontendCapabilities, model);
     }
 }

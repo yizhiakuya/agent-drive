@@ -41,6 +41,9 @@ class MybatisTaskWorkerStoreIntegrationTest {
             Map<String, Object> claimed = workers.claim("worker-1", "integration", 30);
             assertThat(claimed).containsEntry("id", taskId).containsEntry("status", "running");
             assertThat(workers.heartbeat("worker-1", taskId, 30)).isTrue();
+            assertThat(workers.updateProgress("worker-1", taskId, 2, 5, "正在处理第 2 个文件", 30)).isTrue();
+            assertThat(tasks.get(owner, UUID.fromString(taskId))).containsEntry("progress",
+                    Map.of("current", 2, "total", 5, "message", "正在处理第 2 个文件"));
             assertThat(workers.succeed("worker-1", taskId, Map.of("ok", true))).isTrue();
             assertThat(tasks.get(owner, UUID.fromString(taskId))).containsEntry("status", "succeeded");
             assertThat(workers.heartbeat("worker-1", taskId, 30)).isFalse();

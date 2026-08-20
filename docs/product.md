@@ -36,7 +36,7 @@ Agent Drive 是面向个人用户的 Agent-first 私人网盘。用户可以直�
 ### 3.1 首次使用
 
 1. Web 端使用密码登录，服务端创建 HttpOnly session Cookie。
-2. 在设置页配置对话模型；当前支持 OpenAI 兼容、OpenAI Responses 和 Anthropic。
+2. 在设置页配置对话 Provider；当前支持 OpenAI 兼容、OpenAI Responses 和 Anthropic。聊天页可以从当前 Provider 的模型目录中选择本轮使用的模型，未选择时沿用默认模型。
 3. 按需配置 Jina embedding 和 OpenAI 兼容视觉模型。留空 API key 只有在协议、地址和已存配置一致时才复用旧 key。
 4. 如需手机同步，在设置页生成一次性二维码，用 Android App 扫码配对。
 
@@ -66,10 +66,10 @@ Agent Drive 是面向个人用户的 Agent-first 私人网盘。用户可以直�
 
 | 模块 | 当前能力 | 依赖或边界 |
 |------|----------|------------|
-| 对话 | 会话、流式正文、reasoning、工具步骤、确认、停止、标题摘要 | 需要已配置且可用的对话模型 |
+| 对话 | 会话、流式正文、reasoning、工具步骤、确认、停止、标题摘要、本轮模型选择 | 需要已配置且可用的对话 Provider；模型选择只覆盖当前请求 |
 | 文件 | 列表、名称搜索、语义搜索、预览、全文、上传、移动、复制、重命名、回收站 | 文件保存在 owner-scoped 本地文件系统 |
 | 内容索引 | 文本抽取、全文、embedding、图片描述、revision 校验 | 由独立 Worker 异步处理；embedding/vision 为可选配置 |
-| 任务中心 | 顶层任务统计、筛选、进度、失败详情、取消/重试入口、索引重建入口 | PostgreSQL 是唯一任务状态源 |
+| 任务中心 | 顶层任务统计、筛选、阶段/文件/批次进度、失败详情、取消/重试入口、索引重建入口 | PostgreSQL 是唯一任务状态源；运行中详情通过任务事件持续刷新 |
 | 自动化 | 计划任务、自动化执行、每日报告和用户偏好 | 执行结果依赖 Worker 与对应 handler |
 | 设置 | LLM、embedding、vision、模型探测、二维码配对、设备列表、退出登录 | API key 只显示掩码，服务端加密存储 |
 | Android App | 扫码连接、加密令牌、相册同步、去重、断点续传、同步状态 | Capacitor 7；当前没有 iOS 客户端 |

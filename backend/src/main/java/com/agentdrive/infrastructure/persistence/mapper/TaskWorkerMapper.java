@@ -55,6 +55,24 @@ public interface TaskWorkerMapper {
                   @Param("leaseSeconds") int leaseSeconds);
 
     /**
+     * 原子更新任务阶段进度并续租。
+     * SQL 仍要求 Worker 持有未过期租约，避免旧 Worker 在任务被回收后覆盖新执行者的进度。
+     * @param workerId 当前租约持有者。
+     * @param taskId 任务 UUID 字符串。
+     * @param current 当前阶段计数。
+     * @param total 当前阶段总数，未知时为 0。
+     * @param message 当前阶段说明。
+     * @param leaseSeconds 续租秒数。
+     * @return 实际更新行数。
+     */
+    int updateProgress(@Param("workerId") String workerId,
+                       @Param("taskId") String taskId,
+                       @Param("current") int current,
+                       @Param("total") int total,
+                       @Param("message") String message,
+                       @Param("leaseSeconds") int leaseSeconds);
+
+    /**
      * 将当前 Worker 持有的任务标记为成功。
      * SQL 只更新匹配 Worker 且处于 {@code running} 或 {@code cancelling} 的任务，将结果写为 {@code jsonb}，
      * 清除错误和租约字段，并写入完成时间；因此取消请求在处理成功提交前不会阻止该成功分支。

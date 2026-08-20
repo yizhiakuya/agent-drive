@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api/client";
+import { getConfig, listModels } from "@/lib/api/config";
 import { getSession } from "@/lib/api/sessions";
 import { EV } from "@/lib/events";
 import { Button } from "@/components/ui/button";
@@ -12,8 +13,16 @@ import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
 import { maskSecretsJson } from "@/lib/format";
-import { ArrowUp, Brain, ChevronDown, FileSearch, FileText, FolderOpen, ListChecks, ShieldAlert, Square, X } from "lucide-react";
+import { ArrowUp, Brain, ChevronDown, Cpu, FileSearch, FileText, FolderOpen, ListChecks, RefreshCw, ShieldAlert, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
 import {
   Select,
   SelectContent,
@@ -54,6 +63,7 @@ function greet() {
 
 export default function ChatPanel() {
   const sessionId = useAppStore((s) => s.sessionId);
+  const configuredModel = useAppStore((s) => s.modelName);
   const setSessionId = useAppStore((s) => s.setSessionId);
   const bumpSessions = useAppStore((s) => s.bumpSessions);
 
@@ -67,6 +77,13 @@ export default function ChatPanel() {
   const [autoReport, setAutoReport] = useState<{ date: string; text: string } | null>(null);
   const [reportDismissed, setReportDismissed] = useState(false);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("auto");
+  const [selectedModel, setSelectedModel] = useState(configuredModel);
+  const [modelOptions, setModelOptions] = useState<string[]>(configuredModel ? [configuredModel] : []);
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState("");
+  const configuredModelRef = useRef(configuredModel);
 
   useEffect(() => {
     try {
@@ -80,6 +97,15 @@ export default function ChatPanel() {
       localStorage.setItem("agent-drive-thinking-level", thinkingLevel);
     } catch { /* 忽略 */ }
   }, [thinkingLevel]);
+
+  useEffect(() => {
+    if (!configuredModel || configuredModelRef.current === configuredModel) return;
+    configuredModelRef.current = configuredModel;
+    setSelectedModel(configuredModel);
+    setModelOptions([configuredModel]);
+    setModelsLoaded(false);
+    setModelLoadError("");
+  }, [configuredModel]);
 
   function markReportRead(date: string) {
     try {
@@ -101,6 +127,38 @@ export default function ChatPanel() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const sidRef = useRef<string | null>(sessionId);
 
+  /**
+   * 读取当前 owner 的 Provider 模型目录；地址、协议和 key 仍由服务端从已保存配置解析。
+   * 模型列表只用于本地选择，不会修改设置页的默认模型。
+   */
+  async function loadModels() {
+    if (modelsLoading) return;
+    setModelsLoading(true);
+    setModelLoadError("");
+    try {
+      const cfg = await getConfig();
+      const llm = cfg.llm;
+      if (!llm) throw new Error("尚未配置聊天模型");
+      const result = await listModels({ type: llm.type, base_url: llm.base_url, api_key: "" });
+      if (!result.ok || !result.models?.length) {
+        throw new Error(result.error || "当前服务商没有返回可用模型");
+      }
+      setModelOptions((current) => Array.from(new Set([
+        selectedModel || llm.model,
+        ...current,
+        ...result.models!,
+      ].filter(Boolean))));
+      setModelsLoaded(true);
+    } catch (error) {
+      setModelLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
+  /**
+   * 切换会话时先使当前流失效，再读取历史消息；流式请求的取消与消息加载必须保持同一 session 边界。
+   */
   async function loadSession(sid: string) {
     try {
       const r = await getSession(sid) as { messages?: { role: string; content: string; reasoning?: string; tool?: string; arguments?: Record<string, unknown>; output?: string; parsed?: Record<string, unknown> }[] };
@@ -153,6 +211,7 @@ export default function ChatPanel() {
     message?: string,
     confirmations: Record<string, unknown>[] = [],
     selectedThinkingLevel: ThinkingLevel = thinkingLevel,
+    selectedModelId: string = selectedModel,
   ) {
     const msg = message ?? input.trim();
     if (!msg || busy) return;
@@ -160,7 +219,7 @@ export default function ChatPanel() {
       setInput("");
       if (taRef.current) taRef.current.style.height = "auto";
     }
-    await send(msg, confirmations, selectedThinkingLevel);
+    await send(msg, confirmations, selectedThinkingLevel, selectedModelId);
   }
 
   // 主动汇报：空会话时拉取最近一次自动化报告
@@ -178,6 +237,7 @@ export default function ChatPanel() {
 
   // 全局刷新（下拉刷新）：重载当前会话消息
   useEffect(() => {
+    // 会话区用 CSS hidden 保持 ChatPanel 挂载，避免切换到文件/任务页时丢失正在进行的流和工具步骤。
     const h = () => {
       if (sessionId) loadSession(sessionId);
     };
@@ -232,6 +292,7 @@ export default function ChatPanel() {
       `请继续执行刚才确认的操作：${pending.tool} ${JSON.stringify(pending.arguments)}`,
       confirmed,
       thinkingLevel,
+      selectedModel,
     );
   }
 
@@ -354,35 +415,83 @@ export default function ChatPanel() {
         <div className="mx-auto max-w-4xl">
            <div
              data-testid="chat-composer"
-             className="overflow-hidden rounded-md border border-border bg-panel shadow-sm transition-[border-color,box-shadow] duration-150 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/10"
+             className="overflow-hidden rounded-md border border-border bg-panel shadow-sm transition-[border-color,box-shadow] duration-150 has-[[data-slot=chat-input]:focus]:border-accent has-[[data-slot=chat-input]:focus]:ring-2 has-[[data-slot=chat-input]:focus]:ring-accent/10"
            >
-            <div className="flex items-center justify-between gap-3 border-b border-border bg-card/60 px-3 py-1.5">
-              <div className="flex min-w-0 items-center gap-2">
-                <Brain className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
-                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">推理层级</span>
-          <Select
-            value={thinkingLevel}
-            onValueChange={(value) => { if (isThinkingLevel(value)) setThinkingLevel(value); }}
-            disabled={busy}
-          >
-            <SelectTrigger size="sm" aria-label="思考等级" className="h-6 min-w-[104px] rounded-md border-transparent bg-panel text-xs shadow-none">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {THINKING_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  <span>{option.label}</span>
-                  <span className="ml-1.5 text-xs text-muted">{option.description}</span>
-              </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card/60 px-3 py-1.5">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Cpu className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
+                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">模型</span>
+                  <Combobox
+                    value={selectedModel}
+                    onValueChange={(value) => setSelectedModel(value == null ? "" : String(value))}
+                    inputValue={selectedModel}
+                    onInputValueChange={setSelectedModel}
+                    open={modelsOpen}
+                    onOpenChange={(open) => {
+                      setModelsOpen(open);
+                      if (open && !modelsLoaded && !modelsLoading) void loadModels();
+                    }}
+                    items={modelOptions.map((model) => ({ value: model, label: model }))}
+                  >
+                    <ComboboxInput
+                      aria-label="聊天模型"
+                      placeholder="选择模型"
+                      className="h-6 min-w-[9rem] max-w-[min(42vw,15rem)] border-transparent bg-panel text-xs shadow-none [&>input]:h-6 [&>input]:text-xs"
+                      showClear
+                      disabled={busy}
+                      onFocus={() => {
+                        if (!modelsLoaded && !modelsLoading) void loadModels();
+                      }}
+                    />
+                    <ComboboxContent>
+                      <ComboboxList>
+                        {(item) => <ComboboxItem value={String(item.value)}>{String(item.label)}</ComboboxItem>}
+                      </ComboboxList>
+                      <ComboboxEmpty>{modelsLoading ? "获取中…" : modelLoadError || "暂无可用模型"}</ComboboxEmpty>
+                    </ComboboxContent>
+                  </Combobox>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-6 shrink-0 text-muted hover:bg-panel hover:text-text"
+                    aria-label="刷新聊天模型"
+                    title="刷新模型列表"
+                    onClick={() => void loadModels()}
+                    disabled={busy || modelsLoading}
+                  >
+                    <RefreshCw className={modelsLoading ? "animate-spin" : undefined} />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Brain className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
+                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">推理层级</span>
+                  <Select
+                    value={thinkingLevel}
+                    onValueChange={(value) => { if (isThinkingLevel(value)) setThinkingLevel(value); }}
+                    disabled={busy}
+                  >
+                    <SelectTrigger size="sm" aria-label="思考等级" className="h-6 min-w-[104px] rounded-md border-transparent bg-panel text-xs shadow-none">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {THINKING_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          <span>{option.label}</span>
+                          <span className="ml-1.5 text-xs text-muted">{option.description}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <span className="hidden shrink-0 font-mono text-[10px] text-muted sm:inline">{busy ? "STREAMING" : "READY"}</span>
             </div>
             <div className="flex items-end gap-1.5 px-3 py-2">
               <textarea
                 ref={taRef}
+                data-slot="chat-input"
                 value={input}
                 rows={1}
                 onChange={(e) => { setInput(e.target.value); autoGrow(); }}

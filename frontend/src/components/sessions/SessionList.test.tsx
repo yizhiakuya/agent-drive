@@ -61,7 +61,10 @@ describe("SessionList 空标题 → 标题生成与列表刷新", () => {
     render(<SessionList width={240} onResize={onResize} />);
 
     await act(async () => {});
-    fireEvent.keyDown(screen.getByTestId("sessions-panel-resize-handle"), { key: "ArrowRight" });
+    const handle = screen.getByTestId("sessions-panel-resize-handle");
+    expect(handle.className).toContain("-right-3");
+    expect(handle.className).not.toContain("right-0");
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
     expect(onResize).toHaveBeenCalledWith(256);
 
     fireEvent.click(screen.getByTitle("收起会话列表"));

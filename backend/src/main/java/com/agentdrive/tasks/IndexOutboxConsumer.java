@@ -28,8 +28,9 @@ public class IndexOutboxConsumer {
     }
 
     /**
-     * 批量读取待发布事件，为 {@code file.changed} 生成 index.file、index.rebuild 或 index.cleanup 任务，
-     * 并仅在任务入队后标记 outbox 事件已发布；格式错误或未知事件会跳过。
+     * 批量读取待发布事件，将 {@code file.changed} 的 upsert、move/copy、delete 动作分别映射为
+     * {@code index.file}、{@code index.rebuild}、{@code index.cleanup} 任务，并仅在任务入队后
+     * 标记 outbox 事件已发布。事件 ID 进入任务去重键，格式错误或未知事件会跳过且不会伪造发布成功。
      * @param limit 本轮最多读取的 outbox 事件数，实际值限制在 1 到 100 之间。
      * @return 成功标记为已发布的事件数量。
      */

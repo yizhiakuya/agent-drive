@@ -73,7 +73,7 @@ public final class TaskController {
      * @param limit 返回条数，必须在 1 到 200 之间。
      * @param offset 分页偏移，不能为负数。
      * @param exchange 用于限定任务 owner 的请求上下文。
-     * @return 当前页 {@code items} 与 owner 级任务 {@code overview}。
+     * @return 当前页 {@code items}、是否还有下一页的 {@code has_more} 与 owner 级任务 {@code overview}。
      * @throws ResponseStatusException 参数状态未知或分页越界时返回 400。
      */
     @GetMapping
@@ -87,10 +87,19 @@ public final class TaskController {
     ) {
         List<String> statuses = parseStatuses(status);
         if (limit < 1 || limit > 200 || offset < 0) throw new ResponseStatusException(BAD_REQUEST, "invalid pagination");
-        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> Map.of(
-                "items", tasks.list(principal.userId(), statuses, taskType, includeChildren, limit, offset),
-                "overview", tasks.overview(principal.userId())
-        )));
+        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
+            // 多取一条只用于判断是否还有下一页，响应仍严格遵守调用方要求的 limit。
+            List<Map<String, Object>> rows = tasks.list(
+                    principal.userId(), statuses, taskType, includeChildren, limit + 1, offset
+            );
+            boolean hasMore = rows.size() > limit;
+            List<Map<String, Object>> items = hasMore ? rows.subList(0, limit) : rows;
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("items", items);
+            response.put("has_more", hasMore);
+            response.put("overview", tasks.overview(principal.userId()));
+            return response;
+        }));
     }
 
     /**
@@ -308,7 +317,7 @@ public final class TaskController {
     /**
      * 将向量化请求中的路径列表交给统一路径规则规范化。
      *
-     * @param files 请求中的 owner 相对文件路径列表，可为空以触发底层默认规则。
+     * @param files 请求中的 owner 相对文件路径列表；不能为空，且每项必须是 owner 根下的相对路径。
      * @return 去重后的规范化路径列表。
      * @throws ResponseStatusException 路径越界、内部路径或数量不合法时返回 400。
      */

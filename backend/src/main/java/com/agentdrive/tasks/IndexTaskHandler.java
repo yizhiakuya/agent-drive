@@ -3,6 +3,7 @@ package com.agentdrive.tasks;
 import com.agentdrive.index.EmbeddingService;
 import com.agentdrive.index.IndexingService;
 import com.agentdrive.files.FileStorageService;
+import com.agentdrive.progress.TaskProgressReporter;
 import com.agentdrive.vision.VisionDescriptionService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,6 +25,8 @@ import java.util.UUID;
 @Service
 @Profile({"java-files", "java-auth", "java-chat"})
 public class IndexTaskHandler {
+    private static final int TASK_LEASE_SECONDS = 300;
+    private static final long PROGRESS_INTERVAL_NANOS = 250_000_000L;
     private final TaskWorkerStore workers;
     private final IndexingService indexing;
     private final ObjectMapper objectMapper;
@@ -160,32 +163,45 @@ public class IndexTaskHandler {
      */
     private void execute(String workerId, Map<String, Object> task) {
         String taskId = String.valueOf(task.get("id"));
+        ProgressReporter progress = new ProgressReporter(workerId, taskId);
         try {
             UUID userId = UUID.fromString(String.valueOf(task.get("user_id")));
             Map<String, Object> payload = payload(task.get("payload_json"));
             String type = String.valueOf(task.get("type"));
+            progress.report(0, 0, "正在执行：" + type);
             Map<String, Object> result = switch (type) {
-                case "index.file" -> indexFile(userId, required(payload, "path"), booleanValue(payload, "force"));
+                case "index.file" -> indexFile(userId, required(payload, "path"), booleanValue(payload, "force"), progress);
                 case "index.rebuild" -> {
-                    Map<String, Object> rebuilt = new LinkedHashMap<>(indexing.rebuild(userId, string(payload, "prefix", null)));
+                    Map<String, Object> rebuilt = new LinkedHashMap<>(indexing.rebuild(
+                            userId, string(payload, "prefix", null), progress));
+                    progress.reportNow(0, 0, "全文索引完成（" + rebuilt.getOrDefault("processed_files", 0)
+                            + " 个文件），开始向量化");
                     if (embeddings != null) {
                         rebuilt.put("embedding", embeddings.embed(userId, List.of(), 64,
-                                booleanValue(payload, "force")));
+                                booleanValue(payload, "force"), progress));
                     }
                     yield rebuilt;
                 }
-                case "index.embed" -> embedFiles(userId, optionalFiles(payload), booleanValue(payload, "force"));
-                case "index.vision" -> visionFiles(userId, optionalFiles(payload), booleanValue(payload, "force"));
-                case "index.cleanup" -> indexing.cleanup(userId);
-                case "maintenance.daily" -> dailyMaintenance(userId, payload);
+                case "index.embed" -> embedFiles(userId, optionalFiles(payload), booleanValue(payload, "force"), progress);
+                case "index.vision" -> visionFiles(userId, optionalFiles(payload), booleanValue(payload, "force"), progress);
+                case "index.cleanup" -> {
+                    progress.report(0, 1, "正在清理失效索引");
+                    Map<String, Object> cleanup = indexing.cleanup(userId);
+                    progress.reportNow(1, 1, "失效索引清理完成");
+                    yield cleanup;
+                }
+                case "maintenance.daily" -> dailyMaintenance(userId, payload, progress);
                 case "automation.run" -> {
                     if (automation == null) throw new IllegalStateException("automation handler unavailable");
                     yield automation.execute(userId, payload);
                 }
                 default -> throw new IllegalArgumentException("unsupported task type: " + type);
             };
+            progress.reportNow(1, 1, "任务执行完成");
             workers.succeed(workerId, taskId, result);
         } catch (Exception error) {
+            progress.reportNow(0, 0, "任务执行失败：" + (error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage()));
             workers.fail(workerId, taskId, error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
         }
     }
@@ -199,16 +215,21 @@ public class IndexTaskHandler {
      * @param payload 维护参数；可选 {@code trash_retention_days} 覆盖默认 30 天。
      * @return 三个维护步骤的结果摘要。
      */
-    private Map<String, Object> dailyMaintenance(UUID userId, Map<String, Object> payload) {
+    private Map<String, Object> dailyMaintenance(UUID userId, Map<String, Object> payload,
+                                                  TaskProgressReporter progress) {
         if (files == null || taskStore == null) {
             throw new IllegalStateException("maintenance handler unavailable");
         }
         int retentionDays = integerValue(payload, "trash_retention_days", 30);
         Map<String, Object> result = new LinkedHashMap<>();
+        progress.report(0, 3, "系统维护：清理失效索引");
         result.put("index", indexing.cleanup(userId));
+        progress.report(1, 3, "系统维护：清理回收站");
         Map<String, Object> trash = files.cleanupTrash(userId, retentionDays);
         result.put("trash_removed", trash == null ? 0 : trash.getOrDefault("removed", 0));
+        progress.report(2, 3, "系统维护：清理任务历史");
         result.put("task_history", taskStore.pruneHistory(userId, 30, 2000));
+        progress.report(3, 3, "系统维护：全部步骤完成");
         return result;
     }
 
@@ -221,11 +242,17 @@ public class IndexTaskHandler {
      * @param force 是否清除并重算该文件已有向量。
      * @return 全文索引结果，可能带有向量化结果。
      */
-    private Map<String, Object> indexFile(UUID userId, String path, boolean force) {
+    private Map<String, Object> indexFile(UUID userId, String path, boolean force,
+                                           TaskProgressReporter progress) {
+        progress.report(0, 2, "文件索引：正在抽取 " + path);
         Map<String, Object> result = new LinkedHashMap<>(indexing.indexFile(userId, path));
         if (embeddings != null && Boolean.TRUE.equals(result.get("indexed"))) {
-            result.put("embedding", embeddings.embed(userId, List.of(path), 64, force));
+            progress.reportNow(1, 2, "文件索引：文本已完成，正在生成向量");
+            result.put("embedding", embeddings.embed(userId, List.of(path), 64, force, progress));
+        } else {
+            progress.reportNow(2, 2, "文件索引：已跳过 " + path);
         }
+        if (Boolean.TRUE.equals(result.get("indexed"))) progress.reportNow(2, 2, "文件索引：已完成 " + path);
         return result;
     }
 
@@ -238,12 +265,17 @@ public class IndexTaskHandler {
      * @param force 是否清除并重算这些文件已有向量。
      * @return 包含逐文件全文结果和整体 embedding 结果的 map。
      */
-    private Map<String, Object> embedFiles(UUID userId, List<String> paths, boolean force) {
+    private Map<String, Object> embedFiles(UUID userId, List<String> paths, boolean force,
+                                            TaskProgressReporter progress) {
         if (embeddings == null) {
             return Map.of("vectorized", false, "reason", "embedding_handler_unavailable");
         }
         List<Map<String, Object>> indexed = new ArrayList<>();
+        int total = paths.size();
+        if (total == 0) progress.report(0, 0, "文件向量化：准备处理全部文件");
+        int processed = 0;
         for (String path : paths) {
+            progress.report(processed, total, "文件向量化：正在索引 " + path);
             try {
                 indexed.add(indexing.indexFile(userId, path));
             } catch (Exception error) {
@@ -255,10 +287,13 @@ public class IndexTaskHandler {
                         ? error.getClass().getSimpleName() : error.getMessage());
                 indexed.add(skipped);
             }
+            processed++;
+            progress.report(processed, total, "文件向量化：已完成全文索引 " + processed + "/" + total);
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", indexed);
-        result.put("embedding", embeddings.embed(userId, paths, 64, force));
+        progress.reportNow(0, 0, "文件向量化：全文索引完成，开始生成向量");
+        result.put("embedding", embeddings.embed(userId, paths, 64, force, progress));
         return result;
     }
 
@@ -271,12 +306,15 @@ public class IndexTaskHandler {
      * @param force 是否强制清理并重算已有向量。
      * @return 每个图片的处理状态和整体 embedding 统计。
      */
-    private Map<String, Object> visionFiles(UUID userId, List<String> paths, boolean force) {
+    private Map<String, Object> visionFiles(UUID userId, List<String> paths, boolean force,
+                                            TaskProgressReporter progress) {
         if (vision == null) return Map.of("vectorized", false, "reason", "vision_handler_unavailable");
         if (paths.isEmpty()) return Map.of("vectorized", false, "reason", "vision_files_required");
         List<Map<String, Object>> results = new ArrayList<>();
         List<String> indexedPaths = new ArrayList<>();
+        int processed = 0;
         for (String path : paths) {
+            progress.report(processed, paths.size(), "图片索引：正在识别 " + path);
             try {
                 Map<String, Object> described = vision.describeFile(userId, path);
                 String json = objectMapper.writeValueAsString(described.get("description"));
@@ -293,14 +331,59 @@ public class IndexTaskHandler {
                         ? error.getClass().getSimpleName() : error.getMessage());
                 results.add(skipped);
             }
+            processed++;
+            progress.report(processed, paths.size(), "图片索引：已完成视觉识别 " + processed + "/" + paths.size());
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", results);
         result.put("described", indexedPaths.size());
+        progress.reportNow(0, 0, "图片索引：视觉识别完成，开始生成向量");
         result.put("embedding", embeddings == null
                 ? Map.of("vectorized", false, "reason", "embedding_handler_unavailable")
-                : embeddings.embed(userId, indexedPaths, 64, force));
+                : embeddings.embed(userId, indexedPaths, 64, force, progress));
         return result;
+    }
+
+    /**
+     * 把业务服务的阶段回调限速为每 250ms 至多一次，并把每次有效更新续租任务。
+     * 阶段完成或任务失败会立即写入，保证详情不会停在最后一个中间批次。
+     */
+    private final class ProgressReporter implements TaskProgressReporter {
+        private final String workerId;
+        private final String taskId;
+        private long lastReportNanos = Long.MIN_VALUE;
+        private int lastCurrent = Integer.MIN_VALUE;
+        private int lastTotal = Integer.MIN_VALUE;
+        private String lastMessage;
+
+        private ProgressReporter(String workerId, String taskId) {
+            this.workerId = workerId;
+            this.taskId = taskId;
+        }
+
+        @Override
+        public void report(int current, int total, String message) {
+            write(current, total, message, false);
+        }
+
+        @Override
+        public void reportNow(int current, int total, String message) {
+            write(current, total, message, true);
+        }
+
+        private void write(int current, int total, String message, boolean immediate) {
+            String safeMessage = message == null || message.isBlank() ? "处理中" : message;
+            if (current == lastCurrent && total == lastTotal && safeMessage.equals(lastMessage)) return;
+            long now = System.nanoTime();
+            if (!immediate && lastReportNanos != Long.MIN_VALUE
+                    && now - lastReportNanos < PROGRESS_INTERVAL_NANOS) return;
+            if (workers.updateProgress(workerId, taskId, current, total, safeMessage, TASK_LEASE_SECONDS)) {
+                lastReportNanos = now;
+                lastCurrent = current;
+                lastTotal = total;
+                lastMessage = safeMessage;
+            }
+        }
     }
 
     /**

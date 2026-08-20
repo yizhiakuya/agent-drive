@@ -35,6 +35,15 @@ public interface TaskStore {
     Map<String, Object> overview(UUID userId);
 
     /**
+     * 使 owner 的任务概览索引统计失效。
+     * 文件变更后应调用此方法；不支持缓存的适配器可以保持默认空实现。
+     *
+     * @param userId 需要重新计算概览的 owner UUID。
+     */
+    default void invalidateOverview(UUID userId) {
+    }
+
+    /**
      * 按 owner 和任务 UUID 读取单条任务，防止通过猜测 UUID 跨用户访问任务。
      *
      * @param userId 任务归属用户的 UUID。

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtTime } from "./format";
+import { fmtTime, fmtToolArgs, formatJson } from "./format";
 
 describe("fmtTime", () => {
   // 固定时区避免 CI 环境差异：toLocaleString("zh-CN") 结果随运行环境 TZ 变化，
@@ -37,5 +37,31 @@ describe("fmtTime", () => {
     const full = fmtTime(1_750_000_000);
     const d = fmtTime(1_750_000_000, { dateOnly: true });
     expect(d.length).toBeLessThan(full.length);
+  });
+});
+
+describe("fmtToolArgs", () => {
+  it("formats common file operations through the formatter map", () => {
+    expect(fmtToolArgs("delete_file", { path: "a.txt" })).toBe("删除 a.txt");
+    expect(fmtToolArgs("copy_file", { src: "a.txt", dst: "b.txt" })).toBe("复制 a.txt → b.txt");
+    expect(fmtToolArgs("list_files", {})).toBe("列出根目录");
+  });
+
+  it("masks unknown tool arguments instead of exposing secrets", () => {
+    expect(fmtToolArgs("unknown", { api_key: "secret-value" })).toBe('{"api_key":"***"}');
+  });
+});
+
+describe("formatJson", () => {
+  it("pretty prints task data and masks secret-like keys", () => {
+    const output = formatJson({ files: ["notes.md"], api_key: "hidden", nested: { count: 2 } });
+    expect(output).toContain('"files": [');
+    expect(output).toContain('"api_key": "***"');
+    expect(output).toContain('"count": 2');
+  });
+
+  it("returns an empty string for absent task data", () => {
+    expect(formatJson(null)).toBe("");
+    expect(formatJson(undefined)).toBe("");
   });
 });

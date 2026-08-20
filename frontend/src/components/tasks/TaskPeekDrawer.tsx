@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -11,41 +11,12 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { ApiError } from "@/lib/api/client";
 import { listTasks, type TaskRecord, type TaskStatus } from "@/lib/api/tasks";
 import { EV } from "@/lib/events";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-
-const TASK_LABELS: Record<string, string> = {
-  "index.file": "文件索引",
-  "index.rebuild": "重建搜索索引",
-  "index.embed": "文件向量化",
-  "index.vision": "图片视觉索引",
-  "index.cleanup": "清理失效索引",
-  "maintenance.daily": "系统维护",
-  "automation.run": "自动化规则",
-};
-
-const STATUS_LABELS: Record<TaskStatus, string> = {
-  queued: "等待中",
-  running: "运行中",
-  retry_wait: "等待重试",
-  cancelling: "正在取消",
-  succeeded: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
-};
-
-const ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running", "retry_wait", "cancelling"]);
-
-function taskLabel(task: TaskRecord) {
-  return TASK_LABELS[task.type] || task.type;
-}
-
-function taskPercent(task: TaskRecord) {
-  if (task.progress.total <= 0) return 0;
-  return Math.min(100, Math.round((task.progress.current / task.progress.total) * 100));
-}
+import TaskProgressBar from "./TaskProgressBar";
+import { ACTIVE_STATUSES, resourceLabel, STATUS_LABELS, STATUS_VARIANT, taskLabel, taskStatusHint } from "./task-presenter";
 
 function StatusMark({ status }: { status: TaskStatus }) {
   if (status === "running" || status === "cancelling") {
@@ -58,7 +29,6 @@ function StatusMark({ status }: { status: TaskStatus }) {
 }
 
 function TaskPreview({ task }: { task: TaskRecord }) {
-  const percent = taskPercent(task);
   const active = ACTIVE_STATUSES.has(task.status);
   return (
     <article className="border-b border-border py-4 last:border-b-0">
@@ -67,18 +37,13 @@ function TaskPreview({ task }: { task: TaskRecord }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <h3 className="min-w-0 break-words text-sm font-semibold text-text">{taskLabel(task)}</h3>
-            <span className={`shrink-0 text-[10px] font-mono ${task.status === "failed" ? "text-danger" : active ? "text-warn" : "text-muted"}`}>
-              {STATUS_LABELS[task.status]}
-            </span>
+            <Badge variant={STATUS_VARIANT[task.status]}>{STATUS_LABELS[task.status]}</Badge>
           </div>
-          {task.resource_key && <p className="mt-1 break-all font-mono text-[10px] text-muted">{task.resource_key.replace(/^file:|^index:/, "")}</p>}
+          {task.resource_key && <p className="mt-1 break-all font-mono text-[10px] text-muted">{resourceLabel(task.resource_key)}</p>}
           {task.progress.message && <p className="mt-1 break-words text-xs text-muted">{task.progress.message}</p>}
           {(active || task.progress.total > 0) && (
-            <div className="mt-2 flex items-center gap-2">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-card" aria-label={`进度 ${percent}%`}>
-                <div className="h-full rounded-full bg-text transition-[width] duration-300" style={{ width: `${percent}%` }} />
-              </div>
-              {task.progress.total > 0 && <span className="w-8 text-right font-mono text-[10px] text-muted">{percent}%</span>}
+            <div className="mt-2">
+              <TaskProgressBar progress={task.progress} active={active} compact fallbackText={taskStatusHint(task.status)} />
             </div>
           )}
           {task.error && (
@@ -101,43 +66,49 @@ interface TaskPeekDrawerProps {
 
 export default function TaskPeekDrawer({ open, onClose, onViewAll }: TaskPeekDrawerProps) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const requestRef = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
-    let mounted = true;
+    if (!open) {
+      requestRef.current += 1;
+      return;
+    }
     const load = async () => {
+      const request = ++requestRef.current;
       setLoading(true);
       try {
-        const response = await listTasks("queued,running,retry_wait,cancelling,failed");
-        if (!mounted) return;
+        const response = await listTasks("queued,running,retry_wait,cancelling,failed,cancelled", { limit: 7 });
+        if (request !== requestRef.current) return;
         setTasks(response.items);
+        setHasMore(response.has_more);
         setError("");
       } catch (reason) {
-        if (!mounted) return;
-        setError(reason instanceof ApiError ? reason.message : String(reason));
+        if (request !== requestRef.current) return;
+        setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        if (mounted) setLoading(false);
+        if (request === requestRef.current) setLoading(false);
       }
     };
-    load();
+    void load();
     const refresh = () => { void load(); };
     window.addEventListener(EV.tasksChanged, refresh);
     window.addEventListener(EV.refresh, refresh);
     const interval = window.setInterval(refresh, 8000);
     return () => {
-      mounted = false;
+      requestRef.current += 1;
       window.removeEventListener(EV.tasksChanged, refresh);
       window.removeEventListener(EV.refresh, refresh);
       window.clearInterval(interval);
     };
-  }, [open]);
+  }, [open, reloadKey]);
 
   if (!open) return null;
 
   const visibleTasks = tasks.slice(0, 6);
-  const hiddenTaskCount = Math.max(0, tasks.length - visibleTasks.length);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="后台任务队列">
@@ -166,18 +137,21 @@ export default function TaskPeekDrawer({ open, onClose, onViewAll }: TaskPeekDra
             </div>
           )}
           {!loading && error && (
-            <div className="flex gap-2 py-6 text-xs text-danger">
+            <div className="flex items-start gap-2 py-6 text-xs text-danger">
               <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
-              <span className="break-words">{error}</span>
+              <span className="min-w-0 flex-1 break-words">{error}</span>
+              <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-danger hover:bg-danger/10" onClick={() => setReloadKey((value) => value + 1)}>
+                重试
+              </Button>
             </div>
           )}
           {!loading && !error && tasks.length === 0 && (
-            <div className="py-10 text-center text-xs text-muted">当前没有待处理或失败任务</div>
+            <div className="py-10 text-center text-xs text-muted">当前没有待处理或需要关注的任务</div>
           )}
           {visibleTasks.map((task) => <TaskPreview key={task.id} task={task} />)}
-          {hiddenTaskCount > 0 && (
+          {hasMore && (
             <div className="border-b border-border py-3 text-center text-[11px] text-muted">
-              还有 {hiddenTaskCount} 条任务，进入任务页查看完整记录
+              还有更多任务，进入任务页查看完整记录
             </div>
           )}
         </div>

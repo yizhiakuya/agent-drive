@@ -22,9 +22,10 @@ import java.util.Map;
 /**
  * 提供 owner-scoped 自动化计划的查询、创建/更新和删除 API。
  *
- * <p>计划定义由 {@link ScheduleStore} 持久化，包含 cron 或其他调度表达式、任务类型、
- * lane、payload、优先级和最大尝试次数；控制器只负责认证、请求体存在性检查以及把
- * 阻塞式存储调用移到 bounded-elastic。
+ * <p>计划定义由 {@link ScheduleStore} 持久化，包含 cron、interval 或 daily 调度参数、
+ * 任务类型、lane、payload、优先级和最大尝试次数；到期后只由 Worker 派发任务，不在
+ * HTTP 请求中执行 payload。控制器只负责认证、请求体存在性检查以及把阻塞式存储调用
+ * 移到 bounded-elastic。
  */
 @RestController
 @Profile({"java-auth", "java-chat"})

@@ -16,7 +16,7 @@
 |------|------|------|
 | 按钮 | `ui/button` | 主操作 default；次要 outline；轻量/图标 ghost；危险操作（删除/清空/登出）destructive；文字链接 link。大小 default/sm |
 | 输入框 | `ui/input` | 全站唯一输入实现；需要内嵌图标/按钮用 `ui/input-group` |
-| 下拉 | `ui/select` | 多选一场景；**单值场景禁用**（见反模式 1） |
+| 下拉 | `ui/select` | 多选一场景；**单值场景禁用**（见反模式 1）；选中/键盘高亮使用 `accent-soft + text-text`，不要直接用深色品牌 `accent` 做背景。可搜索选择使用 `ui/combobox`，其高亮项遵循同一对比度规则 |
 | 组合框 | `ui/combobox` | 可过滤选择 + 自由文本并存场景（模型名）。Base UI 底座：Root 受控 `value/onValueChange`，`items=[{value,label}]` 或 ComboboxCollection/Item，`ComboboxInput/Content/List/Empty/Trigger/Clear` |
 | 卡片 | `ui/card` | `Card/CardHeader/CardTitle/CardDescription/CardContent/CardFooter`，bg-panel |
 | 状态标签 | `ui/badge` | 任务状态/设备/索引等；variant default/secondary/destructive/outline |
@@ -41,9 +41,11 @@
 - 操作后必须有反馈：保存/获取/删除/恢复都要就地提示或 toast。
 - 会话列表每条记录同时显示完整会话 ID；ID 使用低对比度等宽小字，长值允许换行，不用截断值替代真实标识。
 - 对话思考等级放在输入区，使用 `ui/select`，默认 `auto`；Provider 返回的模型 reasoning 单独显示在助手气泡内的原生 `<details>`，默认收叠，展开后使用现有 markdown 样式；没有 reasoning 返回时不展示伪造内容。
-- 聊天输入区默认保持紧凑：推理层级、输入行和快捷操作使用短间距；聚焦时使用主题边框与轻量外环反馈，外环不得改变布局尺寸或造成输入区跳动。
+- 聊天输入区默认保持紧凑：推理层级、输入行和快捷操作使用短间距；外层 composer 只在聊天文本框聚焦时显示主题边框与轻量外环，Select 触发器使用自身的轻量键盘焦点反馈，避免菜单关闭后外层输入框残留强焦点态；外环不得改变布局尺寸或造成输入区跳动。
 - 聊天输入区外层不绘制横跨页面的分隔线或边框，只保留居中的 composer 容器边界；避免把整个底部区域视觉上框住。
 - 对话工作区的会话列表和桌面文件栏支持收缩/展开与拖拽拉伸：收缩后保留 48px 图标 rail；会话栏宽度限制为 220–360px，文件栏为 260–460px；分隔轨道必须支持鼠标拖动、方向键、Home/End 和 Enter/Space 收缩。布局状态使用 `agent-drive-workspace-layout-v1` 持久化，面板隐藏的响应式断点不变。
+
+- 任务列表行提供明确的 Chevron 展开/收起入口；展开区展示任务 ID、队列、来源、尝试次数、时间、执行输入、执行结果、失败原因和子任务。长 JSON 使用等宽文本、滚动容器和统一脱敏，不能把错误只放在列表小字里；详情加载中、失败和空结果都要有明确状态。
 
 ## 5. 移动端（沿用 AGENTS.md 坑位 + 新增）
 

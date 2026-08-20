@@ -42,6 +42,21 @@ public interface TaskWorkerStore {
     boolean heartbeat(String workerId, String taskId, int leaseSeconds);
 
     /**
+     * 更新任务的阶段进度，并在同一条原子更新中续租当前任务。
+     * 只有仍由该 Worker 持有有效租约的运行中任务才允许写入；实现会为有效更新追加 progress 事件。
+     *
+     * @param workerId 当前租约持有者的 Worker 标识。
+     * @param taskId 要更新的任务 UUID 字符串。
+     * @param current 当前阶段已处理数量。
+     * @param total 当前阶段总数量；未知时为 0。
+     * @param message 当前阶段和对象说明。
+     * @param leaseSeconds 更新后新的租约持续秒数。
+     * @return 任务仍由该 Worker 持有并成功更新时为 {@code true}。
+     */
+    boolean updateProgress(String workerId, String taskId, int current, int total,
+                           String message, int leaseSeconds);
+
+    /**
      * 在租约仍有效且归属匹配时把任务落为 terminal 成功状态并保存结果。
      * @param workerId 完成任务的 Worker 唯一标识。
      * @param taskId 已执行任务的 UUID 字符串。

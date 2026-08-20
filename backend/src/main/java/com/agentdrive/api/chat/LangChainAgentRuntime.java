@@ -390,7 +390,8 @@ public final class LangChainAgentRuntime implements ChatRuntime {
          */
         private void start() {
             try {
-                ConfiguredChatModel configured = providerRuntimeResolver.resolve(input.authenticatedUserId());
+                ConfiguredChatModel configured = providerRuntimeResolver.resolve(
+                        input.authenticatedUserId(), input.model());
                 model = configured.model();
                 requestFactory = configured.requestFactory();
                 LOGGER.info("chat_provider_resolved request_id={} session_id={} owner={} route={} provider={} model={} model_impl={}",

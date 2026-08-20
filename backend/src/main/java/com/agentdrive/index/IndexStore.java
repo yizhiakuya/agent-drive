@@ -11,6 +11,44 @@ import java.util.UUID;
  */
 public interface IndexStore {
     /**
+     * 当前 owner 文件索引的全盘统计。
+     *
+     * @param eligibleFiles 可参与全文索引的普通文件数。
+     * @param extractedFiles 已有当前 revision 全文文档的文件数。
+     * @param vectorFiles 至少拥有完整当前 fingerprint 向量的文件数。
+     * @param nonVectorizableFiles 当前文档没有可切分文本块的文件数。
+     * @param missingVectors 仍缺少当前 fingerprint 向量的文件数。
+     * @param staleVectors 仍有旧 fingerprint 向量的文件数。
+     */
+    record Stats(int eligibleFiles, int extractedFiles, int vectorFiles,
+                 int nonVectorizableFiles, int missingVectors, int staleVectors) {
+        /**
+         * 转为任务概览 API 使用的 snake_case 字段。
+         * @return 不包含敏感信息的统计映射。
+         */
+        public Map<String, Object> asMap() {
+            return Map.of(
+                    "eligible_files", eligibleFiles,
+                    "extracted_files", extractedFiles,
+                    "vector_files", vectorFiles,
+                    "non_vectorizable_files", nonVectorizableFiles,
+                    "missing_vectors", missingVectors,
+                    "stale_vectors", staleVectors
+            );
+        }
+    }
+
+    /**
+     * 全盘读取 owner 当前 revision 的索引和向量状态。
+     * 该查询只用于任务总览，调用方负责短时间缓存，不能放入文件列表或上传请求路径。
+     *
+     * @param userId 文件归属 owner 的 UUID。
+     * @param fingerprint 当前 embedding 配置指纹；为空时不把任何已存向量计为有效。
+     * @return owner 级索引统计。
+     */
+    Stats statistics(UUID userId, String fingerprint);
+
+    /**
      * 查找用户某个文件在索引中的元数据，包括文件 ID、revision、大小和索引状态。
      *
      * @param userId 文件归属用户的 UUID。

@@ -15,6 +15,16 @@ import java.util.Map;
 @Mapper
 public interface IndexMapper {
     /**
+     * 全盘统计 owner 当前 revision 的全文和向量状态。
+     *
+     * @param userId 文件归属 owner 的 UUID 字符串。
+     * @param fingerprint 当前 embedding 指纹；为空时所有存量向量都视为旧向量。
+     * @return 含 eligible/extracted/vector/missing/stale 统计字段的单行映射。
+     */
+    Map<String, Object> selectStats(@Param("userId") String userId,
+                                    @Param("fingerprint") String fingerprint);
+
+    /**
      * 查询 owner 指定路径对应的非目录文件。
      *
      * <p>SQL 按 owner、路径精确匹配，并要求 {@code is_dir = false}；返回文件 ID、路径、大小、
