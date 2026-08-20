@@ -350,10 +350,13 @@ export default function ChatPanel() {
       {plan.length > 0 && <div className="px-4 pb-2 sm:px-6"><div className="mx-auto max-w-4xl"><PlanCard plan={plan} /></div></div>}
       {contextUsage && <ContextBar usage={contextUsage} />}
 
-      <div className="input-bar-safe shrink-0 border-t border-border bg-panel px-4 py-3 sm:px-6">
+      <div className="input-bar-safe shrink-0 border-t border-border bg-panel px-4 py-2 sm:px-6 sm:py-2">
         <div className="mx-auto max-w-4xl">
-           <div className="overflow-hidden rounded-md border border-border bg-panel shadow-sm focus-within:border-text">
-            <div className="flex items-center justify-between gap-3 border-b border-border bg-card/60 px-3 py-2">
+           <div
+             data-testid="chat-composer"
+             className="overflow-hidden rounded-md border border-border bg-panel shadow-sm transition-[border-color,box-shadow] duration-150 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/10"
+           >
+            <div className="flex items-center justify-between gap-3 border-b border-border bg-card/60 px-3 py-1.5">
               <div className="flex min-w-0 items-center gap-2">
                 <Brain className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
                 <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">推理层级</span>
@@ -362,7 +365,7 @@ export default function ChatPanel() {
             onValueChange={(value) => { if (isThinkingLevel(value)) setThinkingLevel(value); }}
             disabled={busy}
           >
-            <SelectTrigger size="sm" aria-label="思考等级" className="h-7 min-w-[104px] rounded-md border-transparent bg-panel text-xs shadow-none">
+            <SelectTrigger size="sm" aria-label="思考等级" className="h-6 min-w-[104px] rounded-md border-transparent bg-panel text-xs shadow-none">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -377,7 +380,7 @@ export default function ChatPanel() {
               </div>
               <span className="hidden shrink-0 font-mono text-[10px] text-muted sm:inline">{busy ? "STREAMING" : "READY"}</span>
             </div>
-            <div className="flex items-end gap-2 px-3 py-2.5">
+            <div className="flex items-end gap-1.5 px-3 py-2">
               <textarea
                 ref={taRef}
                 value={input}
@@ -387,18 +390,18 @@ export default function ChatPanel() {
                   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
                 }}
                 placeholder="和你的 Agent 对话…"
-                className="max-h-40 flex-1 resize-none bg-transparent px-1 py-1 text-sm leading-relaxed text-text outline-none placeholder:text-muted focus:ring-0"
+                className="max-h-40 flex-1 resize-none bg-transparent px-1 py-0.5 text-sm leading-relaxed text-text outline-none placeholder:text-muted focus:ring-0"
               />
               {busy ? (
                 <Button variant="destructive" onClick={stop}><Square className="size-3.5" /> 停止</Button>
               ) : (
-                <Button className="h-9 min-w-16" onClick={() => handleSend()} disabled={!input.trim()}>
+                <Button className="h-8 min-w-14" onClick={() => handleSend()} disabled={!input.trim()}>
                   {input.trim() ? "发送" : <ArrowUp className="size-4" />}
                 </Button>
               )}
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+          <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
             {QUICK_ACTIONS.slice(0, 3).map((a) => (
               <button
                 key={a.label}

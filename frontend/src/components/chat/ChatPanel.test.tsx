@@ -50,6 +50,20 @@ describe("ChatPanel 主流程", () => {
     expect(chatStream).toHaveBeenCalledTimes(1);
   });
 
+  it("聊天输入区保持紧凑并提供稳定的聚焦反馈", async () => {
+    render(<ChatPanel />);
+    await act(async () => {});
+
+    const composer = screen.getByTestId("chat-composer");
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    expect(composer).toHaveClass("transition-[border-color,box-shadow]", "focus-within:ring-2", "focus-within:ring-accent/10");
+    expect(textarea).toHaveClass("py-0.5");
+    expect(textarea).toHaveAttribute("rows", "1");
+
+    textarea.focus();
+    expect(textarea).toHaveFocus();
+  });
+
   it("text 事件累积为助手消息", async () => {
     chatStream.mockResolvedValue(null);
     render(<ChatPanel />);
