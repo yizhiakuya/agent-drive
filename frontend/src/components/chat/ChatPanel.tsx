@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api/client";
 import { getConfig, listModels } from "@/lib/api/config";
 import { getSession } from "@/lib/api/sessions";
-import { EV } from "@/lib/events";
+import { EV, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToolStep } from "./ToolStep";
@@ -69,7 +69,6 @@ export default function ChatPanel() {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [contextUsage, setContextUsage] = useState<{ used: number; total: number; percent: number } | null>(null);
@@ -84,6 +83,7 @@ export default function ChatPanel() {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelLoadError, setModelLoadError] = useState("");
   const configuredModelRef = useRef(configuredModel);
+  const modelLoadRequestRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -99,10 +99,13 @@ export default function ChatPanel() {
   }, [thinkingLevel]);
 
   useEffect(() => {
-    if (!configuredModel || configuredModelRef.current === configuredModel) return;
+    if (configuredModelRef.current === configuredModel) return;
     configuredModelRef.current = configuredModel;
+    modelLoadRequestRef.current += 1;
+    setModelsLoading(false);
+    setModelsOpen(false);
     setSelectedModel(configuredModel);
-    setModelOptions([configuredModel]);
+    setModelOptions(configuredModel ? [configuredModel] : []);
     setModelsLoaded(false);
     setModelLoadError("");
   }, [configuredModel]);
@@ -126,6 +129,12 @@ export default function ChatPanel() {
   const listRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const sidRef = useRef<string | null>(sessionId);
+  const sessionLoadRequestRef = useRef(0);
+
+  useEffect(() => () => {
+    modelLoadRequestRef.current += 1;
+    sessionLoadRequestRef.current += 1;
+  }, []);
 
   /**
    * 读取当前 owner 的 Provider 模型目录；地址、协议和 key 仍由服务端从已保存配置解析。
@@ -133,6 +142,8 @@ export default function ChatPanel() {
    */
   async function loadModels() {
     if (modelsLoading) return;
+    const request = ++modelLoadRequestRef.current;
+    const requestedModel = selectedModel;
     setModelsLoading(true);
     setModelLoadError("");
     try {
@@ -140,19 +151,22 @@ export default function ChatPanel() {
       const llm = cfg.llm;
       if (!llm) throw new Error("尚未配置聊天模型");
       const result = await listModels({ type: llm.type, base_url: llm.base_url, api_key: "" });
+      if (request !== modelLoadRequestRef.current) return;
       if (!result.ok || !result.models?.length) {
         throw new Error(result.error || "当前服务商没有返回可用模型");
       }
       setModelOptions((current) => Array.from(new Set([
-        selectedModel || llm.model,
+        requestedModel || llm.model,
         ...current,
         ...result.models!,
       ].filter(Boolean))));
       setModelsLoaded(true);
     } catch (error) {
-      setModelLoadError(error instanceof Error ? error.message : String(error));
+      if (request === modelLoadRequestRef.current) {
+        setModelLoadError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setModelsLoading(false);
+      if (request === modelLoadRequestRef.current) setModelsLoading(false);
     }
   }
 
@@ -160,8 +174,10 @@ export default function ChatPanel() {
    * 切换会话时先使当前流失效，再读取历史消息；流式请求的取消与消息加载必须保持同一 session 边界。
    */
   async function loadSession(sid: string) {
+    const request = ++sessionLoadRequestRef.current;
     try {
       const r = await getSession(sid) as { messages?: { role: string; content: string; reasoning?: string; tool?: string; arguments?: Record<string, unknown>; output?: string; parsed?: Record<string, unknown> }[] };
+      if (request !== sessionLoadRequestRef.current || sidRef.current !== sid) return;
       const msgs: Message[] = (r.messages || [])
         .filter((m) => ["user", "assistant", "tool_call"].includes(m.role))
         .map((m) => {
@@ -186,16 +202,17 @@ export default function ChatPanel() {
       setMessages(msgs);
       setPlan([]);
       setContextUsage(null);
-    } catch {
-      setMessages([]);
+    } catch (error) {
+      if (request === sessionLoadRequestRef.current && sidRef.current === sid) {
+        emitToast({ kind: "error", text: `会话加载失败：${String(error)}` });
+      }
     }
   }
 
-  const { send, stop, abortStream } = useChatStream({
+  const { send, stop, abortStream, busy } = useChatStream({
     messages,
     sessionIdRef: sidRef,
     setMessages,
-    setBusy,
     setPending,
     setPlan,
     setContextUsage,
@@ -251,7 +268,10 @@ export default function ChatPanel() {
       sidRef.current = sessionId;
       setPending(null);
       if (sessionId) {
-        loadSession(sessionId);
+        setMessages([]);
+        setPlan([]);
+        setContextUsage(null);
+        void loadSession(sessionId);
       } else {
         setMessages([]);
         setPlan([]);

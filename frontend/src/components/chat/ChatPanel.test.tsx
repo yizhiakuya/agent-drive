@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAppStore } from "@/lib/store";
 
 // 需要被测组件：mock 掉组件依赖的网络层，只保留纯组件行为。
 import ChatPanel from "./ChatPanel";
@@ -25,7 +26,10 @@ vi.mock("@/lib/api/client", () => ({
   api: (...args: [string, RequestInit?]) => api(...args),
 }));
 
-const getSession = vi.fn(async (sid: string) => { void sid; return { messages: [] }; });
+const getSession = vi.fn(async (sid: string): Promise<{ messages: { role: string; content: string }[] }> => {
+  void sid;
+  return { messages: [] };
+});
 const summarizeSession = vi.fn(async (sid: string) => { void sid; return {}; });
 vi.mock("@/lib/api/sessions", () => ({
   getSession: (...args: [string]) => getSession(...args),
@@ -39,9 +43,18 @@ async function typeAndSend(text: string) {
   await act(async () => {});
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 describe("ChatPanel 主流程", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAppStore.getState().setSessionId(null);
+    getSession.mockReset();
+    getSession.mockResolvedValue({ messages: [] });
     // jsdom 未实现 scrollIntoView，组件在发送/结束时调用它。
     Element.prototype.scrollIntoView = vi.fn();
     // 默认无报告，避免 automation/latest 拉取干扰断言。
@@ -55,6 +68,7 @@ describe("ChatPanel 主流程", () => {
   });
 
   afterEach(() => {
+    useAppStore.getState().setSessionId(null);
     vi.restoreAllMocks();
   });
 
@@ -65,6 +79,27 @@ describe("ChatPanel 主流程", () => {
     await typeAndSend("帮我找文件");
     expect(screen.getByText("帮我找文件")).toBeInTheDocument();
     expect(chatStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("忽略过期的会话历史响应", async () => {
+    const first = deferred<{ messages: { role: string; content: string }[] }>();
+    const second = deferred<{ messages: { role: string; content: string }[] }>();
+    getSession.mockImplementation((sid: string) => sid === "session-a" ? first.promise : second.promise);
+
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-a"); });
+    await waitFor(() => expect(getSession).toHaveBeenCalledWith("session-a"));
+
+    await act(async () => { useAppStore.getState().setSessionId("session-b"); });
+    await waitFor(() => expect(getSession).toHaveBeenCalledWith("session-b"));
+
+    second.resolve({ messages: [{ role: "assistant", content: "B 会话历史" }] });
+    await waitFor(() => expect(screen.getByText("B 会话历史")).toBeInTheDocument());
+
+    first.resolve({ messages: [{ role: "assistant", content: "A 会话历史" }] });
+    await act(async () => { await first.promise; });
+    expect(screen.getByText("B 会话历史")).toBeInTheDocument();
+    expect(screen.queryByText("A 会话历史")).not.toBeInTheDocument();
   });
 
   it("聊天输入区保持紧凑并提供稳定的聚焦反馈", async () => {

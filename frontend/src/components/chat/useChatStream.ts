@@ -19,7 +19,6 @@ interface UseChatStreamOptions {
   /** 当前会话 id（读/写走 ref，保证异步流回调里拿到最新值） */
   sessionIdRef: React.MutableRefObject<string | null>;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  setBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setPending: React.Dispatch<React.SetStateAction<PendingConfirmation | null>>;
   setPlan: React.Dispatch<React.SetStateAction<PlanStep[]>>;
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
@@ -51,7 +50,6 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     messages,
     sessionIdRef,
     setMessages,
-    setBusy,
     setPending,
     setPlan,
     setContextUsage,
@@ -67,8 +65,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
 
   const applyBusy = useCallback((value: boolean) => {
     _setBusyState(value);
-    setBusy(value);
-  }, [setBusy]);
+  }, []);
 
   async function send(
     message?: string,

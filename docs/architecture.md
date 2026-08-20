@@ -1,6 +1,6 @@
 # Agent Drive 架构
 
-> 现行事实（2026-08-19）。生产后端已经是 Java 21；本文不描述已经删除的 Python 实现。迁移和切换证据见 [`java-migration-architecture.md`](java-migration-architecture.md)。
+> 现行事实（2026-08-20）。生产后端已经是 Java 21；本文不描述已经删除的 Python 实现。迁移和切换证据见 [`java-migration-architecture.md`](java-migration-architecture.md)。
 
 ## 1. 运行拓扑
 
@@ -83,7 +83,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
-文件页的列表、详情、全文和索引刷新使用独立请求代次与当前路径校验；ChatPanel 保持常驻挂载，`useChatStream` 负责 Abort、流代次和 80ms 帧节流。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
+文件页的列表、详情、全文和索引刷新使用独立请求代次与当前路径校验；ChatPanel 保持常驻挂载，`useChatStream` 作为流式 `busy` 的唯一状态源，负责 Abort、流代次和 80ms 帧节流。ChatPanel 的会话历史、聊天模型目录，以及 SettingsPage 的 LLM/视觉模型目录请求都必须在响应提交前校验请求代次和当前配置边界，避免切换会话或接口后迟到响应污染界面。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 
 Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
 

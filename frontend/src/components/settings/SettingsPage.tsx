@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { getConfig, getVisionConfig, saveEmbeddings, saveVision, configureLLM, listModels, listVisionModels } from "@/lib/api/config";
 import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
@@ -15,6 +15,25 @@ import { Input } from "@/components/ui/input";
 import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, ComboboxEmpty } from "@/components/ui/combobox";
 import { Alert } from "@/components/ui/alert";
 import { Bot, BrainCircuit, Eye, LogOut, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
+
+function SettingsField({ label, value, onChange, placeholder, type = "text", step, hint }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: string;
+  step?: string;
+  hint?: string;
+}) {
+  return (
+    <label className="mb-3 flex flex-col gap-1.5">
+      <span className="text-xs text-muted">{label}</span>
+      <Input type={type} value={value} placeholder={placeholder} step={step}
+             onChange={(event) => onChange(event.target.value)} className="text-sm" />
+      {hint && <span className="text-[10px] leading-snug text-muted">{hint}</span>}
+    </label>
+  );
+}
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
@@ -36,6 +55,8 @@ export default function SettingsPage() {
   const setAuthMode = useAppStore((s) => s.setAuthMode);
   const isNative = Capacitor.isNativePlatform();
   const loadRequestRef = useRef(0);
+  const modelRequestRef = useRef(0);
+  const visionModelRequestRef = useRef(0);
 
   async function logout() {
     const native = Capacitor.isNativePlatform();
@@ -96,6 +117,8 @@ export default function SettingsPage() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => () => {
     loadRequestRef.current += 1;
+    modelRequestRef.current += 1;
+    visionModelRequestRef.current += 1;
   }, []);
   useEffect(() => {
     const h = () => { void load(); }; // 全局刷新
@@ -124,6 +147,20 @@ export default function SettingsPage() {
     finally { setSaving(null); }
   }
 
+  const invalidateModelLookup = useCallback(() => {
+    modelRequestRef.current += 1;
+    setModelsLoading(false);
+    setModelList(null);
+    setModelsOpen(false);
+  }, []);
+
+  const invalidateVisionModelLookup = useCallback(() => {
+    visionModelRequestRef.current += 1;
+    setVisionModelsLoading(false);
+    setVisionModelList(null);
+    setVisionModelsOpen(false);
+  }, []);
+
   function changeProtocol(type: string) {
     const proto = protocolOf(type);
     setLlmForm((f) => {
@@ -131,14 +168,17 @@ export default function SettingsPage() {
       const baseIsDefault = !f.base_url || (prev ? f.base_url === prev.defaultBaseUrl : false);
       return { ...f, type, base_url: baseIsDefault && proto ? proto.defaultBaseUrl : f.base_url };
     });
-    setModelList(null);
+    invalidateModelLookup();
   }
 
   async function fetchModels() {
+    const request = ++modelRequestRef.current;
+    const form = { ...llmForm };
     setLlmMsg(null);
     setModelsLoading(true);
     try {
-      const r = await listModels({ type: llmForm.type, base_url: llmForm.base_url, api_key: llmForm.api_key });
+      const r = await listModels({ type: form.type, base_url: form.base_url, api_key: form.api_key });
+      if (request !== modelRequestRef.current) return;
       if (r.ok && r.models && r.models.length > 0) {
         setModelList(r.models);
         setModelsOpen(true);
@@ -148,9 +188,9 @@ export default function SettingsPage() {
         setLlmMsg({ kind: "error", text: r.error || "获取模型列表失败" });
       }
     } catch (e) {
-      setLlmMsg({ kind: "error", text: String(e) });
+      if (request === modelRequestRef.current) setLlmMsg({ kind: "error", text: String(e) });
     } finally {
-      setModelsLoading(false);
+      if (request === modelRequestRef.current) setModelsLoading(false);
     }
   }
 
@@ -205,14 +245,17 @@ export default function SettingsPage() {
    * 获取视觉 provider 的模型目录，并把结果放进图片识别模型选择器。
    */
   async function fetchVisionModels() {
+    const request = ++visionModelRequestRef.current;
+    const form = { ...visionForm };
     setVisionMsg(null);
     setVisionModelsLoading(true);
     try {
       const result = await listVisionModels({
-        provider: visionForm.provider,
-        base_url: visionForm.base_url,
-        api_key: visionForm.api_key,
+        provider: form.provider,
+        base_url: form.base_url,
+        api_key: form.api_key,
       });
+      if (request !== visionModelRequestRef.current) return;
       if (result.ok && result.models && result.models.length > 0) {
         setVisionModelList(result.models);
         setVisionModelsOpen(true);
@@ -222,20 +265,31 @@ export default function SettingsPage() {
         setVisionMsg({ kind: "error", text: result.error || "获取视觉模型列表失败" });
       }
     } catch (error) {
-      setVisionMsg({ kind: "error", text: String(error) });
+      if (request === visionModelRequestRef.current) setVisionMsg({ kind: "error", text: String(error) });
     } finally {
-      setVisionModelsLoading(false);
+      if (request === visionModelRequestRef.current) setVisionModelsLoading(false);
     }
   }
 
-  const field = (label: string, value: string, onChange: (v: string) => void, placeholder: string, type = "text", step?: string, hint?: string) => (
-    <label className="flex flex-col gap-1.5 mb-3">
-      <span className="text-xs text-muted">{label}</span>
-      <Input type={type} value={value} placeholder={placeholder} step={step}
-             onChange={(e) => onChange(e.target.value)} className="text-sm" />
-      {hint && <span className="text-[10px] text-muted leading-snug">{hint}</span>}
-    </label>
-  );
+  const handleLlmBaseUrlChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setLlmForm((f) => ({ ...f, base_url: event.target.value }));
+    invalidateModelLookup();
+  }, [invalidateModelLookup]);
+
+  const handleLlmApiKeyChange = useCallback((value: string) => {
+    setLlmForm((f) => ({ ...f, api_key: value }));
+    invalidateModelLookup();
+  }, [invalidateModelLookup]);
+
+  const handleVisionBaseUrlChange = useCallback((value: string) => {
+    setVisionForm((f) => ({ ...f, base_url: value }));
+    invalidateVisionModelLookup();
+  }, [invalidateVisionModelLookup]);
+
+  const handleVisionApiKeyChange = useCallback((value: string) => {
+    setVisionForm((f) => ({ ...f, api_key: value }));
+    invalidateVisionModelLookup();
+  }, [invalidateVisionModelLookup]);
 
   return (
     <section className="flex-1 overflow-auto bg-bg px-4 py-5 sm:px-6">
@@ -271,7 +325,7 @@ export default function SettingsPage() {
             value={llmForm.base_url}
             placeholder={protocolOf(llmForm.type)?.defaultBaseUrl || "https://..."}
             list="base-url-presets"
-            onChange={(e) => { setLlmForm((f) => ({ ...f, base_url: e.target.value })); setModelList(null); }}
+            onChange={handleLlmBaseUrlChange}
             className="text-sm"
           />
           <datalist id="base-url-presets">
@@ -322,7 +376,9 @@ export default function SettingsPage() {
             )}
           </div>
         </div>
-        {field("API Key", llmForm.api_key, (v) => setLlmForm((f) => ({ ...f, api_key: v })), cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-...", "password", "API Key 留空时沿用已保存的 Key")}
+        <SettingsField label="API Key" value={llmForm.api_key} onChange={handleLlmApiKeyChange}
+                       placeholder={cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-..."}
+                       type="password" hint="API Key 留空时沿用已保存的 Key" />
         {llmMsg && !(llmMsg.kind === "ok" && llmMsg.text.startsWith("已获取")) && (
           <Alert variant={llmMsg.kind === "ok" ? "default" : "destructive"}
                  className={`mb-3 text-xs ${llmMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{llmMsg.text}</Alert>
@@ -337,9 +393,16 @@ export default function SettingsPage() {
           <span className="text-xs text-muted">Provider</span>
           <p className="text-sm">{EMBEDDING_PROVIDERS[0]?.label || "Jina AI"}（当前唯一支持）</p>
         </div>
-        {field("接口地址", embForm.base_url, (v) => setEmbForm((f) => ({ ...f, base_url: v })), EMBEDDING_PROVIDERS[0].defaultBaseUrl)}
-        {field("模型", embForm.model, (v) => setEmbForm((f) => ({ ...f, model: v })), EMBEDDING_PROVIDERS[0].placeholderModel)}
-        {field("API Key", embForm.api_key, (v) => setEmbForm((f) => ({ ...f, api_key: v })), cfg?.embeddings?.api_key_masked ? `当前: ${cfg.embeddings.api_key_masked}（留空不变）` : "jina_...", "password")}
+        <SettingsField label="接口地址" value={embForm.base_url}
+                       onChange={(value) => setEmbForm((f) => ({ ...f, base_url: value }))}
+                       placeholder={EMBEDDING_PROVIDERS[0].defaultBaseUrl} />
+        <SettingsField label="模型" value={embForm.model}
+                       onChange={(value) => setEmbForm((f) => ({ ...f, model: value }))}
+                       placeholder={EMBEDDING_PROVIDERS[0].placeholderModel} />
+        <SettingsField label="API Key" value={embForm.api_key}
+                       onChange={(value) => setEmbForm((f) => ({ ...f, api_key: value }))}
+                       placeholder={cfg?.embeddings?.api_key_masked ? `当前: ${cfg.embeddings.api_key_masked}（留空不变）` : "jina_..."}
+                       type="password" />
         {embMsg && (
           <Alert variant={embMsg.kind === "ok" ? "default" : "destructive"}
                  className={`mb-3 text-xs ${embMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{embMsg.text}</Alert>
@@ -354,11 +417,8 @@ export default function SettingsPage() {
           <span className="text-xs text-muted">协议</span>
           <p className="text-sm">OpenAI 兼容（当前唯一支持）</p>
         </div>
-        {field("接口地址", visionForm.base_url, (v) => {
-          setVisionForm((f) => ({ ...f, base_url: v }));
-          setVisionModelList(null);
-          setVisionModelsOpen(false);
-        }, "https://api.openai.com/v1")}
+        <SettingsField label="接口地址" value={visionForm.base_url} onChange={handleVisionBaseUrlChange}
+                       placeholder="https://api.openai.com/v1" />
         <div className="flex flex-col gap-1.5 mb-3">
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-muted">视觉模型</span>
@@ -397,11 +457,9 @@ export default function SettingsPage() {
             )}
           </div>
         </div>
-        {field("API Key", visionForm.api_key, (v) => {
-          setVisionForm((f) => ({ ...f, api_key: v }));
-          setVisionModelList(null);
-          setVisionModelsOpen(false);
-        }, visionCfg?.api_key_masked ? `当前: ${visionCfg.api_key_masked}（留空不变）` : "API Key", "password")}
+        <SettingsField label="API Key" value={visionForm.api_key} onChange={handleVisionApiKeyChange}
+                       placeholder={visionCfg?.api_key_masked ? `当前: ${visionCfg.api_key_masked}（留空不变）` : "API Key"}
+                       type="password" />
         {visionMsg && (
           !(visionMsg.kind === "ok" && visionMsg.text.startsWith("已获取")) &&
           <Alert variant={visionMsg.kind === "ok" ? "default" : "destructive"}

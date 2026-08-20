@@ -1,6 +1,6 @@
 # 前端架构
 
-> 现行说明（2026-08-19）。前端是 Next.js 16 + React 19 + TypeScript 5 的静态导出应用；生产由 Java WebFlux 托管 `frontend/out`，Android 通过 Capacitor 7 复用同一套 web UI。
+> 现行说明（2026-08-20）。前端是 Next.js 16 + React 19 + TypeScript 5 的静态导出应用；生产由 Java WebFlux 托管 `frontend/out`，Android 通过 Capacitor 7 复用同一套 web UI。
 
 ## 1. 目录与分层
 
@@ -46,7 +46,7 @@ frontend/src/
 
 ## 3. Chat 流
 
-`useChatStream` 负责编排请求生命周期，纯逻辑按职责拆分：
+`useChatStream` 负责编排请求生命周期，纯逻辑按职责拆分。流式忙碌状态只由这个 hook 持有，ChatPanel 不再维护第二份 `busy` 状态，避免发送按钮、停止按钮和流结束回调出现状态分叉：
 
 - `chat-stream-events.ts`：SSE 事件形状和事件映射；
 - `chat-stream-state.ts`：消息、reasoning、工具轮次和终态状态转换；
@@ -56,11 +56,13 @@ frontend/src/
 
 解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
 
+ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即清空旧会话的临时内容，但迟到的历史响应只能被丢弃；模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的规则，并以发起探测时的表单快照调用接口，避免用户修改地址或 key 后旧结果污染当前选择器。
+
 ## 4. 文件页请求生命周期
 
 `FilePage` 对列表、选中文件详情、完整文本和索引刷新分别维护请求代次，并在响应提交前校验当前路径/选中文件。目录切换、文件切换和卸载都会使旧请求失效；迟到响应不能覆盖新状态。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
 
-`FilePanel` 对目录列表和文件详情使用独立请求代次；`TaskPage` 的任务筛选列表、`SettingsPage` 的配置刷新也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
+`FilePanel` 对目录列表和文件详情使用独立请求代次；`TaskPage` 的任务筛选列表、`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
 
 任务中心列表由 `listTasks` 提供顶层任务摘要，并通过 `has_more` 判断是否还有下一页；Worker 的 `progress` 事件触发列表刷新，已展开的任务随后重新读取 `getTaskDetail`，因此详情区能持续显示当前阶段、当前对象、计数/百分比、执行输入、结果、失败原因、时间/尝试次数和子任务进度。确定总量显示百分比，未知总量显示不定进度和阶段提示；详情请求使用独立请求代次，快速切换任务或卸载页面时，迟到详情不得覆盖当前展开任务；结构化 JSON 展示必须经过 `formatJson` 脱敏。
 
