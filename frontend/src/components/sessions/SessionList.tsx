@@ -1,19 +1,31 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { MessageSquare, Plus, Trash2 } from "lucide-react";
+import { MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Trash2 } from "lucide-react";
 import { listSessions, deleteSession, summarizeSession } from "@/lib/api/sessions";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import PanelResizeHandle from "@/components/workspace/PanelResizeHandle";
+import { WORKSPACE_PANEL_LIMITS } from "@/lib/workspace-layout";
 
 const summarizingSessions = new Set<string>();
 
-export default function SessionList() {
+interface SessionListProps {
+  collapsed?: boolean;
+  width?: number;
+  onResize?: (width: number) => void;
+  onToggle?: () => void;
+}
+
+export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.sessions.defaultWidth, onResize, onToggle }: SessionListProps) {
   const sessionId = useAppStore((s) => s.sessionId);
   const setSessionId = useAppStore((s) => s.setSessionId);
   const sessionsVersion = useAppStore((s) => s.sessionsVersion);
   const [sessions, setSessions] = useState<{ id: string; title: string; summary?: string }[]>([]);
+  const [localCollapsed, setLocalCollapsed] = useState(false);
   const loadSequenceRef = useRef(0);
   const mountedRef = useRef(true);
+  const isCollapsed = collapsed ?? localCollapsed;
+  const toggle = onToggle ?? (() => setLocalCollapsed((value) => !value));
 
   async function load() {
     const sequence = ++loadSequenceRef.current;
@@ -68,36 +80,68 @@ export default function SessionList() {
     if (sessionId === sid) setSessionId(null);
   }
 
+  const panelWidth = isCollapsed ? WORKSPACE_PANEL_LIMITS.sessions.collapsedWidth : width;
+
   return (
-    <aside className="hidden w-52 shrink-0 flex-col border-r border-border bg-bg md:flex xl:w-60">
-      <div className="flex items-center justify-between border-b border-border bg-panel px-3 py-3">
-        <b className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em] text-text">
-          <MessageSquare className="size-3.5 text-muted" aria-hidden="true" />
-          会话
-        </b>
-        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={newSession}>
-          <Plus className="size-3.5" aria-hidden="true" />
-          新会话
-        </Button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2">
-        {sessions.length === 0 && <div className="text-muted text-xs p-3">（暂无会话）</div>}
-        {sessions.map((s) => (
-          <div key={s.id}
-               className={`relative mb-1 cursor-pointer rounded-md border px-3 py-2.5 transition-colors ${sessionId === s.id ? "border-border bg-panel" : "border-transparent hover:bg-panel"}`}
-               onClick={() => setSessionId(s.id)}>
-            <div className="truncate pr-5 text-sm font-semibold text-text">{s.title || "（无标题会话）"}</div>
-            {s.summary && <div className="text-xs text-muted mt-0.5 truncate">{s.summary}</div>}
-            <div className="mt-1 pr-5 break-all font-mono text-[10px] leading-4 text-muted" title={s.id}>
-              ID: {s.id}
+    <aside
+      data-testid="session-panel"
+      aria-label="会话列表"
+      style={{ width: panelWidth, minWidth: panelWidth }}
+      className="relative hidden shrink-0 flex-col border-r border-border bg-bg md:flex"
+    >
+      <PanelResizeHandle
+        panel="sessions"
+        width={width}
+        minWidth={WORKSPACE_PANEL_LIMITS.sessions.min}
+        maxWidth={WORKSPACE_PANEL_LIMITS.sessions.max}
+        collapsed={isCollapsed}
+        onResize={onResize ?? (() => {})}
+        onToggle={toggle}
+      />
+      {isCollapsed ? (
+        <div data-testid="session-panel-collapsed" className="flex flex-1 flex-col items-center gap-2 bg-bg py-3">
+          <Button variant="ghost" size="icon-sm" onClick={toggle} title="展开会话列表" aria-label="展开会话列表">
+            <PanelLeftOpen className="size-4" aria-hidden="true" />
+          </Button>
+          <MessageSquare className="mt-1 size-4 text-muted" aria-hidden="true" />
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between gap-2 border-b border-border bg-panel px-3 py-3 pr-4">
+            <b className="flex min-w-0 items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em] text-text">
+              <MessageSquare className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
+              <span className="truncate">会话</span>
+            </b>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={newSession}>
+                <Plus className="size-3.5" aria-hidden="true" />
+                新会话
+              </Button>
+              <Button variant="ghost" size="icon-sm" onClick={toggle} title="收起会话列表" aria-label="收起会话列表">
+                <PanelLeftClose className="size-3.5" aria-hidden="true" />
+              </Button>
             </div>
-            <button className="absolute right-2 top-2 grid size-6 place-items-center text-muted transition-colors hover:text-danger"
-                    onClick={(e) => remove(s.id, e)} title="删除会话" aria-label="删除会话">
-              <Trash2 className="size-3.5" aria-hidden="true" />
-            </button>
           </div>
-        ))}
-      </div>
+          <div className="min-w-0 flex-1 overflow-y-auto p-2">
+            {sessions.length === 0 && <div className="p-3 text-xs text-muted">（暂无会话）</div>}
+            {sessions.map((s) => (
+              <div key={s.id}
+                   className={`relative mb-1 cursor-pointer rounded-md border px-3 py-2.5 transition-colors ${sessionId === s.id ? "border-border bg-panel" : "border-transparent hover:bg-panel"}`}
+                   onClick={() => setSessionId(s.id)}>
+                <div className="truncate pr-5 text-sm font-semibold text-text">{s.title || "（无标题会话）"}</div>
+                {s.summary && <div className="mt-0.5 truncate text-xs text-muted">{s.summary}</div>}
+                <div className="mt-1 break-all pr-5 font-mono text-[10px] leading-4 text-muted" title={s.id}>
+                  ID: {s.id}
+                </div>
+                <button className="absolute right-2 top-2 grid size-6 place-items-center text-muted transition-colors hover:text-danger"
+                        onClick={(e) => remove(s.id, e)} title="删除会话" aria-label="删除会话">
+                  <Trash2 className="size-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </aside>
   );
 }

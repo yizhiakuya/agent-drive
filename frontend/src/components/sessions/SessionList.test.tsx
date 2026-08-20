@@ -1,5 +1,5 @@
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SessionList from "./SessionList";
 import { useAppStore } from "@/lib/store";
@@ -54,6 +54,20 @@ describe("SessionList 空标题 → 标题生成与列表刷新", () => {
     render(<SessionList />);
 
     expect(await screen.findByText("ID: session-2026-08-19-abc")).toBeInTheDocument();
+  });
+
+  it("会话列表可收缩/展开，并支持键盘调整宽度", async () => {
+    const onResize = vi.fn();
+    render(<SessionList width={240} onResize={onResize} />);
+
+    await act(async () => {});
+    fireEvent.keyDown(screen.getByTestId("sessions-panel-resize-handle"), { key: "ArrowRight" });
+    expect(onResize).toHaveBeenCalledWith(256);
+
+    fireEvent.click(screen.getByTitle("收起会话列表"));
+    expect(screen.getByTestId("session-panel-collapsed")).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("展开会话列表"));
+    expect(screen.getByTestId("sessions-panel-resize-handle")).toBeInTheDocument();
   });
 
   it("异步标题返回：并发 load 等待他人总结落地后刷新显示标题", async () => {

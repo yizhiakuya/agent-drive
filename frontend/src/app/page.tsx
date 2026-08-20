@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ChatPanel from "@/components/chat/ChatPanel";
 import FilePanel from "@/components/files/FilePanel";
 import FilePage from "@/components/files/FilePage";
@@ -21,6 +21,14 @@ import { useAppStore } from "@/lib/store";
 import { EV, emitFilesChanged, emitRefresh } from "@/lib/events";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HardDrive } from "lucide-react";
+import {
+  clampWorkspacePanelWidth,
+  createDefaultWorkspaceLayout,
+  loadWorkspaceLayout,
+  saveWorkspaceLayout,
+  type WorkspaceLayout,
+  type WorkspacePanel,
+} from "@/lib/workspace-layout";
 
 function SkeletonScreen() {
   return (
@@ -55,6 +63,48 @@ export default function Home() {
   const setModelName = useAppStore((s) => s.setModelName);
   const bumpSessions = useAppStore((s) => s.bumpSessions);
   const frontendActions = useAppStore((s) => s.frontendActions);
+  const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>(() => createDefaultWorkspaceLayout());
+  const [workspaceLayoutReady, setWorkspaceLayoutReady] = useState(false);
+
+  useEffect(() => {
+    let storage: Storage | undefined;
+    try {
+      storage = window.localStorage;
+    } catch {
+      // 浏览器禁用存储时使用内存布局，不影响工作区操作。
+    }
+    setWorkspaceLayout(loadWorkspaceLayout(storage));
+    setWorkspaceLayoutReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceLayoutReady) return;
+    let storage: Storage | undefined;
+    try {
+      storage = window.localStorage;
+    } catch {
+      // 浏览器禁用存储时跳过持久化。
+    }
+    saveWorkspaceLayout(workspaceLayout, storage);
+  }, [workspaceLayout, workspaceLayoutReady]);
+
+  const resizePanel = useCallback((panel: WorkspacePanel, width: number) => {
+    setWorkspaceLayout((current) => ({
+      ...current,
+      [panel]: { ...current[panel], width: clampWorkspacePanelWidth(panel, width) },
+    }));
+  }, []);
+
+  const togglePanel = useCallback((panel: WorkspacePanel) => {
+    setWorkspaceLayout((current) => ({
+      ...current,
+      [panel]: { ...current[panel], collapsed: !current[panel].collapsed },
+    }));
+  }, []);
+  const resizeSessions = useCallback((width: number) => resizePanel("sessions", width), [resizePanel]);
+  const resizeFiles = useCallback((width: number) => resizePanel("files", width), [resizePanel]);
+  const toggleSessions = useCallback(() => togglePanel("sessions"), [togglePanel]);
+  const toggleFiles = useCallback(() => togglePanel("files"), [togglePanel]);
 
   const boot = useCallback(async () => {
     try {
@@ -192,11 +242,23 @@ export default function Home() {
       <WorkspaceHeader tab={tab} modelName={modelName} onTabChange={setTab} />
 
       {/* 对话面板常驻挂载（CSS 隐藏）——切 tab 再回来不丢消息流/工具步骤 */}
-      <main className={`${tab === "chat" ? "flex" : "hidden"} flex-1 overflow-hidden`}>
-        <SessionList />
+      <main className={`${tab === "chat" ? "flex" : "hidden"} min-w-0 flex-1 overflow-hidden`}>
+        <SessionList
+          collapsed={workspaceLayout.sessions.collapsed}
+          width={workspaceLayout.sessions.width}
+          onResize={resizeSessions}
+          onToggle={toggleSessions}
+        />
         <ChatPanel />
         {/* 移动端隐藏：文件管理走"文件"tab；平板(768-1100)也隐藏防挤压 */}
-        <div className="hidden xl:flex h-full"><FilePanel /></div>
+        <div className="hidden h-full min-w-0 xl:flex">
+          <FilePanel
+            collapsed={workspaceLayout.files.collapsed}
+            width={workspaceLayout.files.width}
+            onResize={resizeFiles}
+            onToggle={toggleFiles}
+          />
+        </div>
       </main>
       {tab === "files" && <main className="flex flex-1 overflow-hidden"><FilePage /></main>}
       {tab === "tasks" && <main className="flex flex-1 overflow-hidden"><TaskPage /></main>}

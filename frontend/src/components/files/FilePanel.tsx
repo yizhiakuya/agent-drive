@@ -7,16 +7,27 @@ import { fmtSize } from "@/lib/format";
 import { EV, emitToast, emitTasksChanged } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, ChevronRight, Download, File, FolderOpen, Home, PanelLeftClose, PanelLeftOpen, RefreshCw, Upload, X } from "lucide-react";
+import PanelResizeHandle from "@/components/workspace/PanelResizeHandle";
+import { WORKSPACE_PANEL_LIMITS } from "@/lib/workspace-layout";
+import { ArrowLeft, ChevronRight, Download, File, FolderOpen, Home, PanelRightClose, PanelRightOpen, RefreshCw, Upload, X } from "lucide-react";
 
-export default function FilePanel() {
+interface FilePanelProps {
+  collapsed?: boolean;
+  width?: number;
+  onResize?: (width: number) => void;
+  onToggle?: () => void;
+}
+
+export default function FilePanel({ collapsed, width = WORKSPACE_PANEL_LIMITS.files.defaultWidth, onResize, onToggle }: FilePanelProps) {
   const [path, setPath] = useState("");
   const [items, setItems] = useState<{ name: string; path: string; is_dir: boolean; size: number }[]>([]);
   const [disk, setDisk] = useState<{ used: number; total: number; free: number } | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [localCollapsed, setLocalCollapsed] = useState(false);
   const [selected, setSelected] = useState<{ path: string; info: FileInfo | null; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pathRef = useRef("");
+  const isCollapsed = collapsed ?? localCollapsed;
+  const toggle = onToggle ?? (() => setLocalCollapsed((value) => !value));
 
   const load = useCallback(async (p: string) => {
     try {
@@ -69,19 +80,54 @@ export default function FilePanel() {
   const crumbs = path ? path.split("/").filter(Boolean) : [];
   const isMarkdown = selected?.info?.path?.toLowerCase().endsWith(".md");
 
+  const panelWidth = isCollapsed ? WORKSPACE_PANEL_LIMITS.files.collapsedWidth : width;
+
   return (
-    <aside className={`bg-panel flex flex-col border-l border-border ${collapsed ? "w-11 min-w-11" : "w-80"}`}>
-      <div className="flex items-center justify-between border-b border-border px-3 py-3">
-        <b className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em]"><FolderOpen className="size-3.5 text-muted" /> 文件</b>
-        <span className="flex gap-1.5 items-center">
-          <Button variant="default" size="sm" onClick={() => fileRef.current?.click()}><Upload className="size-3.5" /> 上传</Button>
-          <Button variant="ghost" size="sm" onClick={() => load(path)} title="刷新" aria-label="刷新"><RefreshCw className="size-3.5" /></Button>
-          <Button variant="ghost" size="sm" onClick={() => setCollapsed((v) => !v)}
-                  title={collapsed ? "展开" : "收起"} aria-label={collapsed ? "展开" : "收起"}>{collapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}</Button>
-        </span>
-        <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
-      </div>
-      {!collapsed && (
+    <aside
+      data-testid="file-panel"
+      aria-label="文件栏"
+      style={{ width: panelWidth, minWidth: panelWidth }}
+      className="relative flex h-full shrink-0 flex-col border-l border-border bg-panel"
+    >
+      <PanelResizeHandle
+        panel="files"
+        width={width}
+        minWidth={WORKSPACE_PANEL_LIMITS.files.min}
+        maxWidth={WORKSPACE_PANEL_LIMITS.files.max}
+        collapsed={isCollapsed}
+        onResize={onResize ?? (() => {})}
+        onToggle={toggle}
+      />
+      {isCollapsed ? (
+        <div data-testid="file-panel-collapsed" className="flex flex-1 flex-col items-center gap-2 bg-panel py-3">
+          <Button variant="ghost" size="icon-sm" onClick={toggle} title="展开文件栏" aria-label="展开文件栏">
+            <PanelRightOpen className="size-4" aria-hidden="true" />
+          </Button>
+          <FolderOpen className="mt-1 size-4 text-muted" aria-hidden="true" />
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-3 pl-4">
+            <b className="flex min-w-0 items-center gap-2 text-xs font-semibold uppercase tracking-[0.1em]">
+              <FolderOpen className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
+              <span className="truncate">文件</span>
+            </b>
+            <span className="flex shrink-0 items-center gap-1">
+              <Button variant="default" size="sm" onClick={() => fileRef.current?.click()}>
+                <Upload className="size-3.5" /> 上传
+              </Button>
+              <Button variant="ghost" size="icon-sm" onClick={() => load(path)} title="刷新文件列表" aria-label="刷新文件列表">
+                <RefreshCw className="size-3.5" />
+              </Button>
+              <Button variant="ghost" size="icon-sm" onClick={toggle} title="收起文件栏" aria-label="收起文件栏">
+                <PanelRightClose className="size-3.5" aria-hidden="true" />
+              </Button>
+            </span>
+          </div>
+          <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
+        </>
+      )}
+      {!isCollapsed && (
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex items-center px-3 py-1.5 text-xs flex-wrap gap-0.5 border-b border-border/60">
             <Button variant="ghost" size="sm" className={`px-1.5 ${!path ? "font-semibold text-text" : "text-muted"}`} onClick={() => load("")}><Home className="size-3.5" /></Button>

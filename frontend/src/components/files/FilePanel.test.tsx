@@ -43,9 +43,23 @@ describe("FilePanel（Next 版）", () => {
   it("折叠切换", async () => {
     render(<FilePanel />);
     await act(async () => {});
-    fireEvent.click(screen.getByTitle("收起"));
+    fireEvent.click(screen.getByTitle("收起文件栏"));
     // collapsed 后文件列表隐藏
     expect(screen.queryByText("合同.txt")).not.toBeInTheDocument();
+    expect(screen.getByTestId("file-panel-collapsed")).toBeInTheDocument();
+  });
+
+  it("拖动分隔轨道可以调整宽度", async () => {
+    const onResize = vi.fn();
+    render(<FilePanel width={320} onResize={onResize} />);
+    await act(async () => {});
+
+    const handle = screen.getByTestId("files-panel-resize-handle");
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500 });
+    fireEvent.pointerMove(window, { clientX: 450 });
+    fireEvent.pointerUp(window);
+
+    expect(onResize).toHaveBeenLastCalledWith(370);
   });
 
   it("监听 files-changed 事件自动刷新", async () => {

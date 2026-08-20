@@ -14,6 +14,7 @@ frontend/src/
 │   ├── sessions/        # 会话列表和摘要刷新
 │   ├── settings/        # provider、embedding、设备和同步设置
 │   ├── tasks/           # 任务列表、详情和状态流
+│   ├── workspace/       # 工作区面板收缩、拖拽调整和键盘分隔轨道
 │   ├── onboarding/      # web-only AI 配置引导
 │   ├── ui/              # shadcn/ui 基础控件
 │   └── PullToRefresh/   # Web/App 共用的下拉刷新
@@ -30,6 +31,8 @@ frontend/src/
 ## 2. 页面与状态
 
 `app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载，避免切换页面时丢失 SSE 流和工具步骤。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
+
+对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。会话列表在 `md` 以下隐藏，文件栏在 `xl` 以下隐藏；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。
 
 跨组件刷新使用 `lib/events.ts` 中的类型化事件：
 
