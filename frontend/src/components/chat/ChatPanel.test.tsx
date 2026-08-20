@@ -247,6 +247,20 @@ describe("ChatPanel 主流程", () => {
     });
   });
 
+  it("流错误保留服务端会话并阻止后续请求重复创建", async () => {
+    chatStream.mockRejectedValueOnce(Object.assign(new Error("上游限流"), { sessionId: "failed-session" }))
+      .mockResolvedValueOnce(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+
+    await typeAndSend("第一次提问");
+    await waitFor(() => expect(screen.getByText(/出错了：上游限流/)).toBeInTheDocument());
+    expect(useAppStore.getState().sessionId).toBe("failed-session");
+
+    await typeAndSend("第二次提问");
+    expect(chatStream.mock.calls[1][2]).toBe("failed-session");
+  });
+
   it("停止按钮中止流（AbortController）", async () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
     chatStream.mockImplementation((_msg, _h, _s, _c, _onEvent: unknown, signal: AbortSignal) => {

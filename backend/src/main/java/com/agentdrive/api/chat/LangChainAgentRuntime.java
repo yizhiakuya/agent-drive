@@ -732,6 +732,17 @@ public final class LangChainAgentRuntime implements ChatRuntime {
          */
         private void fail(Throwable error) {
             if (terminal.compareAndSet(false, true)) {
+                String message = ChatLogSupport.message(error);
+                if (input.sessionId() != null && !input.sessionId().isBlank()) {
+                    try {
+                        transcriptStore.appendAssistant(input.sessionId(), "出错了：" + message, "");
+                        transcriptStore.updateLastTrace(input.sessionId(), List.copyOf(traces));
+                    } catch (RuntimeException persistenceError) {
+                        LOGGER.warn("chat_error_transcript_write_failed request_id={} session_id={} owner={} route={}",
+                                requestId(), safeId(input.sessionId()), ownerId(), route(),
+                                ChatLogSupport.safeThrowable(persistenceError));
+                    }
+                }
                 LOGGER.error("chat_terminal_error request_id={} session_id={} owner={} route={} terminal=error steps={} model_steps={} duration_ms={}",
                         requestId(), safeId(input.sessionId()), ownerId(), route(), steps, modelSteps, elapsedMillis(),
                         ChatLogSupport.safeThrowable(error));

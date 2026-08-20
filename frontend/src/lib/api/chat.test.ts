@@ -131,6 +131,14 @@ describe("chatStream SSE 解析", () => {
       .rejects.toThrow("Provider 连接超时");
   });
 
+  it("SSE error 事件保留服务端会话 ID", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: error\ndata: {"error":"上游限流","session_id":"failed-session"}\n\n',
+    ]));
+    await expect(chatStream("hi", [], null, [], () => {}, new AbortController().signal))
+      .rejects.toMatchObject({ message: "上游限流", sessionId: "failed-session" });
+  });
+
   it("缺少错误消息的 SSE error 使用稳定兜底文案", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: error\ndata: {}\n\n',

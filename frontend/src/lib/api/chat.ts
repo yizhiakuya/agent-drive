@@ -2,6 +2,16 @@
 import { api, authenticatedFetch, ApiError, apiErrorMessage } from "./client";
 import type { FrontendCapability } from "../frontend-actions";
 
+export class ChatStreamError extends Error {
+  readonly sessionId: string | null;
+
+  constructor(message: string, sessionId: string | null = null) {
+    super(message);
+    this.name = "ChatStreamError";
+    this.sessionId = sessionId;
+  }
+}
+
 export const chat = (
   message: string,
   history: { role: string; content: string }[],
@@ -90,7 +100,10 @@ export async function chatStream(
       const message = typeof data.error === "string" && data.error.trim()
         ? data.error
         : "chat stream failed";
-      throw new Error(message);
+      const sessionId = typeof data.session_id === "string" && data.session_id.trim()
+        ? data.session_id
+        : null;
+      throw new ChatStreamError(message, sessionId);
     }
     if (event === "done") donePayload = data;
     onEvent(event, data);

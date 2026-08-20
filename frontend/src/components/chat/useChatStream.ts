@@ -59,11 +59,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   } = options;
 
   const [busy, _setBusyState] = useState(false);
+  const busyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const frameRef = useRef<ChatStreamFrame | null>(null);
   const streamGenerationRef = useRef(0);
 
   const applyBusy = useCallback((value: boolean) => {
+    busyRef.current = value;
     _setBusyState(value);
   }, []);
 
@@ -75,7 +77,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   ) {
     // 每次发送绑定一个 generation；停止、切会话或卸载都会递增它，旧流即使晚到也不能回写新会话。
     const msg = message ?? "";
-    if (!msg || busy) return;
+    if (!msg || busyRef.current) return;
     const history = buildChatHistory(messages);
     setMessages((m) => [...m, { type: "user", content: msg }]);
     applyBusy(true);
@@ -136,9 +138,25 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       }, 50);
     } catch (e) {
       if ((e as Error).name === "AbortError" || generation !== streamGenerationRef.current) return;
+      const errorSessionId = typeof e === "object" && e !== null && "sessionId" in e
+        && typeof (e as { sessionId?: unknown }).sessionId === "string"
+        ? (e as { sessionId: string }).sessionId
+        : null;
+      if (errorSessionId && sendSid === sessionIdRef.current) {
+        sessionIdRef.current = errorSessionId;
+        setSessionId(errorSessionId);
+        bumpSessions();
+      }
+      const message = e instanceof Error ? e.message : String(e);
       setMessages((m) => {
         const copy = [...m];
-        copy[copy.length - 1] = { type: "assistant", content: `出错了：${(e as Error).message}` };
+        const errorMessage = { type: "assistant" as const, content: `出错了：${message}` };
+        const last = copy.at(-1);
+        if (last?.type === "assistant" && !last.content && !last.reasoning) {
+          copy[copy.length - 1] = errorMessage;
+        } else {
+          copy.push(errorMessage);
+        }
         return copy;
       });
     } finally {
