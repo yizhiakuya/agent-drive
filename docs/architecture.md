@@ -74,6 +74,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - partial unique index 保证活跃 dedupe；Worker 按阶段/文件/embedding 批次节流写入 `progress_current`、`progress_total`、`progress_message`，进度更新与租约续期同一条原子 SQL 完成，并通过 `progress` 事件通知前端；相同进度不重复写事件。API 只统计顶层任务，子任务进度汇总到父任务。
 - `outbox_events` 可靠投递文件变更和索引任务；Worker 每 2 秒刷新 `task_workers`，API 以最近 10 秒心跳判断在线。
 - 任务列表接口通过多取一条返回 `has_more`，前端任务页按此加载更多记录；任务事件从尾部订阅，不回放全库；终态历史保留最近记录并由维护任务清理过期数据。
+- 任务页也提供 owner-scoped 的 `POST /api/v1/tasks/prune-history`，按固定策略清理 30 天前的终态任务，至少保留最近 2000 条；数据库递归保护仍被子任务引用的父任务，运行中和等待中的任务不会被删除，接口返回实际清理数量。
 
 当前任务类型包括 `index.file`、`index.embed`、`index.vision`、`index.rebuild`、`index.cleanup`、`maintenance.daily` 和 `automation.run`。HTTP 请求只入队，不串行执行 OCR、embedding 或 vision。
 

@@ -6,6 +6,7 @@ const listTasks = vi.fn();
 const getTaskDetail = vi.fn();
 const cancelTask = vi.fn();
 const retryTask = vi.fn();
+const pruneTaskHistory = vi.fn();
 const rebuildIndex = vi.fn();
 
 vi.mock("@capacitor/core", () => ({
@@ -17,6 +18,7 @@ vi.mock("@/lib/api/tasks", () => ({
   getTaskDetail: (...args: unknown[]) => getTaskDetail(...args),
   cancelTask: (...args: unknown[]) => cancelTask(...args),
   retryTask: (...args: unknown[]) => retryTask(...args),
+  pruneTaskHistory: (...args: unknown[]) => pruneTaskHistory(...args),
   rebuildIndex: (...args: unknown[]) => rebuildIndex(...args),
   taskEventsUrl: () => "/api/v1/tasks/events",
 }));
@@ -74,6 +76,7 @@ describe("TaskPage", () => {
     listTasks.mockResolvedValue(response);
     getTaskDetail.mockResolvedValue({ task: response.items[0], children: [] });
     cancelTask.mockResolvedValue({ task: { ...response.items[0], status: "cancelling" } });
+    pruneTaskHistory.mockResolvedValue({ removed: 3, jobs: 3, events: 0, workers: 0, older_than_days: 30, keep_recent: 2000 });
     rebuildIndex.mockResolvedValue({ queued: true, task: response.items[0] });
   });
 
@@ -197,6 +200,21 @@ describe("TaskPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始重建" }));
     await act(async () => {});
     expect(rebuildIndex).toHaveBeenCalledWith(true);
+  });
+
+  it("确认后清理历史任务并反馈清理数量", async () => {
+    render(<TaskPage />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "清理历史任务" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(pruneTaskHistory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认清理历史任务" }));
+    await act(async () => {});
+
+    expect(pruneTaskHistory).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("忽略过期筛选条件的任务列表响应", async () => {

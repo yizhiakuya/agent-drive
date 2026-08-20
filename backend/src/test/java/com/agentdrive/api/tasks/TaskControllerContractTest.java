@@ -141,6 +141,32 @@ class TaskControllerContractTest {
     }
 
     @Test
+    void prunesOnlyOwnerHistoryWithTheServerRetentionPolicy() {
+        UUID owner = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.pruneResult = Map.of(
+                "jobs", 3,
+                "events", 0,
+                "workers", 0,
+                "older_than_days", 30,
+                "keep_recent", 2000
+        );
+
+        client(owner, tasks).post().uri("/api/v1/tasks/prune-history")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.removed").isEqualTo(3)
+                .jsonPath("$.jobs").isEqualTo(3)
+                .jsonPath("$.older_than_days").isEqualTo(30)
+                .jsonPath("$.keep_recent").isEqualTo(2000);
+
+        assertThat(tasks.pruneOwner).isEqualTo(owner);
+        assertThat(tasks.pruneDays).isEqualTo(30);
+        assertThat(tasks.pruneKeep).isEqualTo(2000);
+    }
+
+    @Test
     void returnsNotFoundAndDoesNotReadChildrenForUnknownTask() {
         UUID owner = UUID.randomUUID();
         StubTasks tasks = new StubTasks();
@@ -175,6 +201,10 @@ class TaskControllerContractTest {
         private UUID detailOwner;
         private UUID childrenOwner;
         private UUID childrenParent;
+        private UUID pruneOwner;
+        private int pruneDays;
+        private int pruneKeep;
+        private Map<String, Object> pruneResult = Map.of("jobs", 0, "events", 0, "workers", 0);
 
         @Override
         public List<Map<String, Object>> list(UUID userId, List<String> statuses, String type,
@@ -218,6 +248,14 @@ class TaskControllerContractTest {
         @Override
         public Map<String, Object> retry(UUID userId, UUID taskId) {
             return null;
+        }
+
+        @Override
+        public Map<String, Object> pruneHistory(UUID userId, int olderThanDays, int keepRecent) {
+            this.pruneOwner = userId;
+            this.pruneDays = olderThanDays;
+            this.pruneKeep = keepRecent;
+            return pruneResult;
         }
 
         @Override

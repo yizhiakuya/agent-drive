@@ -46,6 +46,8 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Profile({"java-auth", "java-chat"})
 @RequestMapping("/api/v1/tasks")
 public final class TaskController {
+    private static final int HISTORY_RETENTION_DAYS = 30;
+    private static final int HISTORY_KEEP_RECENT = 2000;
     private static final Set<String> STATUSES = Set.of(
             "queued", "running", "retry_wait", "cancelling", "cancelled", "succeeded", "failed"
     );
@@ -111,6 +113,28 @@ public final class TaskController {
     @GetMapping("/summary")
     public Mono<Map<String, Object>> summary(ServerWebExchange exchange) {
         return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> tasks.overview(principal.userId())));
+    }
+
+    /**
+     * 响应 {@code POST /api/v1/tasks/prune-history}，清理当前用户可安全回收的历史任务。
+     *
+     * <p>清理策略由服务端固定：只处理超过 30 天的终态任务，至少保留最近 2000 条，
+     * 运行中任务以及仍被子任务引用的父任务由存储层保护。该操作不会创建新的任务记录，
+     * 避免“清理任务”本身再次制造无法清理的历史。</p>
+     *
+     * @param exchange 用于限定清理范围到当前任务 owner 的请求上下文。
+     * @return 清理数量和当前生效的历史保留策略。
+     */
+    @PostMapping("/prune-history")
+    public Mono<Map<String, Object>> pruneHistory(ServerWebExchange exchange) {
+        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
+            Map<String, Object> result = new LinkedHashMap<>(tasks.pruneHistory(
+                    principal.userId(), HISTORY_RETENTION_DAYS, HISTORY_KEEP_RECENT
+            ));
+            // TaskStore 的内部/维护任务契约使用 jobs；HTTP 契约提供更直观的 removed 别名。
+            result.put("removed", result.getOrDefault("jobs", 0));
+            return result;
+        }));
     }
 
     /**

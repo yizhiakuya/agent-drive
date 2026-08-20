@@ -13,12 +13,14 @@ import {
   RefreshCw,
   RotateCcw,
   Square,
+  Trash2,
   X,
   XCircle,
 } from "lucide-react";
 import {
   cancelTask,
   listTasks,
+  pruneTaskHistory,
   rebuildIndex,
   retryTask,
   taskEventsUrl,
@@ -174,6 +176,7 @@ export default function TaskPage() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
+  const [confirmPrune, setConfirmPrune] = useState(false);
   const reloadTimer = useRef<number | null>(null);
   const listRequestRef = useRef(0);
   const listLimitRef = useRef(PAGE_SIZE);
@@ -295,6 +298,24 @@ export default function TaskPage() {
     }
   }
 
+  async function startPrune() {
+    setPending("prune-history");
+    try {
+      const result = await pruneTaskHistory();
+      setConfirmPrune(false);
+      const removed = Number(result.removed ?? result.jobs ?? 0);
+      emitToast({
+        kind: "ok",
+        text: removed > 0 ? `已清理 ${removed} 条历史任务` : "没有符合条件的历史任务",
+      });
+      emitTasksChanged();
+    } catch (reason) {
+      emitToast({ kind: "error", text: reason instanceof Error ? reason.message : String(reason) });
+    } finally {
+      setPending(null);
+    }
+  }
+
   const counts = overview?.counts || {};
   const processingCount = (counts.running || 0) + (counts.cancelling || 0);
   const waitingCount = (counts.queued || 0) + (counts.retry_wait || 0);
@@ -323,6 +344,19 @@ export default function TaskPage() {
               onClick={() => load()}
             >
               <RefreshCw className={`size-4 ${loading || syncing ? "animate-spin" : ""}`} />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="default"
+              className="h-10 gap-2 px-3"
+              disabled={pending !== null}
+              title="清理 30 天前的终态任务，至少保留最近 2000 条"
+              aria-label="清理历史任务"
+              onClick={() => setConfirmPrune(true)}
+            >
+              <Trash2 className="size-4" />
+              <span>清理历史</span>
             </Button>
             <Button
               type="button"
@@ -453,6 +487,31 @@ export default function TaskPage() {
                 onClick={startRebuild}
               >
                 {pending === "rebuild" ? "正在提交…" : "开始重建"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmPrune && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-labelledby="prune-history-title">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-panel p-4 shadow-xl">
+            <h3 id="prune-history-title" className="text-sm font-bold">清理历史任务</h3>
+            <p className="mt-2 text-sm text-muted">
+              只会删除 30 天前的已完成、失败或已取消任务，并保留最近 2000 条记录。正在执行、等待中的任务，以及仍被子任务引用的父任务不会被删除。
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" className="h-10 px-3" disabled={pending === "prune-history"} onClick={() => setConfirmPrune(false)}>
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                className="h-10 px-3 font-semibold"
+                disabled={pending === "prune-history"}
+                onClick={startPrune}
+              >
+                {pending === "prune-history" ? "正在清理…" : "确认清理历史任务"}
               </Button>
             </div>
           </div>

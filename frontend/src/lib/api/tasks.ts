@@ -59,6 +59,16 @@ interface TaskListResponse {
   overview: TaskOverview;
 }
 
+export interface TaskPruneResult {
+  /** HTTP 契约中的直观字段；旧的维护结果也保留 jobs 作为兼容字段。 */
+  removed: number;
+  jobs: number;
+  events: number;
+  workers: number;
+  older_than_days: number;
+  keep_recent: number;
+}
+
 /** owner-scoped 详情接口返回的完整任务和父任务下的子任务摘要。 */
 export interface TaskDetailResponse {
   task: TaskRecord;
@@ -84,6 +94,10 @@ export const cancelTask = (id: string) =>
 
 export const retryTask = (id: string) =>
   api<{ task: TaskRecord }>(`/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" });
+
+/** 清理当前 owner 可安全回收的终态任务历史；保留策略由后端固定。 */
+export const pruneTaskHistory = () =>
+  api<TaskPruneResult>("/tasks/prune-history", { method: "POST" });
 
 export const rebuildIndex = (force: boolean) =>
   api<{ queued: boolean; task: TaskRecord }>("/tasks/rebuild-index", {
