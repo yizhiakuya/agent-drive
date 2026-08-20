@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -59,6 +60,9 @@ class MybatisScheduleStoreTest {
         assertThatIllegalArgumentException().isThrownBy(() -> schedules.upsert(
                 owner, "bad-kind", null, "monthly", "1", "index.cleanup", "index",
                 Map.of(), true, 0, 3, "UTC"));
+        assertThatIllegalArgumentException().isThrownBy(() -> schedules.upsert(
+                owner, "bad-cron", null, "cron", "not a cron", "index.cleanup", "index",
+                Map.of(), true, 0, 3, "UTC"));
 
         verifyNoInteractions(mapper, tasks);
     }
@@ -78,7 +82,7 @@ class MybatisScheduleStoreTest {
                 schedule(owner, validId, "healthy", "interval", "60", dueAt)
         ));
         when(tasks.enqueue(eq(owner), eq("index.cleanup"), eq("index"), eq(Map.of()),
-                eq("schedule:" + validId + ":" + dueAt), eq("schedule"), eq(null)))
+                eq("schedule:" + validId + ":" + dueAt), eq("schedule"), eq(null), eq(7), eq(5)))
                 .thenReturn(new TaskStore.EnqueueResult(Map.of("id", taskId), true));
 
         List<Map<String, Object>> result = schedules.dispatchDueAll(20);
@@ -90,8 +94,22 @@ class MybatisScheduleStoreTest {
                 .containsEntry("queued", true);
         verify(mapper).disableInvalid(eq(owner.toString()), eq(invalidId), contains("daily schedule_value"));
         verify(tasks, never()).enqueue(eq(owner), eq("index.cleanup"), eq("index"), eq(Map.of()),
-                eq("schedule:" + invalidId + ":" + dueAt), eq("schedule"), eq(null));
+                eq("schedule:" + invalidId + ":" + dueAt), eq("schedule"), eq(null), eq(7), eq(5));
+        verify(tasks).enqueue(eq(owner), eq("index.cleanup"), eq("index"), eq(Map.of()),
+                eq("schedule:" + validId + ":" + dueAt), eq("schedule"), eq(null), eq(7), eq(5));
         verify(mapper).markDispatched(eq(owner.toString()), eq(validId), anyDouble(), eq(taskId));
+    }
+
+    @Test
+    void calculatesRealNextRunsForFiveAndSixFieldCronExpressions() {
+        long after = Instant.parse("2026-08-20T10:07:00Z").getEpochSecond();
+
+        assertThat(MybatisScheduleStore.normalizeCronExpression("*/15 * * * *"))
+                .isEqualTo("0 */15 * * * *");
+        assertThat(MybatisScheduleStore.nextCronRun("0 */15 * * * *", "UTC", after))
+                .isEqualTo(Instant.parse("2026-08-20T10:15:00Z").getEpochSecond());
+        assertThat(MybatisScheduleStore.nextCronRun("30 8 * * * *", "Asia/Shanghai", after))
+                .isEqualTo(Instant.parse("2026-08-20T10:08:30Z").getEpochSecond());
     }
 
     private static Map<String, Object> schedule(UUID owner, String id, String name, String kind,
@@ -106,6 +124,8 @@ class MybatisScheduleStoreTest {
                 Map.entry("task_type", "index.cleanup"),
                 Map.entry("lane", "index"),
                 Map.entry("payload_json", "{}"),
+                Map.entry("priority", 7),
+                Map.entry("max_attempts", 5),
                 Map.entry("next_run_at", nextRunAt)
         );
     }

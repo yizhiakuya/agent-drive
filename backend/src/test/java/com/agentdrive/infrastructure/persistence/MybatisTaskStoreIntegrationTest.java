@@ -23,6 +23,30 @@ class MybatisTaskStoreIntegrationTest {
     private TaskStore tasks;
 
     @Test
+    void activeDedupeKeysAreIsolatedByOwnerAndKeepExplicitSchedulingFields() {
+        String firstUser = UUID.randomUUID().toString();
+        String secondUser = UUID.randomUUID().toString();
+        String dedupe = "shared-owner-scoped-key-" + UUID.randomUUID();
+        try {
+            jdbc.update("INSERT INTO users(id, username, password_hash) VALUES (?::uuid, ?, ?), (?::uuid, ?, ?)",
+                    firstUser, "task-owner-a-" + firstUser, "test-hash",
+                    secondUser, "task-owner-b-" + secondUser, "test-hash");
+
+            TaskStore.EnqueueResult first = tasks.enqueue(UUID.fromString(firstUser), "index.file", "index",
+                    Map.of("path", "a.txt"), dedupe, "schedule", null, 9, 7);
+            TaskStore.EnqueueResult second = tasks.enqueue(UUID.fromString(secondUser), "index.file", "index",
+                    Map.of("path", "b.txt"), dedupe, "schedule", null, 4, 5);
+
+            assertThat(first.created()).isTrue();
+            assertThat(second.created()).isTrue();
+            assertThat(first.task()).containsEntry("priority", 9).containsEntry("max_attempts", 7);
+            assertThat(second.task()).containsEntry("priority", 4).containsEntry("max_attempts", 5);
+        } finally {
+            jdbc.update("DELETE FROM users WHERE id IN (?::uuid, ?::uuid)", firstUser, secondUser);
+        }
+    }
+
+    @Test
     void persistsOwnerScopedDedupeStateTransitionsAndEvents() {
         String userId = UUID.randomUUID().toString();
         try {

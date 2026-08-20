@@ -11,6 +11,7 @@ spring:
     password: ${AGENT_DRIVE_DATABASE_PASSWORD:}
 
 server:
+  address: ${AGENT_DRIVE_BIND_ADDRESS:127.0.0.1}
   port: ${PORT:8000}
 
 logging:

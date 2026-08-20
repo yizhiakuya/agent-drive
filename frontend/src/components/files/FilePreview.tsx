@@ -27,7 +27,7 @@ export default function FilePreview({
   const mp = isMarkdown && kind === "text";
 
   if (kind === "image") {
-    return <img src={fileRawUrl(path)} alt={variant === "page" ? path : ""} className="max-w-full mx-auto" />;
+    return <img src={fileRawUrl(path)} referrerPolicy="no-referrer" alt={variant === "page" ? path : ""} className="max-w-full mx-auto" />;
   }
   if (kind === "video") {
     return <video src={fileRawUrl(path)} controls className={variant === "panel" ? "w-full max-h-56" : "w-full max-h-full"} />;
@@ -51,7 +51,7 @@ export default function FilePreview({
     );
   }
   if (kind === "pdf") {
-    return <iframe src={fileRawUrl(path)} title={variant === "panel" ? "pdf" : path} className={variant === "panel" ? "w-full h-56" : "w-full h-full min-h-96"} />;
+    return <iframe src={fileRawUrl(path)} referrerPolicy="no-referrer" title={variant === "panel" ? "pdf" : path} className={variant === "panel" ? "w-full h-56" : "w-full h-full min-h-96"} />;
   }
   if (kind === "text") {
     if (mp) {

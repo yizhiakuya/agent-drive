@@ -60,7 +60,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 ## 5. 文件、上传与索引
 
-文件 mutation 使用 owner 目录、组件级路径校验、symlink 拒绝、`.storage.lock`、0600 staging、fsync 和原子 link/replace。上传由服务端流式复算 MD5；`noclobber` 原子发布，不使用“先 exists 再写”的 TOCTOU 流程。
+文件 mutation 使用 owner 目录、组件级路径校验、symlink 拒绝、`.storage.lock`、0600 staging/隐藏 backup、fsync 和原子 move/link。上传由服务端流式复算 MD5；`noclobber` 原子发布，不使用“先 exists 再写”的 TOCTOU 流程。上传、移动、复制、移入回收站和恢复把 storage lock 持有到 PostgreSQL 事务 afterCompletion：提交后清理 backup，回滚或提交失败恢复旧磁盘状态；提交后的 artifact 清理失败只记录 warning。文本预览用严格 UTF-8、GBK、ISO-8859-1 顺序解码，截断只丢弃末尾未完成码点。
 
 文件列表的 name 搜索最多保留 1000 个 top-k 候选，并只批量同步缺失或变化的 metadata。semantic 搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，按文件去重并返回最佳 `search_score/search_snippet`。
 
@@ -71,9 +71,9 @@ PostgreSQL 保存所有结构化运行状态，包括：
 任务通过 PostgreSQL 状态机和租约运行：
 
 - `FOR UPDATE SKIP LOCKED` 领取 queued/retry_wait 任务；lease 和 heartbeat 防止 Worker 崩溃后永久卡住。
-- 用户触发的 cancel/retry 由 `TaskStore.TransitionResult` 统一表达任务快照、是否实际迁移和稳定原因。Mapper 先执行带状态条件的 UPDATE：不存在的 retry 返回 404，不可重试返回 409；重复取消保持幂等 200，不刷新终态时间戳，也不重复写 `cancel_requested` 事件。HTTP 与 `backend_api` 使用同一结果语义。
-- partial unique index 保证活跃 dedupe；Worker 按阶段/文件/embedding 批次节流写入 `progress_current`、`progress_total`、`progress_message`，进度更新与租约续期同一条原子 SQL 完成，并通过 `progress` 事件通知前端；相同进度不重复写事件。API 只统计顶层任务，子任务进度汇总到父任务。
-- Worker 的 schedule、outbox、task 三个 tick 阶段分别隔离异常。schedule 写入先校验类型、表达式和时区，裁剪任务类型和 lane，并把空白 lane 规范为 `default`，然后计算首次运行时间；派发先计算下次运行再入队。历史非法计划写入 `last_error` 后禁用，不阻塞同批其他计划。
+- 用户触发的 cancel/retry 由 `TaskStore.TransitionResult` 统一表达任务快照、是否实际迁移和稳定原因。Mapper 先执行带状态条件的 UPDATE：不存在的 retry 返回 404，不可重试返回 409；重复取消保持幂等 200，不刷新终态时间戳，也不重复写 `cancel_requested` 事件。running 任务收到取消后不再接受进度、续租或成功迁移，handler 停止后由 fail 收敛为 cancelled。HTTP 与 `backend_api` 使用同一结果语义。
+- `(user_id, dedupe_key)` partial unique index 保证每个 owner 内的活跃 dedupe，不同 owner 可使用相同 key；Worker 按阶段/文件/embedding 批次节流写入 `progress_current`、`progress_total`、`progress_message`，进度更新与租约续期同一条原子 SQL 完成，并通过 `progress` 事件通知前端；相同进度不重复写事件。API 只统计顶层任务，子任务进度汇总到父任务。
+- Worker 的 schedule、outbox、task 三个 tick 阶段分别隔离异常。schedule 写入先校验类型、表达式和时区；5 字段 cron 转为 Spring 6 字段并按计划时区计算真实命中，interval/daily 保持各自语义。任务类型和 lane 会裁剪、空白 lane 规范为 `default`；派发先计算下次运行，再把 priority/max_attempts 传给任务入队。历史非法计划写入 `last_error` 后禁用，不阻塞同批其他计划。
 - `outbox_events` 可靠投递文件变更和索引任务；不可恢复的坏类型、payload、action 或路径记录失败次数、最后错误和 `dead_lettered_at`，瞬时入队失败保留 pending 重试，只有入队成功才标记发布。Worker 每 2 秒刷新 `task_workers`，API 以最近 10 秒心跳判断在线。
 - 任务列表接口通过多取一条返回 `has_more`，前端任务页按此加载更多记录；任务事件从尾部订阅，不回放全库；终态历史保留最近记录并由维护任务清理过期数据。
 - 自动维护通过 owner-scoped 的 `POST /api/v1/tasks/prune-history` 按固定策略清理 30 天前的终态任务，至少保留最近 2000 条；它不代表用户手动清理的语义。
@@ -85,9 +85,9 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
-文件页的列表、详情、全文和索引刷新使用独立请求代次与当前路径校验；ChatPanel 保持常驻挂载，`useChatStream` 作为流式 `busy` 的唯一状态源，负责 Abort、流代次和 80ms 帧节流。ChatPanel 的会话历史、聊天模型目录，以及 SettingsPage 的 LLM/视觉模型目录请求都必须在响应提交前校验请求代次和当前配置边界，避免切换会话或接口后迟到响应污染界面。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
+文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 作为流式 `busy` 的唯一状态源，负责 Abort、流代次和 80ms 帧节流。ChatPanel 的会话历史、聊天模型目录，以及 SettingsPage 的 LLM/视觉模型目录请求都必须在响应提交前校验请求代次和当前配置边界，避免切换会话或接口后迟到响应污染界面。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 
-Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
+Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；本地文件消失/权限拒绝永久跳过，其他本地 I/O 冻结水位，线程中断保留中断位并终止本批。同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
 
 ## 8. 生产运行与验证
 

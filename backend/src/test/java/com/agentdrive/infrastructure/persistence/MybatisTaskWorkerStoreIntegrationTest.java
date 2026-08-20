@@ -91,4 +91,28 @@ class MybatisTaskWorkerStoreIntegrationTest {
             jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
         }
     }
+
+    @Test
+    void cancellationRejectsFurtherProgressAndCannotFinishAsSucceeded() {
+        String userId = UUID.randomUUID().toString();
+        try {
+            jdbc.update("INSERT INTO users(id, username, password_hash) VALUES (?::uuid, ?, ?)",
+                    userId, "worker-cancel-" + userId, "test-hash");
+            UUID owner = UUID.fromString(userId);
+            TaskStore.EnqueueResult queued = tasks.enqueue(
+                    owner, "integration.cancel", "integration-cancel", Map.of(),
+                    "worker-cancel-dedupe-" + userId, "api", null);
+            String taskId = String.valueOf(queued.task().get("id"));
+            assertThat(workers.claim("worker-cancel", "integration-cancel", 30)).containsEntry("id", taskId);
+
+            assertThat(tasks.cancel(owner, UUID.fromString(taskId)).changed()).isTrue();
+            assertThat(workers.updateProgress("worker-cancel", taskId, 1, 2, "late progress", 30)).isFalse();
+            assertThat(workers.succeed("worker-cancel", taskId, Map.of("ok", true))).isFalse();
+            assertThat(workers.fail("worker-cancel", taskId, "task completion rejected")).isTrue();
+
+            assertThat(tasks.get(owner, UUID.fromString(taskId))).containsEntry("status", "cancelled");
+        } finally {
+            jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
+        }
+    }
 }

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DateTimeException;
@@ -28,7 +29,7 @@ import java.util.UUID;
 
 /**
  * 通过 MyBatis 持久化计划并把到期计划转换成任务队列项。
- * <p>支持 cron（按当前实现的固定 60 秒推进）、interval 和 daily 计划；派发使用
+ * <p>支持 5/6 字段 cron、interval 和 daily 计划；派发使用
  * {@code schedule:id:scheduledAt} 去重键，并在同一事务中更新下一次运行时间。</p>
  */
 public class MybatisScheduleStore implements ScheduleStore {
@@ -187,7 +188,9 @@ public class MybatisScheduleStore implements ScheduleStore {
                 payload(schedule),
                 dedupe,
                 "schedule",
-                null
+                null,
+                intValue(schedule.get("priority"), 0),
+                intValue(schedule.get("max_attempts"), 3)
         );
         mapper.markDispatched(userId.toString(), scheduleId, nextRun, String.valueOf(result.task().get("id")));
         Map<String, Object> item = new LinkedHashMap<>();
@@ -225,7 +228,7 @@ public class MybatisScheduleStore implements ScheduleStore {
      * @param schedule 含 schedule_kind、schedule_value 和 timezone 的计划行。
      * @param after 本次运行的 Unix 秒时间。
      * @return 下一次运行的 Unix 秒时间；interval 按秒增加，daily 计算下一个本地时刻，
-     *         其他类型按 60 秒推进。
+     *         cron 使用计划时区计算表达式的下一次命中。
      * @throws DateTimeException daily 时区或 HH:mm 值非法时抛出。
      */
     private double nextRun(ScheduleDefinition definition, double after) {
@@ -237,7 +240,7 @@ public class MybatisScheduleStore implements ScheduleStore {
             if (target.toEpochSecond() <= (long) after) target = target.plusDays(1);
             return target.toEpochSecond();
         }
-        return after + 60;
+        return nextCronRun(definition.cronExpression(), definition.timezone(), (long) after);
     }
 
     /** 校验并规范化来自 API 或数据库行的计划定义。 */
@@ -277,7 +280,17 @@ public class MybatisScheduleStore implements ScheduleStore {
             }
         }
         String normalizedCron = cron == null || cron.isBlank() ? value : cron.trim();
-        return new ScheduleDefinition(normalizedCron, kind, value, zoneName, intervalSeconds, dailyTime);
+        String cronExpression = null;
+        if ("cron".equals(kind)) {
+            cronExpression = normalizeCronExpression(value);
+            try {
+                CronExpression.parse(cronExpression);
+            } catch (IllegalArgumentException error) {
+                throw new InvalidScheduleException("cron schedule_value is invalid", error);
+            }
+        }
+        return new ScheduleDefinition(normalizedCron, kind, value, zoneName,
+                intervalSeconds, dailyTime, cronExpression);
     }
 
     private ScheduleDefinition definition(Map<String, Object> schedule) {
@@ -348,14 +361,70 @@ public class MybatisScheduleStore implements ScheduleStore {
         return value == null ? null : String.valueOf(value);
     }
 
+    /**
+     * 把传统 5 字段 cron 转成 Spring 的 6 字段格式；6 字段表达式保持不变。
+     * @param expression 用户或数据库提供的 cron 表达式。
+     * @return 经过空白规范化的 Spring 6 字段表达式。
+     * @throws InvalidScheduleException 字段数不是 5 或 6 时抛出。
+     */
+    static String normalizeCronExpression(String expression) {
+        String normalized = expression == null ? "" : expression.trim().replaceAll("\\s+", " ");
+        int fields = normalized.isEmpty() ? 0 : normalized.split(" ").length;
+        if (fields == 5) return "0 " + normalized;
+        if (fields == 6) return normalized;
+        throw new InvalidScheduleException("cron schedule_value must contain 5 or 6 fields");
+    }
+
+    /**
+     * 以指定时区计算严格晚于 after 的下一次 cron 命中，供存储逻辑和纯单元测试复用。
+     * @param expression 已规范化的 Spring 6 字段 cron 表达式。
+     * @param timezone IANA 时区名称。
+     * @param after 本次触发时刻的 Unix 秒。
+     * @return 严格晚于 after 的下一次触发 Unix 秒。
+     * @throws InvalidScheduleException 表达式、时区非法或表达式不存在下一次命中时抛出。
+     */
+    static long nextCronRun(String expression, String timezone, long after) {
+        try {
+            ZonedDateTime current = ZonedDateTime.ofInstant(Instant.ofEpochSecond(after), ZoneId.of(timezone));
+            ZonedDateTime next = CronExpression.parse(expression).next(current);
+            if (next == null) throw new InvalidScheduleException("cron expression has no next execution");
+            return next.toEpochSecond();
+        } catch (DateTimeException | IllegalArgumentException error) {
+            if (error instanceof InvalidScheduleException invalid) throw invalid;
+            throw new InvalidScheduleException("cron schedule_value is invalid", error);
+        }
+    }
+
+    /**
+     * 把数据库数值或数字文本转成 int，空值使用兼容默认值。
+     * @param value 数据库字段值。
+     * @param fallback value 为空时使用的默认值。
+     * @return 解析后的整数。
+     * @throws NumberFormatException 文本不是整数时抛出。
+     */
+    private static int intValue(Object value, int fallback) {
+        if (value == null) return fallback;
+        return value instanceof Number number ? number.intValue() : Integer.parseInt(String.valueOf(value));
+    }
+
     private static String safeMessage(RuntimeException error) {
         String message = error.getMessage();
         if (message == null || message.isBlank()) message = error.getClass().getSimpleName();
         return message.substring(0, Math.min(500, message.length()));
     }
 
+    /**
+     * 保存一次已校验计划的兼容 cron 文本、类型、时区及预解析字段。
+     * @param cron 对外保留的兼容 cron 文本。
+     * @param kind cron、interval 或 daily。
+     * @param value 规范化后的计划值。
+     * @param timezone IANA 时区名称。
+     * @param intervalSeconds interval 秒数，其他类型为 0。
+     * @param dailyTime daily 本地时间，其他类型为空。
+     * @param cronExpression Spring 6 字段 cron 表达式，其他类型为空。
+     */
     private record ScheduleDefinition(String cron, String kind, String value, String timezone,
-                                      long intervalSeconds, LocalTime dailyTime) {
+                                       long intervalSeconds, LocalTime dailyTime, String cronExpression) {
     }
 
     private static final class InvalidScheduleException extends IllegalArgumentException {

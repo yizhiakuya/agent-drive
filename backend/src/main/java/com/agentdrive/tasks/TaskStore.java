@@ -79,6 +79,26 @@ public interface TaskStore {
                           String dedupeKey, String origin, UUID parentId);
 
     /**
+     * 创建带显式优先级和最大尝试次数的任务。默认实现保留旧适配器行为；PostgreSQL
+     * 实现会把两个调度字段写入任务行。
+     * @param userId 任务归属 owner。
+     * @param type Worker 分发的任务类型。
+     * @param lane Worker 领取 lane。
+     * @param payload 任务结构化参数。
+     * @param dedupeKey owner 活跃任务范围内的去重键。
+     * @param origin 创建来源。
+     * @param parentId 可选父任务 UUID。
+     * @param priority 调度优先级。
+     * @param maxAttempts 最大执行次数。
+     * @return 新任务或同 owner 去重命中的现有任务。
+     */
+    default EnqueueResult enqueue(UUID userId, String type, String lane, Map<String, Object> payload,
+                                  String dedupeKey, String origin, UUID parentId,
+                                  int priority, int maxAttempts) {
+        return enqueue(userId, type, lane, payload, dedupeKey, origin, parentId);
+    }
+
+    /**
      * 请求取消一条属于用户的任务。
      * queued/retry_wait 任务可直接转为 cancelled，running 任务写入 cancel_requested 供 Worker 在下次状态迁移时处理，终态任务保持不变。
      *

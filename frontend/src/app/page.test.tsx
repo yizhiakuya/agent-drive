@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Home from "./page";
 import { useAppStore } from "@/lib/store";
@@ -45,7 +45,9 @@ vi.mock("@/lib/native/server-config", () => ({
   currentServer: mocks.currentServer,
 }));
 
-vi.mock("@/components/chat/ChatPanel", () => ({ default: () => <div>chat</div> }));
+vi.mock("@/components/chat/ChatPanel", () => ({
+  default: () => <input aria-label="chat draft" defaultValue="" />,
+}));
 vi.mock("@/components/files/FilePanel", () => ({ default: () => <div>file panel</div> }));
 vi.mock("@/components/files/FilePage", () => ({ default: () => <div>files</div> }));
 vi.mock("@/components/sessions/SessionList", () => ({ default: () => <div>sessions</div> }));
@@ -57,7 +59,11 @@ vi.mock("@/components/auth/LoginCard", () => ({
 }));
 vi.mock("@/components/auth/RescanCard", () => ({ default: () => <div>rescan</div> }));
 vi.mock("@/components/ToastStack", () => ({ default: () => null }));
-vi.mock("@/components/PullToRefresh", () => ({ default: () => null }));
+vi.mock("@/components/PullToRefresh", () => ({
+  default: ({ onRefresh }: { onRefresh: () => Promise<void> }) => (
+    <button type="button" onClick={() => void onRefresh()}>refresh all</button>
+  ),
+}));
 vi.mock("@/components/WorkspaceHeader", () => ({ default: () => <div>header</div> }));
 
 function authResponse(status: number, initialized: unknown = true): Response {
@@ -66,6 +72,12 @@ function authResponse(status: number, initialized: unknown = true): Response {
     status,
     json: vi.fn().mockResolvedValue({ initialized }),
   } as unknown as Response;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
 }
 
 describe("Home startup error handling", () => {
@@ -153,5 +165,27 @@ describe("Home startup error handling", () => {
 
     expect(await screen.findByText("onboarding")).toBeInTheDocument();
     expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the chat draft mounted while a pull refresh is pending", async () => {
+    mocks.authenticatedFetch.mockResolvedValueOnce(authResponse(200));
+    mocks.getStatus.mockResolvedValue({ configured: true });
+    mocks.getConfig.mockResolvedValue({ llm: { model: "test-model" } });
+
+    render(<Home />);
+    const draft = await screen.findByRole("textbox", { name: "chat draft" });
+    fireEvent.change(draft, { target: { value: "unfinished message" } });
+
+    const refresh = deferred<Response>();
+    mocks.authenticatedFetch.mockReturnValueOnce(refresh.promise);
+    fireEvent.click(screen.getByRole("button", { name: "refresh all" }));
+    await waitFor(() => expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByRole("textbox", { name: "chat draft" })).toBe(draft);
+    expect(draft).toHaveValue("unfinished message");
+    expect(useAppStore.getState().loading).toBe(true);
+
+    await act(async () => { refresh.resolve(authResponse(200)); });
+    await waitFor(() => expect(useAppStore.getState().loading).toBe(false));
   });
 });

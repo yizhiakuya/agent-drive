@@ -14,13 +14,24 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class IndexTaskHandlerTest {
+    private static <T> T mock(Class<T> type) {
+        T value = org.mockito.Mockito.mock(type);
+        if (value instanceof TaskWorkerStore workers) {
+            when(workers.updateProgress(anyString(), anyString(), anyInt(), anyInt(), anyString(), anyInt()))
+                    .thenReturn(true);
+            when(workers.succeed(anyString(), anyString(), any())).thenReturn(true);
+        }
+        return value;
+    }
+
     @Test
     void claimsIndexTaskAndMarksSuccess() {
         TaskWorkerStore workers = mock(TaskWorkerStore.class);
@@ -54,6 +65,27 @@ class IndexTaskHandlerTest {
         org.assertj.core.api.Assertions.assertThat(handler.runOnce("worker")).isTrue();
 
         verify(workers).fail(eq("worker"), eq(taskId), eq("unsupported task type: unknown.task"));
+    }
+
+    @Test
+    void cancellationRejectedProgressStopsWorkAndCannotSucceed() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        when(workers.claim("worker", "index", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "index.file",
+                "payload_json", "{\"path\":\"notes.txt\"}"
+        ));
+        when(workers.updateProgress(anyString(), anyString(), anyInt(), anyInt(), anyString(), anyInt()))
+                .thenReturn(false);
+        IndexTaskHandler handler = new IndexTaskHandler(workers, indexing, new ObjectMapper());
+
+        assertThat(handler.runOnce("worker")).isTrue();
+
+        verify(indexing, never()).indexFile(any(), anyString());
+        verify(workers, never()).succeed(eq("worker"), eq(taskId), any());
+        verify(workers).fail(eq("worker"), eq(taskId), eq("task lease lost or cancellation requested"));
     }
 
     @Test

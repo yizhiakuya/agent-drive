@@ -53,6 +53,11 @@ class FileControllerContractTest {
                 .uri("/api/v1/files/raw?path=hello.txt&token=device-token")
                 .exchange()
                 .expectStatus().isOk()
+                .expectHeader().contentType("application/octet-stream")
+                .expectHeader().valueMatches("Content-Disposition", ".*attachment.*hello.txt.*")
+                .expectHeader().valueEquals("Cache-Control", "private, no-store")
+                .expectHeader().valueEquals("Referrer-Policy", "no-referrer")
+                .expectHeader().valueEquals("X-Content-Type-Options", "nosniff")
                 .expectBody(String.class).isEqualTo("hello");
 
         client.get()
@@ -60,6 +65,25 @@ class FileControllerContractTest {
                 .exchange()
                 .expectStatus().isOk()
                 .expectHeader().valueMatches("Content-Disposition", ".*attachment.*hello.txt.*");
+    }
+
+    @Test
+    void rawActiveContentIsForcedToDownloadWithoutSniffing() throws Exception {
+        UUID owner = UUID.randomUUID();
+        StubFiles files = new StubFiles(owner);
+        mediaDirectory = Files.createTempDirectory("agent-drive-file-contract-");
+        media = mediaDirectory.resolve("payload.html");
+        Files.writeString(media, "<script>window.top.location='https://attacker.invalid'</script>");
+        files.media = media;
+
+        client(owner, files).get()
+                .uri("/api/v1/files/raw?path=payload.html&token=device-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentType("application/octet-stream")
+                .expectHeader().valueMatches("Content-Disposition", ".*attachment.*payload.html.*")
+                .expectHeader().valueEquals("Content-Security-Policy", "sandbox; default-src 'none'")
+                .expectHeader().valueEquals("Cross-Origin-Resource-Policy", "same-origin");
     }
 
     @Test

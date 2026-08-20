@@ -65,7 +65,7 @@ API 不直接写 SQL、操作物理路径或调用模型 SDK；Agent 不直接�
 
 PostgreSQL 的结构化状态包括认证、会话、设备、文件 metadata/revision/trash/dedupe、任务和事件、schedule、Worker heartbeat、outbox、文档/chunk、embedding metadata、Agent preference 以及加密 provider 配置。
 
-文件 mutation 保持以下不变量：公共路径为 owner 内相对 POSIX 路径；组件级拒绝 traversal 和 symlink；staging 使用 0600；发布使用 fsync、原子 link/replace 和 `.storage.lock`；上传由服务端复算 MD5；`noclobber` 不使用先检查再写入的 TOCTOU 流程。
+文件 mutation 保持以下不变量：公共路径为 owner 内相对 POSIX 路径；组件级拒绝 traversal 和 symlink；staging 使用 0600；发布使用 fsync、原子 move/link 和 `.storage.lock`；上传由服务端复算 MD5；`noclobber` 不使用先检查再写入的 TOCTOU 流程。上传、移动、复制、回收站删除/恢复在可见发布前隐藏旧目标，并把 storage lock 持有到 Spring 事务完成；回滚恢复旧磁盘状态，提交后清理 backup，提交后的 artifact 清理失败不反转成功结果。
 
 认证使用 PBKDF2 密码 hash、HttpOnly Cookie session、Bearer session/device token 和一次性 pairing code。模型可见工具只有统一的 `backend_api`/`frontend_api` envelope，不能提供任意 URL、请求头、Cookie、Bearer、JavaScript 或 Java 类名。具体安全边界见 [`security.md`](security.md)。
 
@@ -78,7 +78,7 @@ PostgreSQL 的结构化状态包括认证、会话、设备、文件 metadata/re
 - 文件语义搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，结果按文件去重并返回最佳片段。
 - 文件内容变更先失效旧全文/向量，再经 outbox 入队 `index.file`；坏 outbox 事件进入持久死信，瞬时入队错误保留重试。图片描述写入前校验 source revision；视觉全失败不触发全盘 embedding，显式向量/视觉 provider 失败进入任务 fail/retry。强制向量重算逐批覆盖，不预先删除旧向量。单文件抽取失败标记 skipped，不阻断 rebuild。
 
-任务使用 PostgreSQL 状态机、`FOR UPDATE SKIP LOCKED`、lease/heartbeat、partial unique dedupe 和尾部 SSE event cursor。schedule 表达式在写入和派发前校验，任务类型和 lane 在写入时裁剪，空白 lane 统一为 `default`，遗留非法计划自动禁用；Worker 的 schedule/outbox/task 阶段互相隔离。Worker 每 2 秒更新 `task_workers`，API 以最近 10 秒心跳判断在线；生产 API 不执行内嵌 Worker。
+任务使用 PostgreSQL 状态机、`FOR UPDATE SKIP LOCKED`、lease/heartbeat、owner-scoped `(user_id, dedupe_key)` partial unique index 和尾部 SSE event cursor。running 任务收到取消后，进度/续租/succeed SQL 均拒绝并由 handler 停止后落为 cancelled。schedule 在写入和派发前校验，5/6 字段 cron 按计划时区计算真实下一次命中，派发把 priority/max_attempts 原样传给任务；任务类型和 lane 在写入时裁剪，空白 lane 统一为 `default`，遗留非法计划自动禁用。Worker 的 schedule/outbox/task 阶段互相隔离；每 2 秒更新 `task_workers`，API 以最近 10 秒心跳判断在线；生产 API 不执行内嵌 Worker。
 
 ## 6. 已完成的迁移与切换
 

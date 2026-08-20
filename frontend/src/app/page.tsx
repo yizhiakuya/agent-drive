@@ -52,7 +52,6 @@ function SkeletonScreen() {
 }
 
 export default function Home() {
-  const loading = useAppStore((s) => s.loading);
   const authMode = useAppStore((s) => s.authMode);
   const configured = useAppStore((s) => s.configured);
   const tab = useAppStore((s) => s.tab);
@@ -258,7 +257,7 @@ export default function Home() {
     boot();
   }, [boot]);
 
-  if (loading) return <SkeletonScreen />;
+  if (authMode === "loading") return <SkeletonScreen />;
   if (authMode === "rescan")
     return <><RescanCard onPasswordFallback={() => setAuthMode("login")} /><ToastStack /></>;
   if (authMode === "setup") return <><LoginCard mode="setup" onDone={boot} /><ToastStack /></>;

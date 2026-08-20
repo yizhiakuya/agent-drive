@@ -78,6 +78,8 @@ public interface TaskMapper {
      * @param dedupeKey 活跃任务去重键，可为 {@code null}。
      * @param payload 任务 JSON 文本，将转换为 {@code jsonb}。
      * @param origin 创建来源；为空时由 SQL 写入 {@code api}。
+     * @param priority 非负任务调度优先级。
+     * @param maxAttempts 至少为 1 的最大执行次数。
      * @return 成功插入并由 {@code RETURNING} 投影出的任务行；活跃去重冲突时返回 {@code null}。
      */
     Map<String, Object> insertTask(@Param("userId") String userId,
@@ -86,7 +88,9 @@ public interface TaskMapper {
                                    @Param("lane") String lane,
                                    @Param("dedupeKey") String dedupeKey,
                                    @Param("payload") String payload,
-                                   @Param("origin") String origin);
+                                   @Param("origin") String origin,
+                                   @Param("priority") int priority,
+                                   @Param("maxAttempts") int maxAttempts);
 
     /**
      * 查找用户仍处于活跃状态的同去重键任务。

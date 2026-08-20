@@ -150,11 +150,33 @@ public class MybatisTaskStore implements TaskStore {
     @Transactional
     public EnqueueResult enqueue(UUID userId, String type, String lane, Map<String, Object> payload,
                                  String dedupeKey, String origin, UUID parentId) {
+        return enqueue(userId, type, lane, payload, dedupeKey, origin, parentId, 0, 3);
+    }
+
+    /**
+     * 在事务内创建带调度优先级和最大尝试次数的任务。
+     * @param userId 任务所属 owner。
+     * @param type Worker 分发的任务类型。
+     * @param lane Worker 领取 lane。
+     * @param payload 任务结构化参数。
+     * @param dedupeKey owner 活跃任务范围内的去重键。
+     * @param origin 创建来源。
+     * @param parentId 可选父任务 UUID。
+     * @param priority 非负调度优先级；负值收敛为 0。
+     * @param maxAttempts 最大尝试次数；小于 1 收敛为 1。
+     * @return 新任务或 owner 内同去重键的现有活跃任务。
+     */
+    @Override
+    @Transactional
+    public EnqueueResult enqueue(UUID userId, String type, String lane, Map<String, Object> payload,
+                                 String dedupeKey, String origin, UUID parentId,
+                                 int priority, int maxAttempts) {
         requireUser(userId);
         String serialized = json(payload == null ? Map.of() : payload);
         Map<String, Object> row = mapper.insertTask(
                 userId.toString(), parentId == null ? null : parentId.toString(), type, lane,
-                dedupeKey, serialized, origin == null ? "api" : origin
+                dedupeKey, serialized, origin == null ? "api" : origin,
+                Math.max(0, priority), Math.max(1, maxAttempts)
         );
         boolean created = row != null;
         if (!created && dedupeKey != null) {

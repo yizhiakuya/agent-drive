@@ -198,11 +198,17 @@ public class IndexTaskHandler {
                 default -> throw new IllegalArgumentException("unsupported task type: " + type);
             };
             progress.reportNow(1, 1, "任务执行完成");
-            workers.succeed(workerId, taskId, result);
+            if (!workers.succeed(workerId, taskId, result)) {
+                workers.fail(workerId, taskId, "task completion rejected");
+            }
         } catch (Exception error) {
             if (isInterrupted(error)) Thread.currentThread().interrupt();
             String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-            progress.reportNow(0, 0, "任务执行失败：" + message);
+            try {
+                progress.reportNow(0, 0, "任务执行失败：" + message);
+            } catch (TaskExecutionStoppedException ignored) {
+                // 租约或取消状态已阻止进度写入，直接交给 fail 完成取消/租约保护迁移。
+            }
             workers.fail(workerId, taskId, message);
         }
     }
@@ -408,12 +414,24 @@ public class IndexTaskHandler {
             long now = System.nanoTime();
             if (!immediate && lastReportNanos != Long.MIN_VALUE
                     && now - lastReportNanos < PROGRESS_INTERVAL_NANOS) return;
-            if (workers.updateProgress(workerId, taskId, current, total, safeMessage, TASK_LEASE_SECONDS)) {
-                lastReportNanos = now;
-                lastCurrent = current;
-                lastTotal = total;
-                lastMessage = safeMessage;
+            if (!workers.updateProgress(workerId, taskId, current, total, safeMessage, TASK_LEASE_SECONDS)) {
+                throw new TaskExecutionStoppedException("task lease lost or cancellation requested");
             }
+            lastReportNanos = now;
+            lastCurrent = current;
+            lastTotal = total;
+            lastMessage = safeMessage;
+        }
+    }
+
+    /** 进度写入被状态机拒绝时停止当前处理器，防止取消后的工作继续执行。 */
+    private static final class TaskExecutionStoppedException extends RuntimeException {
+        /**
+         * 创建携带稳定停止原因的处理器内部异常。
+         * @param message 租约丢失或取消请求说明。
+         */
+        private TaskExecutionStoppedException(String message) {
+            super(message);
         }
     }
 
