@@ -198,4 +198,61 @@
         WHERE task.id = deletable.id
           AND task.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
     </delete>
+
+    <delete id="clearTerminal">
+        WITH RECURSIVE active_chain(id, parent_id, path) AS (
+            SELECT id, parent_id, ARRAY[id]
+            FROM tasks
+            WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND status IN ('queued', 'running', 'retry_wait', 'cancelling')
+            UNION ALL
+            SELECT parent.id, parent.parent_id, active_chain.path || parent.id
+            FROM tasks parent
+            JOIN active_chain ON parent.id = active_chain.parent_id
+            WHERE parent.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND NOT (parent.id = ANY(active_chain.path))
+        ), deletable AS (
+            SELECT task.id
+            FROM tasks task
+            WHERE task.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND task.status IN ('cancelled', 'succeeded', 'failed')
+              AND NOT EXISTS (SELECT 1 FROM active_chain WHERE active_chain.id = task.id)
+        )
+        DELETE FROM tasks task
+        USING deletable
+        WHERE task.id = deletable.id
+          AND task.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+
+    <delete id="deleteTask">
+        WITH RECURSIVE descendants(id, parent_id, status, path) AS (
+            SELECT id, parent_id, status, ARRAY[id]
+            FROM tasks
+            WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+              AND status IN ('cancelled', 'succeeded', 'failed')
+            UNION ALL
+            SELECT child.id, child.parent_id, child.status, descendants.path || child.id
+            FROM tasks child
+            JOIN descendants ON child.parent_id = descendants.id
+            WHERE child.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND NOT (child.id = ANY(descendants.path))
+        ),
+        active_descendants AS (
+            SELECT 1
+            FROM descendants
+            WHERE status IN ('queued', 'running', 'retry_wait', 'cancelling')
+            LIMIT 1
+        ),
+        deletable AS (
+            SELECT id
+            FROM descendants
+            WHERE status IN ('cancelled', 'succeeded', 'failed')
+              AND NOT EXISTS (SELECT 1 FROM active_descendants)
+        )
+        DELETE FROM tasks task
+        USING deletable
+        WHERE task.id = deletable.id
+          AND task.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </delete>
 </mapper>

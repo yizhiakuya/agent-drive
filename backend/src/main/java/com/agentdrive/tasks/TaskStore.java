@@ -133,6 +133,32 @@ public interface TaskStore {
     }
 
     /**
+     * 清理 owner 当前所有已结束的任务记录。
+     *
+     * <p>这是用户主动执行的清理，不带自动维护的时间和数量保留条件。queued、running、
+     * retry_wait、cancelling 等活动任务不会删除；活动子任务存在时，其父任务也会保留，
+     * 防止任务树在执行过程中断裂。</p>
+     *
+     * @param userId 任务归属 owner 的 UUID。
+     * @return 删除的任务记录数量；不支持该能力的适配器返回零。
+     */
+    default int clearTerminal(UUID userId) {
+        return 0;
+    }
+
+    /**
+     * 删除一条已结束任务，必要时连同全部已结束的子任务一起删除。
+     * 活动任务不能删除；父任务仍有活动后代时返回未删除结果。
+     *
+     * @param userId 任务归属 owner 的 UUID。
+     * @param taskId 要删除的任务 UUID。
+     * @return 任务不存在时返回 {@code null}，否则返回删除结果。
+     */
+    default DeleteResult delete(UUID userId, UUID taskId) {
+        return null;
+    }
+
+    /**
      * 任务入队结果，区分本次是否创建了新任务。
      * {@code task} 在新建和命中现有活跃任务时都返回最终任务记录，调用方可据此向客户端返回统一的任务表示。
      *
@@ -140,5 +166,9 @@ public interface TaskStore {
      * @param created 本次调用插入新任务时为 {@code true}，命中活跃 dedupe key 时为 {@code false}。
      */
     record EnqueueResult(Map<String, Object> task, boolean created) {
+    }
+
+    /** 单个任务删除的业务结果；{@code reason} 仅在未删除时用于映射稳定的 API 错误。 */
+    record DeleteResult(boolean deleted, int removed, String reason) {
     }
 }

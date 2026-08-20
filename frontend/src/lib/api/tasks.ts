@@ -69,6 +69,21 @@ export interface TaskPruneResult {
   keep_recent: number;
 }
 
+export interface TaskClearResult {
+  /** 删除的任务记录总数，包含被一并清理的子任务。 */
+  removed: number;
+  jobs: number;
+  events: number;
+  workers: number;
+}
+
+export interface TaskDeleteResult {
+  task_id: string;
+  /** 删除的任务记录总数；删除父任务时可能包含其终态子任务。 */
+  removed: number;
+  jobs: number;
+}
+
 /** owner-scoped 详情接口返回的完整任务和父任务下的子任务摘要。 */
 export interface TaskDetailResponse {
   task: TaskRecord;
@@ -95,9 +110,17 @@ export const cancelTask = (id: string) =>
 export const retryTask = (id: string) =>
   api<{ task: TaskRecord }>(`/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" });
 
-/** 清理当前 owner 可安全回收的终态任务历史；保留策略由后端固定。 */
+/** 自动维护入口：按服务端固定的 30 天/2000 条策略清理历史。任务页不调用此入口。 */
 export const pruneTaskHistory = () =>
   api<TaskPruneResult>("/tasks/prune-history", { method: "POST" });
+
+/** 清理当前 owner 所有可安全回收的已结束任务；不会触碰活动任务。 */
+export const clearTerminalTasks = () =>
+  api<TaskClearResult>("/tasks/clear-terminal", { method: "POST" });
+
+/** 删除一条已结束任务；父任务会在安全时连同已结束子任务一起删除。 */
+export const deleteTask = (id: string) =>
+  api<TaskDeleteResult>(`/tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
 
 export const rebuildIndex = (force: boolean) =>
   api<{ queued: boolean; task: TaskRecord }>("/tasks/rebuild-index", {

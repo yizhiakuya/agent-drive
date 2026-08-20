@@ -31,6 +31,7 @@ export const STATUS_VARIANT: Record<TaskStatus, "default" | "secondary" | "destr
 };
 
 export const ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running", "retry_wait", "cancelling"]);
+export const TERMINAL_STATUSES = new Set<TaskStatus>(["succeeded", "failed", "cancelled"]);
 
 export const STATUS_HINTS: Record<TaskStatus, string> = {
   queued: "等待 Worker 领取",

@@ -166,4 +166,20 @@ public interface TaskMapper {
     int pruneHistory(@Param("userId") String userId,
                      @Param("cutoffEpoch") double cutoffEpoch,
                      @Param("keepRecent") int keepRecent);
+
+    /**
+     * 清理 owner 当前所有已结束任务，并递归清理其中没有活动后代的任务树。
+     * 活动任务及其祖先会被保护；返回值包含任务和子任务记录总数。
+     * @param userId 任务归属 owner 的 UUID 字符串。
+     * @return 实际删除的任务记录数量。
+     */
+    int clearTerminal(@Param("userId") String userId);
+
+    /**
+     * 删除指定已结束任务及其已结束后代；若存在活动后代则整组不删除。
+     * @param userId 任务归属 owner 的 UUID 字符串。
+     * @param taskId 任务 UUID 字符串。
+     * @return 实际删除的任务记录数量。
+     */
+    int deleteTask(@Param("userId") String userId, @Param("taskId") String taskId);
 }

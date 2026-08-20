@@ -19,8 +19,9 @@ import {
 } from "lucide-react";
 import {
   cancelTask,
+  clearTerminalTasks,
+  deleteTask as deleteTaskRequest,
   listTasks,
-  pruneTaskHistory,
   rebuildIndex,
   retryTask,
   taskEventsUrl,
@@ -36,7 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import TaskDetails from "./TaskDetails";
 import TaskProgressBar from "./TaskProgressBar";
-import { ACTIVE_STATUSES, resourceLabel, STATUS_LABELS, STATUS_VARIANT, taskLabel, taskStatusHint } from "./task-presenter";
+import { ACTIVE_STATUSES, resourceLabel, STATUS_LABELS, STATUS_VARIANT, taskLabel, taskStatusHint, TERMINAL_STATUSES } from "./task-presenter";
 import { useTaskDetails } from "./useTaskDetails";
 
 type Filter = "all" | "active" | "failed" | "done";
@@ -68,7 +69,7 @@ function formatTime(value: number | null) {
 
 function emptyTaskMessage(filter: Filter) {
   if (filter === "active") return "当前没有进行中的任务";
-  if (filter === "failed") return "当前没有异常任务";
+  if (filter === "failed") return "当前没有需要关注的任务";
   if (filter === "done") return "还没有完成的任务记录";
   return "还没有任务记录";
 }
@@ -76,11 +77,12 @@ function emptyTaskMessage(filter: Filter) {
 /**
  * 渲染一个顶层任务及其可选详情区域。详情单独挂在行内，避免异步详情加载改变其他任务的列表顺序。
  */
-function TaskRow({ task, pending, onCancel, onRetry, expanded, detail, detailLoading, detailError, onToggleDetails, onReloadDetails }: {
+function TaskRow({ task, pending, onCancel, onRetry, onDelete, expanded, detail, detailLoading, detailError, onToggleDetails, onReloadDetails }: {
   task: TaskRecord;
   pending: boolean;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
+  onDelete: (task: TaskRecord) => void;
   expanded: boolean;
   detail: TaskDetailResponse | null;
   detailLoading: boolean;
@@ -150,6 +152,20 @@ function TaskRow({ task, pending, onCancel, onRetry, expanded, detail, detailLoa
               <span className="hidden sm:inline">重试</span>
             </Button>
           )}
+          {TERMINAL_STATUSES.has(task.status) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-lg"
+              className="text-muted hover:bg-danger-soft hover:text-danger"
+              title="删除任务"
+              aria-label="删除任务"
+              disabled={pending}
+              onClick={() => onDelete(task)}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          )}
         </div>
       </div>
       {expanded && (
@@ -176,7 +192,8 @@ export default function TaskPage() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
-  const [confirmPrune, setConfirmPrune] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<TaskRecord | null>(null);
   const reloadTimer = useRef<number | null>(null);
   const listRequestRef = useRef(0);
   const listLimitRef = useRef(PAGE_SIZE);
@@ -222,6 +239,13 @@ export default function TaskPage() {
     if (!expandedTaskId || !tasks.some((task) => task.id === expandedTaskId)) return;
     void loadDetail(expandedTaskId);
   }, [expandedTaskId, loadDetail, tasks]);
+
+  useEffect(() => {
+    // 删除或批量清理后，展开的任务可能已经不在当前列表中；及时收起避免保留失效详情状态。
+    if (expandedTaskId && !tasks.some((task) => task.id === expandedTaskId)) {
+      toggleDetails(expandedTaskId);
+    }
+  }, [expandedTaskId, tasks, toggleDetails]);
 
   useEffect(() => {
     // 浏览器端以 SSE 作为低延迟通知，定时刷新作为兜底；短暂合并事件避免连续写入列表。
@@ -298,15 +322,35 @@ export default function TaskPage() {
     }
   }
 
-  async function startPrune() {
-    setPending("prune-history");
+  async function startClear() {
+    setPending("clear-terminal");
     try {
-      const result = await pruneTaskHistory();
-      setConfirmPrune(false);
+      const result = await clearTerminalTasks();
+      setConfirmClear(false);
       const removed = Number(result.removed ?? result.jobs ?? 0);
       emitToast({
         kind: "ok",
-        text: removed > 0 ? `已清理 ${removed} 条历史任务` : "没有符合条件的历史任务",
+        text: removed > 0 ? `已清理 ${removed} 条已结束任务记录` : "没有可清理的已结束任务",
+      });
+      emitTasksChanged();
+    } catch (reason) {
+      emitToast({ kind: "error", text: reason instanceof Error ? reason.message : String(reason) });
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function startDelete() {
+    if (!confirmDelete) return;
+    const target = confirmDelete;
+    setPending(`delete:${target.id}`);
+    try {
+      const result = await deleteTaskRequest(target.id);
+      setConfirmDelete(null);
+      const removed = Number(result.removed ?? result.jobs ?? 1);
+      emitToast({
+        kind: "ok",
+        text: removed > 1 ? `已删除任务及 ${removed - 1} 条子任务记录` : "已删除任务记录",
       });
       emitTasksChanged();
     } catch (reason) {
@@ -320,7 +364,8 @@ export default function TaskPage() {
   const processingCount = (counts.running || 0) + (counts.cancelling || 0);
   const waitingCount = (counts.queued || 0) + (counts.retry_wait || 0);
   const activeCount = processingCount + waitingCount;
-  const failedCount = (counts.failed || 0) + (counts.cancelled || 0);
+  const completedCount = counts.succeeded || 0;
+  const attentionCount = (counts.failed || 0) + (counts.cancelled || 0);
   const index = overview?.index;
 
   return (
@@ -351,12 +396,12 @@ export default function TaskPage() {
               size="default"
               className="h-10 gap-2 px-3"
               disabled={pending !== null}
-              title="清理 30 天前的终态任务，至少保留最近 2000 条"
-              aria-label="清理历史任务"
-              onClick={() => setConfirmPrune(true)}
+              title="清理所有已完成、失败和已取消的任务记录"
+              aria-label="清理已结束任务"
+              onClick={() => setConfirmClear(true)}
             >
               <Trash2 className="size-4" />
-              <span>清理历史</span>
+              <span>清理已结束</span>
             </Button>
             <Button
               type="button"
@@ -392,12 +437,12 @@ export default function TaskPage() {
             <div className="text-lg font-semibold tabular-nums mt-0.5">{waitingCount}</div>
           </div>
           <div className="border-r border-border p-3">
-            <div className="text-[11px] text-muted">有效向量</div>
-            <div className="text-lg font-semibold tabular-nums mt-0.5">{index?.vector_files ?? "-"}</div>
+            <div className="text-[11px] text-muted">已完成</div>
+            <div className="text-lg font-semibold tabular-nums mt-0.5">{completedCount}</div>
           </div>
           <div className="p-3">
-            <div className="text-[11px] text-muted">异常记录</div>
-            <div className="text-lg font-semibold tabular-nums mt-0.5">{failedCount}</div>
+            <div className="text-[11px] text-muted">需关注</div>
+            <div className="text-lg font-semibold tabular-nums mt-0.5">{attentionCount}</div>
           </div>
         </div>
 
@@ -412,7 +457,7 @@ export default function TaskPage() {
                 className={`h-8 rounded-sm px-3 text-xs ${filter === item ? "bg-panel font-semibold text-text shadow-sm" : "text-muted hover:text-text"}`}
                 onClick={() => setFilter(item)}
               >
-                {{ all: "全部", active: "进行中", failed: "异常", done: "已完成" }[item]}
+                {{ all: "全部", active: "进行中", failed: "需关注", done: "已完成" }[item]}
               </button>
             ))}
           </div>
@@ -452,6 +497,7 @@ export default function TaskPage() {
                   pending={pending === task.id}
                   onCancel={cancel}
                   onRetry={retry}
+                  onDelete={setConfirmDelete}
                   expanded={expandedTaskId === task.id}
                   detail={taskDetails[task.id] ?? null}
                   detailLoading={detailLoadingId === task.id}
@@ -493,25 +539,50 @@ export default function TaskPage() {
         </div>
       )}
 
-      {confirmPrune && (
+      {confirmClear && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-labelledby="prune-history-title">
           <div className="w-full max-w-sm rounded-lg border border-border bg-panel p-4 shadow-xl">
-            <h3 id="prune-history-title" className="text-sm font-bold">清理历史任务</h3>
+            <h3 id="prune-history-title" className="text-sm font-bold">清理已结束任务</h3>
             <p className="mt-2 text-sm text-muted">
-              只会删除 30 天前的已完成、失败或已取消任务，并保留最近 2000 条记录。正在执行、等待中的任务，以及仍被子任务引用的父任务不会被删除。
+              将删除当前账号下所有已完成、失败和已取消的任务记录。正在执行、等待处理、等待重试或取消中的任务不会受影响；仍有活动子任务的父任务会保留。此操作不可撤销。
             </p>
             <div className="mt-4 flex justify-end gap-2">
-              <Button type="button" variant="ghost" className="h-10 px-3" disabled={pending === "prune-history"} onClick={() => setConfirmPrune(false)}>
+              <Button type="button" variant="ghost" className="h-10 px-3" disabled={pending === "clear-terminal"} onClick={() => setConfirmClear(false)}>
                 取消
               </Button>
               <Button
                 type="button"
                 variant="destructive"
                 className="h-10 px-3 font-semibold"
-                disabled={pending === "prune-history"}
-                onClick={startPrune}
+                disabled={pending === "clear-terminal"}
+                onClick={startClear}
               >
-                {pending === "prune-history" ? "正在清理…" : "确认清理历史任务"}
+                {pending === "clear-terminal" ? "正在清理…" : "确认清理已结束任务"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-task-title">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-panel p-4 shadow-xl">
+            <h3 id="delete-task-title" className="text-sm font-bold">删除任务记录</h3>
+            <p className="mt-2 break-words text-sm text-muted">
+              确定删除“{taskLabel(confirmDelete)}”{confirmDelete.resource_key ? `（${resourceLabel(confirmDelete.resource_key)}）` : ""}？执行输入、结果、错误和事件记录都会删除，无法恢复。
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" className="h-10 px-3" disabled={pending === `delete:${confirmDelete.id}`} onClick={() => setConfirmDelete(null)}>
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                className="h-10 px-3 font-semibold"
+                disabled={pending === `delete:${confirmDelete.id}`}
+                onClick={startDelete}
+              >
+                {pending === `delete:${confirmDelete.id}` ? "正在删除…" : "确认删除"}
               </Button>
             </div>
           </div>

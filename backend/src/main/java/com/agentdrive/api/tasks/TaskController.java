@@ -138,6 +138,23 @@ public final class TaskController {
     }
 
     /**
+     * 响应 {@code POST /api/v1/tasks/clear-terminal}，清理当前用户所有已结束任务。
+     *
+     * <p>这是用户主动清理入口，不使用自动维护的 30 天/2000 条保留策略。活动任务、
+     * 以及仍有活动后代的父任务由存储层保护；删除任务不会创建新的任务记录。</p>
+     *
+     * @param exchange 用于限定清理范围到当前任务 owner 的请求上下文。
+     * @return 实际删除的任务和子任务记录数量。
+     */
+    @PostMapping("/clear-terminal")
+    public Mono<Map<String, Object>> clearTerminal(ServerWebExchange exchange) {
+        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
+            int removed = tasks.clearTerminal(principal.userId());
+            return Map.of("removed", removed, "jobs", removed, "events", 0, "workers", 0);
+        }));
+    }
+
+    /**
      * 响应 {@code POST /api/v1/tasks/rebuild-index}，只入队全量或前缀索引重建任务。
      *
      * @param request 可选的文件前缀和 force 标志；请求体缺失时使用根路径且不强制重建。
@@ -320,6 +337,29 @@ public final class TaskController {
             Map<String, Object> task = tasks.retry(principal.userId(), taskId);
             if (task == null) throw new ResponseStatusException(CONFLICT, "只有失败或已取消的任务可以重试");
             return Map.of("task", task);
+        }));
+    }
+
+    /**
+     * 响应 {@code DELETE /api/v1/tasks/{taskId} }，删除一条已结束任务或任务组。
+     *
+     * @param taskId 要删除的任务 UUID。
+     * @param exchange 用于限定变更到当前用户的请求上下文。
+     * @return 删除数量；父任务若有活动后代则不会删除任何记录。
+     * @throws ResponseStatusException 任务不存在时返回 404，任务未结束或仍有活动后代时返回 409。
+     */
+    @DeleteMapping("/{taskId}")
+    public Mono<Map<String, Object>> delete(@PathVariable UUID taskId, ServerWebExchange exchange) {
+        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
+            TaskStore.DeleteResult result = tasks.delete(principal.userId(), taskId);
+            if (result == null) throw new ResponseStatusException(NOT_FOUND, "任务不存在");
+            if (!result.deleted()) {
+                String detail = "active_children".equals(result.reason())
+                        ? "该任务仍有进行中的子任务，完成后才能删除"
+                        : "只有已结束的任务可以删除";
+                throw new ResponseStatusException(CONFLICT, detail);
+            }
+            return Map.of("task_id", taskId.toString(), "removed", result.removed(), "jobs", result.removed());
         }));
     }
 

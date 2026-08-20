@@ -167,6 +167,52 @@ class TaskControllerContractTest {
     }
 
     @Test
+    void clearsAllTerminalTasksWithoutUsingAutomaticRetentionPolicy() {
+        UUID owner = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.clearTerminalRemoved = 4;
+
+        client(owner, tasks).post().uri("/api/v1/tasks/clear-terminal")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.removed").isEqualTo(4)
+                .jsonPath("$.jobs").isEqualTo(4);
+
+        assertThat(tasks.clearTerminalOwner).isEqualTo(owner);
+    }
+
+    @Test
+    void deletesOneTerminalTaskAndReturnsRemovedGroupCount() {
+        UUID owner = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.deleteResult = new TaskStore.DeleteResult(true, 3, "deleted");
+
+        client(owner, tasks).delete().uri("/api/v1/tasks/{taskId}", taskId)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.task_id").isEqualTo(taskId.toString())
+                .jsonPath("$.removed").isEqualTo(3)
+                .jsonPath("$.jobs").isEqualTo(3);
+
+        assertThat(tasks.deleteOwner).isEqualTo(owner);
+        assertThat(tasks.deleteTaskId).isEqualTo(taskId);
+    }
+
+    @Test
+    void rejectsDeletingTaskWithActiveChildren() {
+        UUID owner = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.deleteResult = new TaskStore.DeleteResult(false, 0, "active_children");
+
+        client(owner, tasks).delete().uri("/api/v1/tasks/{taskId}", UUID.randomUUID())
+                .exchange()
+                .expectStatus().isEqualTo(409);
+    }
+
+    @Test
     void returnsNotFoundAndDoesNotReadChildrenForUnknownTask() {
         UUID owner = UUID.randomUUID();
         StubTasks tasks = new StubTasks();
@@ -205,6 +251,11 @@ class TaskControllerContractTest {
         private int pruneDays;
         private int pruneKeep;
         private Map<String, Object> pruneResult = Map.of("jobs", 0, "events", 0, "workers", 0);
+        private UUID clearTerminalOwner;
+        private int clearTerminalRemoved;
+        private UUID deleteOwner;
+        private UUID deleteTaskId;
+        private TaskStore.DeleteResult deleteResult;
 
         @Override
         public List<Map<String, Object>> list(UUID userId, List<String> statuses, String type,
@@ -256,6 +307,19 @@ class TaskControllerContractTest {
             this.pruneDays = olderThanDays;
             this.pruneKeep = keepRecent;
             return pruneResult;
+        }
+
+        @Override
+        public int clearTerminal(UUID userId) {
+            this.clearTerminalOwner = userId;
+            return clearTerminalRemoved;
+        }
+
+        @Override
+        public TaskStore.DeleteResult delete(UUID userId, UUID taskId) {
+            this.deleteOwner = userId;
+            this.deleteTaskId = taskId;
+            return deleteResult;
         }
 
         @Override

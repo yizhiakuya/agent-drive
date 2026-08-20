@@ -6,7 +6,8 @@ const listTasks = vi.fn();
 const getTaskDetail = vi.fn();
 const cancelTask = vi.fn();
 const retryTask = vi.fn();
-const pruneTaskHistory = vi.fn();
+const clearTerminalTasks = vi.fn();
+const deleteTask = vi.fn();
 const rebuildIndex = vi.fn();
 
 vi.mock("@capacitor/core", () => ({
@@ -18,7 +19,8 @@ vi.mock("@/lib/api/tasks", () => ({
   getTaskDetail: (...args: unknown[]) => getTaskDetail(...args),
   cancelTask: (...args: unknown[]) => cancelTask(...args),
   retryTask: (...args: unknown[]) => retryTask(...args),
-  pruneTaskHistory: (...args: unknown[]) => pruneTaskHistory(...args),
+  clearTerminalTasks: (...args: unknown[]) => clearTerminalTasks(...args),
+  deleteTask: (...args: unknown[]) => deleteTask(...args),
   rebuildIndex: (...args: unknown[]) => rebuildIndex(...args),
   taskEventsUrl: () => "/api/v1/tasks/events",
 }));
@@ -76,7 +78,8 @@ describe("TaskPage", () => {
     listTasks.mockResolvedValue(response);
     getTaskDetail.mockResolvedValue({ task: response.items[0], children: [] });
     cancelTask.mockResolvedValue({ task: { ...response.items[0], status: "cancelling" } });
-    pruneTaskHistory.mockResolvedValue({ removed: 3, jobs: 3, events: 0, workers: 0, older_than_days: 30, keep_recent: 2000 });
+    clearTerminalTasks.mockResolvedValue({ removed: 3, jobs: 3, events: 0, workers: 0 });
+    deleteTask.mockResolvedValue({ task_id: "task-1", removed: 1, jobs: 1 });
     rebuildIndex.mockResolvedValue({ queued: true, task: response.items[0] });
   });
 
@@ -84,6 +87,7 @@ describe("TaskPage", () => {
     render(<TaskPage />);
     await act(async () => {});
     expect(screen.getByText("重建搜索索引")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除任务" })).not.toBeInTheDocument();
     expect(screen.getByText("已处理 2/10")).toBeInTheDocument();
     expect(screen.getByText(/20%/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("取消任务"));
@@ -202,18 +206,41 @@ describe("TaskPage", () => {
     expect(rebuildIndex).toHaveBeenCalledWith(true);
   });
 
-  it("确认后清理历史任务并反馈清理数量", async () => {
+  it("确认后清理全部已结束任务并反馈清理数量", async () => {
     render(<TaskPage />);
     await act(async () => {});
 
-    fireEvent.click(screen.getByRole("button", { name: "清理历史任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "清理已结束任务" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(pruneTaskHistory).not.toHaveBeenCalled();
+    expect(clearTerminalTasks).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "确认清理历史任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认清理已结束任务" }));
     await act(async () => {});
 
-    expect(pruneTaskHistory).toHaveBeenCalledTimes(1);
+    expect(clearTerminalTasks).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("终态任务提供单条删除操作并二次确认", async () => {
+    const completedTask = {
+      ...response.items[0],
+      status: "succeeded" as const,
+      finished_at: 1_750_000_010,
+      progress: { current: 10, total: 10, message: "索引完成" },
+    };
+    listTasks.mockResolvedValue({ ...response, items: [completedTask], overview: { ...response.overview, counts: { succeeded: 1 } } });
+    getTaskDetail.mockResolvedValue({ task: completedTask, children: [] });
+    render(<TaskPage />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "删除任务" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(deleteTask).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await act(async () => {});
+
+    expect(deleteTask).toHaveBeenCalledWith("task-1");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -227,7 +254,7 @@ describe("TaskPage", () => {
     };
 
     render(<TaskPage />);
-    fireEvent.click(screen.getByRole("tab", { name: "异常" }));
+    fireEvent.click(screen.getByRole("tab", { name: "需关注" }));
 
     filtered.resolve(filteredResponse);
     await act(async () => { await filtered.promise; });

@@ -90,4 +90,92 @@ class MybatisTaskStoreIntegrationTest {
             jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
         }
     }
+
+    @Test
+    void clearsAllTerminalTasksButKeepsActiveTasksAndProtectedParents() {
+        String userId = UUID.randomUUID().toString();
+        try {
+            jdbc.update("INSERT INTO users(id, username, password_hash) VALUES (?::uuid, ?, ?)",
+                    userId, "task-clear-" + userId, "test-hash");
+            UUID owner = UUID.fromString(userId);
+
+            TaskStore.EnqueueResult terminalParent = tasks.enqueue(
+                    owner, "index.rebuild", "index", Map.of(), null, "test", null);
+            UUID terminalParentId = UUID.fromString(String.valueOf(terminalParent.task().get("id")));
+            TaskStore.EnqueueResult terminalChild = tasks.enqueue(
+                    owner, "index.file", "index", Map.of("path", "done.txt"), null, "test", terminalParentId);
+
+            TaskStore.EnqueueResult activeRoot = tasks.enqueue(
+                    owner, "index.rebuild", "index", Map.of(), null, "test", null);
+            UUID activeRootId = UUID.fromString(String.valueOf(activeRoot.task().get("id")));
+
+            TaskStore.EnqueueResult protectedParent = tasks.enqueue(
+                    owner, "index.rebuild", "index", Map.of(), null, "test", null);
+            UUID protectedParentId = UUID.fromString(String.valueOf(protectedParent.task().get("id")));
+            TaskStore.EnqueueResult activeChild = tasks.enqueue(
+                    owner, "index.file", "index", Map.of("path", "active.txt"), null, "test", protectedParentId);
+            UUID activeChildId = UUID.fromString(String.valueOf(activeChild.task().get("id")));
+
+            jdbc.update("UPDATE tasks SET status = 'succeeded', finished_at = now(), updated_at = now() WHERE id IN (?::uuid, ?::uuid)",
+                    terminalParentId, terminalChild.task().get("id"));
+            jdbc.update("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = ?::uuid", activeRootId);
+            jdbc.update("UPDATE tasks SET status = 'succeeded', finished_at = now(), updated_at = now() WHERE id = ?::uuid",
+                    protectedParentId);
+            jdbc.update("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = ?::uuid", activeChildId);
+
+            int removed = tasks.clearTerminal(owner);
+
+            assertThat(removed).isEqualTo(2);
+            assertThat(tasks.get(owner, terminalParentId)).isNull();
+            assertThat(tasks.get(owner, UUID.fromString(String.valueOf(terminalChild.task().get("id"))))).isNull();
+            assertThat(tasks.get(owner, activeRootId)).isNotNull();
+            assertThat(tasks.get(owner, protectedParentId)).isNotNull();
+            assertThat(tasks.get(owner, activeChildId)).isNotNull();
+        } finally {
+            jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
+        }
+    }
+
+    @Test
+    void deletesTerminalTaskGroupAndRejectsParentWithActiveChild() {
+        String userId = UUID.randomUUID().toString();
+        try {
+            jdbc.update("INSERT INTO users(id, username, password_hash) VALUES (?::uuid, ?, ?)",
+                    userId, "task-delete-" + userId, "test-hash");
+            UUID owner = UUID.fromString(userId);
+
+            TaskStore.EnqueueResult parent = tasks.enqueue(
+                    owner, "index.rebuild", "index", Map.of(), null, "test", null);
+            UUID parentId = UUID.fromString(String.valueOf(parent.task().get("id")));
+            TaskStore.EnqueueResult child = tasks.enqueue(
+                    owner, "index.file", "index", Map.of(), null, "test", parentId);
+            UUID childId = UUID.fromString(String.valueOf(child.task().get("id")));
+            jdbc.update("UPDATE tasks SET status = 'succeeded', finished_at = now(), updated_at = now() WHERE id IN (?::uuid, ?::uuid)",
+                    parentId, childId);
+
+            TaskStore.DeleteResult deleted = tasks.delete(owner, parentId);
+            assertThat(deleted.deleted()).isTrue();
+            assertThat(deleted.removed()).isEqualTo(2);
+            assertThat(tasks.get(owner, parentId)).isNull();
+            assertThat(tasks.get(owner, childId)).isNull();
+
+            TaskStore.EnqueueResult protectedParent = tasks.enqueue(
+                    owner, "index.rebuild", "index", Map.of(), null, "test", null);
+            UUID protectedParentId = UUID.fromString(String.valueOf(protectedParent.task().get("id")));
+            TaskStore.EnqueueResult activeChild = tasks.enqueue(
+                    owner, "index.file", "index", Map.of(), null, "test", protectedParentId);
+            UUID activeChildId = UUID.fromString(String.valueOf(activeChild.task().get("id")));
+            jdbc.update("UPDATE tasks SET status = 'succeeded', finished_at = now(), updated_at = now() WHERE id = ?::uuid",
+                    protectedParentId);
+            jdbc.update("UPDATE tasks SET status = 'running', updated_at = now() WHERE id = ?::uuid", activeChildId);
+
+            TaskStore.DeleteResult rejected = tasks.delete(owner, protectedParentId);
+            assertThat(rejected.deleted()).isFalse();
+            assertThat(rejected.reason()).isEqualTo("active_children");
+            assertThat(tasks.get(owner, protectedParentId)).isNotNull();
+            assertThat(tasks.get(owner, activeChildId)).isNotNull();
+        } finally {
+            jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
+        }
+    }
 }

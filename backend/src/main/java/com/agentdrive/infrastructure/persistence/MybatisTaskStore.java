@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,7 @@ import java.time.temporal.ChronoUnit;
  */
 public class MybatisTaskStore implements TaskStore {
     private static final long INDEX_STATS_CACHE_NANOS = TimeUnit.SECONDS.toNanos(15);
+    private static final Set<String> TERMINAL_STATUSES = Set.of("succeeded", "failed", "cancelled");
     private final TaskMapper mapper;
     private final ObjectMapper objectMapper;
     private final IndexStore index;
@@ -249,6 +251,44 @@ public class MybatisTaskStore implements TaskStore {
         int jobs = mapper.pruneHistory(userId.toString(), cutoff, recent);
         return Map.of("jobs", jobs, "events", 0, "workers", 0,
                 "older_than_days", days, "keep_recent", recent);
+    }
+
+    /**
+     * 删除 owner 全部可安全回收的终态任务；有活动后代的任务树由 SQL 一次性保护。
+     * @param userId 任务归属 owner 的 UUID。
+     * @return 删除的任务和子任务记录数量。
+     */
+    @Override
+    @Transactional
+    public int clearTerminal(UUID userId) {
+        requireUser(userId);
+        return mapper.clearTerminal(userId.toString());
+    }
+
+    /**
+     * 删除一条终态任务；终态父任务会连同终态子任务一起删除，活动后代存在时拒绝删除。
+     * @param userId 任务归属 owner 的 UUID。
+     * @param taskId 要删除的任务 UUID。
+     * @return 删除结果；任务不存在时为 {@code null}。
+     */
+    @Override
+    @Transactional
+    public DeleteResult delete(UUID userId, UUID taskId) {
+        requireUser(userId);
+        Map<String, Object> before = mapper.selectTask(userId.toString(), taskId.toString());
+        if (before == null) return null;
+        String status = String.valueOf(before.get("status"));
+        if (!TERMINAL_STATUSES.contains(status)) {
+            return new DeleteResult(false, 0, "not_terminal");
+        }
+        int removed = mapper.deleteTask(userId.toString(), taskId.toString());
+        if (removed > 0) return new DeleteResult(true, removed, "deleted");
+
+        // 并发清理可能已经删除了这条记录；把重复请求视为幂等成功。
+        if (mapper.selectTask(userId.toString(), taskId.toString()) == null) {
+            return new DeleteResult(true, 0, "already_deleted");
+        }
+        return new DeleteResult(false, 0, "active_children");
     }
 
     /**
