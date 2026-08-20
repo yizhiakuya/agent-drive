@@ -55,7 +55,9 @@ describe("ChatPanel 主流程", () => {
     await act(async () => {});
 
     const composer = screen.getByTestId("chat-composer");
+    const inputBar = screen.getByTestId("chat-input-bar");
     const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    expect(inputBar).not.toHaveClass("border-t", "border-border");
     expect(composer).toHaveClass("transition-[border-color,box-shadow]", "focus-within:ring-2", "focus-within:ring-accent/10");
     expect(textarea).toHaveClass("py-0.5");
     expect(textarea).toHaveAttribute("rows", "1");

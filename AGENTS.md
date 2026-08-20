@@ -128,7 +128,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **chat 流式节流**：ChatPanel 每 80ms 批量刷一帧（streamTimerRef），流结束冲刷最后一帧；勿改回逐 token setState
 - **模型正文 DSML/XML 边界**：正文中模拟工具调用格式不会进入 Java 的工具执行分支；只有 Provider 原生 tool call 才能生成工具步骤。前端按普通文本渲染正文，不要把旧后端的正文清洗实现重新当作当前契约。
 - **前端复用单元**：全站 UI 规范见 `docs/frontend-design.md`（控件清单/排版/反馈/反模式清单）；新控件一律用 `components/ui/`（shadcn，radix 底座），**禁止内联自造复刻**——一个值只允许一个控件（选择+手输并存用 Combobox，禁止 select+input 并列）。业务复用单元：文件预览 `FilePreview`、时间格式化 `fmtTime`、原生重扫 `useRescan`、协议/预设枚举 `lib/llm-options.ts`（新增协议需同步 backend `ProviderType`）、聊天流式发送 `useChatStream`（请求编排在 hook，事件契约/消息状态/80ms 帧分别复用 `chat-stream-events`、`chat-stream-state`、`chat-stream-frame`，ChatPanel 勿内联重建）；会话列表每条记录必须显示完整会话 ID，长 ID 允许换行
-- **聊天输入区**：ChatPanel 输入区保持紧凑，聚焦反馈只能使用不占布局空间的主题边框/外环；调整间距或尺寸时必须保持自动增高、Enter 发送、Shift+Enter 换行、停止流和思考等级选择行为不变
+- **聊天输入区**：ChatPanel 输入区保持紧凑，外层不得绘制横跨页面的 `border-t` 或边框，只保留居中的 composer 容器边界；聚焦反馈只能使用不占布局空间的主题边框/外环；调整间距或尺寸时必须保持自动增高、Enter 发送、Shift+Enter 换行、停止流和思考等级选择行为不变
 - **文件页请求生命周期**：`FilePage` 的列表、选中文件详情、完整文本和索引刷新都必须使用请求代次/当前路径校验；迟到响应不得覆盖新目录、新选中项或卸载后的状态。目录/文件切换要使旧内容与索引请求失效，文件变更事件负责统一刷新，勿在同一 mutation 后再手动重复 `load`
 - **移动端预览面板**：FilePage 预览/回收站移动端为全屏覆盖层（`fixed inset-0 z-40 lg:static`），勿改回 `hidden lg:flex`
 - **移动端文件工具栏**：`<640px` 保持 3×2、44px 高触控网格；`<360px` 顶栏只视觉隐藏 Agent Drive 文字（保留无障碍文本），320/407px 必须无横向滚动

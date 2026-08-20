@@ -350,7 +350,7 @@ export default function ChatPanel() {
       {plan.length > 0 && <div className="px-4 pb-2 sm:px-6"><div className="mx-auto max-w-4xl"><PlanCard plan={plan} /></div></div>}
       {contextUsage && <ContextBar usage={contextUsage} />}
 
-      <div className="input-bar-safe shrink-0 border-t border-border bg-panel px-4 py-2 sm:px-6 sm:py-2">
+      <div data-testid="chat-input-bar" className="input-bar-safe shrink-0 bg-panel px-4 py-2 sm:px-6 sm:py-2">
         <div className="mx-auto max-w-4xl">
            <div
              data-testid="chat-composer"
