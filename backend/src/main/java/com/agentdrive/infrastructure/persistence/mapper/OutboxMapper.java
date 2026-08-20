@@ -38,7 +38,7 @@ public interface OutboxMapper {
     /**
      * 查询指定 owner 尚未发布的 outbox 事件。
      *
-     * <p>SQL 过滤该 owner 且 {@code published_at IS NULL} 的事件，按事件 ID 升序返回，时间字段
+     * <p>SQL 过滤该 owner 且尚未发布、未进入死信的事件，按事件 ID 升序返回，时间字段
      * 以 Unix epoch 秒数提供，并受 {@code limit} 限制。
      *
      * @param userId 事件所属 owner 的 UUID 字符串
@@ -50,7 +50,7 @@ public interface OutboxMapper {
     /**
      * 查询所有 owner 尚未发布的 outbox 事件。
      *
-     * <p>SQL 不带 owner 条件，仅过滤 {@code published_at IS NULL}，按事件 ID 升序返回并受
+     * <p>SQL 不带 owner 条件，仅过滤尚未发布、未进入死信的事件，按事件 ID 升序返回并受
      * {@code limit} 限制；返回映射包含事件所属的 {@code user_id}。
      *
      * @param limit 本次最多返回的事件数
@@ -61,7 +61,7 @@ public interface OutboxMapper {
     /**
      * 将 owner 指定的未发布 outbox 事件标记为已发布。
      *
-     * <p>SQL 只更新 owner、事件 ID 匹配且 {@code published_at IS NULL} 的记录，将发布时间设为
+     * <p>SQL 只更新 owner、事件 ID 匹配且尚未发布、未进入死信的记录，将发布时间设为
      * 当前时间；已发布事件不会被重复改写。
      *
      * @param userId 事件所属 owner 的 UUID 字符串
@@ -69,4 +69,8 @@ public interface OutboxMapper {
      * @return 实际标记的事件数；事件不存在、owner 不匹配或已发布时为 {@code 0}
      */
     int markPublished(@Param("userId") String userId, @Param("eventId") long eventId);
+
+    /** 累加投递失败并按需把不可恢复事件移出待发布队列。 */
+    int recordFailure(@Param("eventId") long eventId, @Param("error") String error,
+                      @Param("deadLetter") boolean deadLetter);
 }

@@ -172,36 +172,43 @@ public class MybatisTaskStore implements TaskStore {
      * 请求取消 owner 的任务并追加 cancel_requested 事件。
      * @param userId 任务所属 owner 的 UUID。
      * @param taskId 要取消的任务 UUID。
-     * @return 更新后的任务快照；任务不存在时为 {@code null}。
+     * @return 任务快照、是否实际变化及稳定原因；重复取消不会重复写事件。
      */
     @Override
     @Transactional
-    public Map<String, Object> cancel(UUID userId, UUID taskId) {
+    public TransitionResult cancel(UUID userId, UUID taskId) {
         requireUser(userId);
-        Map<String, Object> before = mapper.selectTask(userId.toString(), taskId.toString());
-        if (before == null) return null;
-        mapper.cancelTask(userId.toString(), taskId.toString());
-        mapper.insertEvent(taskId.toString(), "cancel_requested", "{}");
-        return task(mapper.selectTask(userId.toString(), taskId.toString()));
+        int changed = mapper.cancelTask(userId.toString(), taskId.toString());
+        if (changed > 0) {
+            mapper.insertEvent(taskId.toString(), "cancel_requested", "{}");
+            return new TransitionResult(
+                    task(mapper.selectTask(userId.toString(), taskId.toString())), true, "cancel_requested");
+        }
+        Map<String, Object> current = task(mapper.selectTask(userId.toString(), taskId.toString()));
+        return current == null
+                ? new TransitionResult(null, false, "task_not_found")
+                : new TransitionResult(current, false, "task_not_active");
     }
 
     /**
      * 仅对 failed/cancelled 任务执行重试转换并追加 retried 事件。
      * @param userId 任务所属 owner 的 UUID。
      * @param taskId 要重试的任务 UUID。
-     * @return 重试后的任务快照；状态不允许重试或更新未命中时为 {@code null}。
+     * @return 任务快照、是否实际变化及稳定原因；不存在与不可重试明确区分。
      */
     @Override
     @Transactional
-    public Map<String, Object> retry(UUID userId, UUID taskId) {
+    public TransitionResult retry(UUID userId, UUID taskId) {
         requireUser(userId);
-        Map<String, Object> before = mapper.selectTask(userId.toString(), taskId.toString());
-        if (before == null || !("failed".equals(before.get("status")) || "cancelled".equals(before.get("status")))) {
-            return null;
+        if (mapper.retryTask(userId.toString(), taskId.toString()) > 0) {
+            mapper.insertEvent(taskId.toString(), "retried", "{}");
+            return new TransitionResult(
+                    task(mapper.selectTask(userId.toString(), taskId.toString())), true, "retried");
         }
-        if (mapper.retryTask(userId.toString(), taskId.toString()) == 0) return null;
-        mapper.insertEvent(taskId.toString(), "retried", "{}");
-        return task(mapper.selectTask(userId.toString(), taskId.toString()));
+        Map<String, Object> current = task(mapper.selectTask(userId.toString(), taskId.toString()));
+        return current == null
+                ? new TransitionResult(null, false, "task_not_found")
+                : new TransitionResult(current, false, "task_not_retryable");
     }
 
     /**

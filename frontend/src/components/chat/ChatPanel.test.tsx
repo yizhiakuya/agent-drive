@@ -247,6 +247,37 @@ describe("ChatPanel 主流程", () => {
     });
   });
 
+  it("部分正文后流失败时保留正文且错误不被迟到帧覆盖", async () => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("text", { text: "已经生成的部分正文" });
+      return Promise.reject(new Error("连接中断"));
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("测试部分失败");
+
+    await waitFor(() => expect(screen.getByText("已经生成的部分正文")).toBeInTheDocument());
+    expect(screen.getByText("出错了：连接中断")).toBeInTheDocument();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+    expect(screen.getByText("已经生成的部分正文")).toBeInTheDocument();
+    expect(screen.getByText("出错了：连接中断")).toBeInTheDocument();
+  });
+
+  it("工具步骤后流失败时保留工具轨迹并追加错误", async () => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
+      onEvent("tool_start", { tool: "list_files", arguments: {} });
+      onEvent("tool_trace", { tool: "list_files", output: "[]", parsed: [] });
+      return Promise.reject(new Error("工具后连接中断"));
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("测试工具后失败");
+
+    await waitFor(() => expect(screen.getByText("list_files")).toBeInTheDocument());
+    expect(screen.getByText(/完成/)).toBeInTheDocument();
+    expect(screen.getByText("出错了：工具后连接中断")).toBeInTheDocument();
+  });
+
   it("停止按钮中止流（AbortController）", async () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
     chatStream.mockImplementation((_msg, _h, _s, _c, _onEvent: unknown, signal: AbortSignal) => {

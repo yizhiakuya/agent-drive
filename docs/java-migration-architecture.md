@@ -11,7 +11,7 @@ Agent Drive 的唯一后端是 Java 21 Maven 工程：
 | Web | Spring Boot 3.5.x + WebFlux |
 | 模块边界 | Spring Modulith 1.4.x，模块化单体，不拆网络微服务 |
 | Agent | LangChain4j 1.19.x，原生 structured tool calling |
-| 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V10 |
+| 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V11 |
 | 文件 | Java NIO owner-scoped 本地文件系统 |
 | 抽取 | Apache Tika + Tesseract/Tess4J |
 | 构建 | Maven；API 与 Worker 共用 artifact |
@@ -76,9 +76,9 @@ PostgreSQL 的结构化状态包括认证、会话、设备、文件 metadata/re
 - `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。非 red 调用按 session/tool/arguments 持久 replay，red 操作使用签名确认和一次性 nonce。
 - `/api/v1/tasks/embed-index`、`vision-index` 只校验 owner 内相对路径并入队任务；抽取、embedding、vision 都由 Worker 异步完成。
 - 文件语义搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，结果按文件去重并返回最佳片段。
-- 文件内容变更先失效旧全文/向量，再经 outbox 入队 `index.file`；图片描述写入前校验 source revision。单文件抽取失败标记 skipped，不阻断 rebuild。
+- 文件内容变更先失效旧全文/向量，再经 outbox 入队 `index.file`；坏 outbox 事件进入持久死信，瞬时入队错误保留重试。图片描述写入前校验 source revision；视觉全失败不触发全盘 embedding，显式向量/视觉 provider 失败进入任务 fail/retry。强制向量重算逐批覆盖，不预先删除旧向量。单文件抽取失败标记 skipped，不阻断 rebuild。
 
-任务使用 PostgreSQL 状态机、`FOR UPDATE SKIP LOCKED`、lease/heartbeat、partial unique dedupe 和尾部 SSE event cursor。Worker 每 2 秒更新 `task_workers`，API 以最近 10 秒心跳判断在线；生产 API 不执行内嵌 Worker。
+任务使用 PostgreSQL 状态机、`FOR UPDATE SKIP LOCKED`、lease/heartbeat、partial unique dedupe 和尾部 SSE event cursor。schedule 表达式在写入和派发前校验，任务类型和 lane 在写入时裁剪，空白 lane 统一为 `default`，遗留非法计划自动禁用；Worker 的 schedule/outbox/task 阶段互相隔离。Worker 每 2 秒更新 `task_workers`，API 以最近 10 秒心跳判断在线；生产 API 不执行内嵌 Worker。
 
 ## 6. 已完成的迁移与切换
 

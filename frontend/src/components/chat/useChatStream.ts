@@ -136,11 +136,14 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       }, 50);
     } catch (e) {
       if ((e as Error).name === "AbortError" || generation !== streamGenerationRef.current) return;
-      setMessages((m) => {
-        const copy = [...m];
-        copy[copy.length - 1] = { type: "assistant", content: `出错了：${(e as Error).message}` };
-        return copy;
-      });
+      // 先把待提交的正文/reasoning 同步落地并取消定时帧，再追加错误；否则迟到的
+      // 80ms commit 会覆盖错误，直接替换末项也会吞掉已经完成的工具步骤。
+      frame.flush();
+      frame.cancel();
+      setMessages((m) => [
+        ...removeEmptyAssistantMessages(m),
+        { type: "assistant", content: `出错了：${(e as Error).message}` },
+      ]);
     } finally {
       if (frameRef.current === frame) frameRef.current = null;
       if (generation === streamGenerationRef.current) applyBusy(false);

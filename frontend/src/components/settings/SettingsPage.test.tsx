@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EV } from "@/lib/events";
 import SettingsPage from "./SettingsPage";
@@ -12,14 +12,17 @@ const mocks = vi.hoisted(() => ({
   clearDeviceToken: vi.fn(),
   listModels: vi.fn(),
   listVisionModels: vi.fn(),
+  configureLLM: vi.fn(),
+  saveEmbeddings: vi.fn(),
+  saveVision: vi.fn(),
 }));
 
 vi.mock("@/lib/api/config", () => ({
   getConfig: mocks.getConfig,
   getVisionConfig: mocks.getVisionConfig,
-  saveEmbeddings: vi.fn(),
-  saveVision: vi.fn(),
-  configureLLM: vi.fn(),
+  saveEmbeddings: mocks.saveEmbeddings,
+  saveVision: mocks.saveVision,
+  configureLLM: mocks.configureLLM,
   listModels: mocks.listModels,
   listVisionModels: mocks.listVisionModels,
 }));
@@ -89,6 +92,9 @@ describe("SettingsPage", () => {
     mocks.getVisionConfig.mockResolvedValue(visionConfig());
     mocks.listModels.mockResolvedValue({ ok: true, models: ["new-model"] });
     mocks.listVisionModels.mockResolvedValue({ ok: true, models: ["new-vision-model"] });
+    mocks.configureLLM.mockResolvedValue({ ok: true });
+    mocks.saveEmbeddings.mockResolvedValue({ ok: true, test: { ok: true, dimensions: 1024 } });
+    mocks.saveVision.mockResolvedValue({ ok: true });
   });
 
   it("忽略过期的配置加载响应", async () => {
@@ -151,5 +157,109 @@ describe("SettingsPage", () => {
     await act(async () => { await pending.promise; });
 
     expect(screen.queryByText("old-vision-model")).not.toBeInTheDocument();
+  });
+
+  it("配置边界变化时清空对应的明文密钥", async () => {
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("https://example.com/v1")).toBeInTheDocument());
+
+    const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
+    const embeddings = within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!);
+    const vision = within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!);
+    const llmKey = llm.getByLabelText(/API Key/);
+    fireEvent.change(llmKey, { target: { value: "sk-llm-draft" } });
+    expect(llmKey).toHaveValue("sk-llm-draft");
+    fireEvent.change(llm.getByLabelText("接口地址"), {
+      target: { value: "https://new.example/v1" },
+    });
+    expect(llmKey).toHaveValue("");
+
+    fireEvent.change(llmKey, { target: { value: "sk-protocol-draft" } });
+    fireEvent.click(llm.getByRole("button", { name: /Anthropic/ }));
+    expect(llmKey).toHaveValue("");
+
+    const embeddingKey = embeddings.getByLabelText("API Key");
+    fireEvent.change(embeddingKey, { target: { value: "jina_draft" } });
+    fireEvent.change(embeddings.getByLabelText("模型"), {
+      target: { value: "jina-embeddings-v4" },
+    });
+    expect(embeddingKey).toHaveValue("");
+
+    const visionKey = vision.getByLabelText("API Key");
+    fireEvent.change(visionKey, { target: { value: "sk-vision-draft" } });
+    fireEvent.change(vision.getByLabelText("接口地址"), {
+      target: { value: "https://vision.example/v1" },
+    });
+    expect(visionKey).toHaveValue("");
+  });
+
+  it("重载无配置响应时也销毁所有明文密钥", async () => {
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("https://example.com/v1")).toBeInTheDocument());
+
+    const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
+    const embeddings = within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!);
+    const vision = within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!);
+    const llmKey = llm.getByLabelText(/API Key/);
+    const embeddingKey = embeddings.getByLabelText("API Key");
+    const visionKey = vision.getByLabelText("API Key");
+    fireEvent.change(llmKey, { target: { value: "sk-llm-draft" } });
+    fireEvent.change(embeddingKey, { target: { value: "jina_draft" } });
+    fireEvent.change(visionKey, { target: { value: "sk-vision-draft" } });
+
+    mocks.getConfig.mockResolvedValue({ configured: false, preferences: {} });
+    mocks.getVisionConfig.mockResolvedValue(visionConfig());
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(EV.refresh));
+    });
+
+    await waitFor(() => {
+      expect(llmKey).toHaveValue("");
+      expect(embeddingKey).toHaveValue("");
+      expect(visionKey).toHaveValue("");
+    });
+  });
+
+  it("保存成功后不在表单状态中保留明文密钥", async () => {
+    mocks.getVisionConfig.mockResolvedValue({
+      ...visionConfig(),
+      configured: true,
+      model: "vision-model",
+      api_key_masked: "sk-v-***",
+    });
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("vision-model")).toBeInTheDocument());
+
+    const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
+    const embeddings = within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!);
+    const vision = within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!);
+    const llmKey = llm.getByLabelText(/API Key/);
+    fireEvent.change(llmKey, { target: { value: "sk-llm-secret" } });
+    expect(llmKey).toHaveValue("sk-llm-secret");
+    fireEvent.click(llm.getByRole("button", { name: "保存并测试连接" }));
+    await waitFor(() => expect(mocks.configureLLM).toHaveBeenCalledWith(
+      expect.objectContaining({ api_key: "sk-llm-secret" }),
+    ));
+    await waitFor(() => expect(llmKey).toHaveValue(""));
+    await waitFor(() => expect(embeddings.getByRole("button", { name: "保存并测试" })).toBeEnabled());
+
+    const embeddingKey = embeddings.getByLabelText("API Key");
+    fireEvent.change(embeddingKey, { target: { value: "jina_secret" } });
+    expect(embeddingKey).toHaveValue("jina_secret");
+    fireEvent.click(embeddings.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(mocks.saveEmbeddings).toHaveBeenCalledWith(
+      expect.objectContaining({ api_key: "jina_secret" }),
+    ));
+    await waitFor(() => expect(embeddingKey).toHaveValue(""));
+    await waitFor(() => expect(vision.getByRole("button", { name: "保存并测试" })).toBeEnabled());
+
+    const visionKey = vision.getByLabelText("API Key");
+    fireEvent.change(visionKey, { target: { value: "sk-vision-secret" } });
+    expect(visionKey).toHaveValue("sk-vision-secret");
+    fireEvent.click(vision.getByRole("button", { name: "保存并测试" }));
+    await waitFor(() => expect(mocks.saveVision).toHaveBeenCalledWith(
+      expect.objectContaining({ api_key: "sk-vision-secret" }),
+    ));
+    await waitFor(() => expect(visionKey).toHaveValue(""));
   });
 });

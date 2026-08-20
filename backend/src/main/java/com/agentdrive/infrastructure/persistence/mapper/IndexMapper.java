@@ -161,19 +161,9 @@ public interface IndexMapper {
     List<Map<String, Object>> selectChunks(@Param("userId") String userId,
                                            @Param("fingerprint") String fingerprint,
                                            @Param("paths") List<String> paths,
+                                           @Param("includeCurrent") boolean includeCurrent,
+                                           @Param("afterChunkId") String afterChunkId,
                                            @Param("limit") int limit);
-
-    /**
-     * 清空 owner 当前文件 revision 下指定文件的向量及向量指纹。
-     *
-     * <p>只更新文档和分块 revision 均与当前文件 revision 一致的分块；{@code paths} 非空时仅
-     * 更新这些路径，空集合或 {@code null} 表示 owner 下全部路径。
-     *
-     * @param userId 文件所属 owner 的 UUID 字符串
-     * @param paths 可选的文件路径集合；为空或 {@code null} 时不限制路径
-     * @return 实际清空向量的分块数；没有匹配分块时为 {@code 0}
-     */
-    int clearEmbeddings(@Param("userId") String userId, @Param("paths") List<String> paths);
 
     /**
      * 为 owner 当前 revision 下的指定文本分块写入向量及模型指纹。

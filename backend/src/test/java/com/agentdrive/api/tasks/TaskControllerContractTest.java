@@ -225,6 +225,40 @@ class TaskControllerContractTest {
         assertThat(tasks.childrenParent).isNull();
     }
 
+    @Test
+    void distinguishesMissingAndNonRetryableTasks() {
+        UUID owner = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        StubTasks missing = new StubTasks();
+
+        client(owner, missing).post().uri("/api/v1/tasks/{taskId}/retry", taskId)
+                .exchange()
+                .expectStatus().isNotFound();
+
+        StubTasks queued = new StubTasks();
+        queued.retryResult = new TaskStore.TransitionResult(
+                Map.of("id", taskId.toString(), "status", "queued"), false, "task_not_retryable");
+        client(owner, queued).post().uri("/api/v1/tasks/{taskId}/retry", taskId)
+                .exchange()
+                .expectStatus().isEqualTo(409);
+    }
+
+    @Test
+    void treatsRepeatedCancelAsAnIdempotentSuccess() {
+        UUID owner = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+        tasks.cancelResult = new TaskStore.TransitionResult(
+                Map.of("id", taskId.toString(), "status", "cancelled"), false, "task_not_active");
+
+        client(owner, tasks).post().uri("/api/v1/tasks/{taskId}/cancel", taskId)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.task.status").isEqualTo("cancelled")
+                .jsonPath("$.changed").isEqualTo(false);
+    }
+
     private WebTestClient client(UUID owner, StubTasks tasks) {
         CredentialAuthenticator authenticator = credential ->
                 "session-token".equals(credential)
@@ -256,6 +290,10 @@ class TaskControllerContractTest {
         private UUID deleteOwner;
         private UUID deleteTaskId;
         private TaskStore.DeleteResult deleteResult;
+        private TaskStore.TransitionResult cancelResult =
+                new TaskStore.TransitionResult(null, false, "task_not_found");
+        private TaskStore.TransitionResult retryResult =
+                new TaskStore.TransitionResult(null, false, "task_not_found");
 
         @Override
         public List<Map<String, Object>> list(UUID userId, List<String> statuses, String type,
@@ -292,13 +330,13 @@ class TaskControllerContractTest {
         }
 
         @Override
-        public Map<String, Object> cancel(UUID userId, UUID taskId) {
-            return null;
+        public TransitionResult cancel(UUID userId, UUID taskId) {
+            return cancelResult;
         }
 
         @Override
-        public Map<String, Object> retry(UUID userId, UUID taskId) {
-            return null;
+        public TransitionResult retry(UUID userId, UUID taskId) {
+            return retryResult;
         }
 
         @Override

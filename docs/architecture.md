@@ -53,7 +53,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 - 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
-- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件；`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
+- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件；前端收到传输异常时先冲刷并取消当前 80ms 帧，再保留已生成正文/工具轨迹并追加错误提示。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
 - 模型只看到稳定的 `backend_api`、`frontend_api` 及 plan/skills 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
 - 非 red 工具按 `session_id + tool + arguments` 使用持久 replay；red 写操作使用签名确认和一次性 nonce。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
 - provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。`model` 只覆盖当前请求，动态 resolver 始终从 owner 已保存配置取得 Provider 地址和 API key。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
@@ -64,15 +64,17 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 文件列表的 name 搜索最多保留 1000 个 top-k 候选，并只批量同步缺失或变化的 metadata。semantic 搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，按文件去重并返回最佳 `search_score/search_snippet`。
 
-写入、移动、复制或删除先使旧全文/向量失效，再由 outbox 入队 `index.file`。Worker 负责 Tika/Tesseract 抽取、chunk 和 embedding；单文件抽取失败标记为 skipped，不阻断全量 rebuild。`index.vision` 在写入图片描述前校验 source revision，避免旧结果覆盖新文件。
+写入、移动、复制或删除先使旧全文/向量失效，再由 outbox 入队 `index.file`。Worker 负责 Tika/Tesseract 抽取、chunk 和 embedding；单文件抽取失败标记为 skipped，不阻断全量 rebuild。显式 `index.embed/index.vision` 的 provider、持久化或中断失败进入任务 fail/retry，不能用 `vectorized=false` 伪报成功；全文任务只允许在 `embedding_not_configured` 时降级。视觉任务全部文件失败时不会调用 embedding，部分失败保留逐文件结果。`force` 通过 UUID 游标读取当前 chunk，provider 成功后逐条覆盖旧向量，不预先清空。`index.vision` 在写入图片描述前校验 source revision，避免旧结果覆盖新文件。
 
 ## 6. 任务与 Worker
 
 任务通过 PostgreSQL 状态机和租约运行：
 
 - `FOR UPDATE SKIP LOCKED` 领取 queued/retry_wait 任务；lease 和 heartbeat 防止 Worker 崩溃后永久卡住。
+- 用户触发的 cancel/retry 由 `TaskStore.TransitionResult` 统一表达任务快照、是否实际迁移和稳定原因。Mapper 先执行带状态条件的 UPDATE：不存在的 retry 返回 404，不可重试返回 409；重复取消保持幂等 200，不刷新终态时间戳，也不重复写 `cancel_requested` 事件。HTTP 与 `backend_api` 使用同一结果语义。
 - partial unique index 保证活跃 dedupe；Worker 按阶段/文件/embedding 批次节流写入 `progress_current`、`progress_total`、`progress_message`，进度更新与租约续期同一条原子 SQL 完成，并通过 `progress` 事件通知前端；相同进度不重复写事件。API 只统计顶层任务，子任务进度汇总到父任务。
-- `outbox_events` 可靠投递文件变更和索引任务；Worker 每 2 秒刷新 `task_workers`，API 以最近 10 秒心跳判断在线。
+- Worker 的 schedule、outbox、task 三个 tick 阶段分别隔离异常。schedule 写入先校验类型、表达式和时区，裁剪任务类型和 lane，并把空白 lane 规范为 `default`，然后计算首次运行时间；派发先计算下次运行再入队。历史非法计划写入 `last_error` 后禁用，不阻塞同批其他计划。
+- `outbox_events` 可靠投递文件变更和索引任务；不可恢复的坏类型、payload、action 或路径记录失败次数、最后错误和 `dead_lettered_at`，瞬时入队失败保留 pending 重试，只有入队成功才标记发布。Worker 每 2 秒刷新 `task_workers`，API 以最近 10 秒心跳判断在线。
 - 任务列表接口通过多取一条返回 `has_more`，前端任务页按此加载更多记录；任务事件从尾部订阅，不回放全库；终态历史保留最近记录并由维护任务清理过期数据。
 - 自动维护通过 owner-scoped 的 `POST /api/v1/tasks/prune-history` 按固定策略清理 30 天前的终态任务，至少保留最近 2000 条；它不代表用户手动清理的语义。
 - 任务页的 `POST /api/v1/tasks/clear-terminal` 清理当前 owner 全部可安全回收的完成、失败和已取消记录；`DELETE /api/v1/tasks/{taskId}` 删除单条终态任务，删除终态父任务时会一并删除已结束子任务。数据库递归保护活动任务及其祖先，父任务存在活动后代时返回冲突，避免留下执行中的孤立任务。

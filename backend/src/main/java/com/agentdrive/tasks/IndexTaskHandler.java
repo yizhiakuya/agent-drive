@@ -177,8 +177,8 @@ public class IndexTaskHandler {
                     progress.reportNow(0, 0, "全文索引完成（" + rebuilt.getOrDefault("processed_files", 0)
                             + " 个文件），开始向量化");
                     if (embeddings != null) {
-                        rebuilt.put("embedding", embeddings.embed(userId, List.of(), 64,
-                                booleanValue(payload, "force"), progress));
+                        rebuilt.put("embedding", requireEmbeddingSuccess(embeddings.embed(userId, List.of(), 64,
+                                booleanValue(payload, "force"), progress), true));
                     }
                     yield rebuilt;
                 }
@@ -200,9 +200,10 @@ public class IndexTaskHandler {
             progress.reportNow(1, 1, "任务执行完成");
             workers.succeed(workerId, taskId, result);
         } catch (Exception error) {
-            progress.reportNow(0, 0, "任务执行失败：" + (error.getMessage() == null
-                    ? error.getClass().getSimpleName() : error.getMessage()));
-            workers.fail(workerId, taskId, error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+            if (isInterrupted(error)) Thread.currentThread().interrupt();
+            String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            progress.reportNow(0, 0, "任务执行失败：" + message);
+            workers.fail(workerId, taskId, message);
         }
     }
 
@@ -239,7 +240,7 @@ public class IndexTaskHandler {
      *
      * @param userId 文件归属用户的 UUID。
      * @param path 要索引的用户相对文件路径。
-     * @param force 是否清除并重算该文件已有向量。
+     * @param force 是否包含并覆盖该文件已有向量。
      * @return 全文索引结果，可能带有向量化结果。
      */
     private Map<String, Object> indexFile(UUID userId, String path, boolean force,
@@ -248,7 +249,8 @@ public class IndexTaskHandler {
         Map<String, Object> result = new LinkedHashMap<>(indexing.indexFile(userId, path));
         if (embeddings != null && Boolean.TRUE.equals(result.get("indexed"))) {
             progress.reportNow(1, 2, "文件索引：文本已完成，正在生成向量");
-            result.put("embedding", embeddings.embed(userId, List.of(path), 64, force, progress));
+            result.put("embedding", requireEmbeddingSuccess(
+                    embeddings.embed(userId, List.of(path), 64, force, progress), true));
         } else {
             progress.reportNow(2, 2, "文件索引：已跳过 " + path);
         }
@@ -258,17 +260,17 @@ public class IndexTaskHandler {
 
     /**
      * 先逐个刷新文件全文索引，再对整个路径列表执行一次分批向量化。
-     * 单个文件抽取异常会被记录在该文件的结果中并继续处理；embedding provider 的失败仍由 embedding 结果统一报告。
+     * 单个文件抽取异常会被记录在该文件的结果中并继续处理；embedding provider 的失败会抛给任务状态机进入 fail/retry。
      *
      * @param userId 文件归属用户的 UUID。
      * @param paths 已规范化的用户相对文件路径列表。
-     * @param force 是否清除并重算这些文件已有向量。
+     * @param force 是否包含并覆盖这些文件已有向量。
      * @return 包含逐文件全文结果和整体 embedding 结果的 map。
      */
     private Map<String, Object> embedFiles(UUID userId, List<String> paths, boolean force,
                                             TaskProgressReporter progress) {
         if (embeddings == null) {
-            return Map.of("vectorized", false, "reason", "embedding_handler_unavailable");
+            throw new IllegalStateException("embedding_failed: embedding_handler_unavailable");
         }
         List<Map<String, Object>> indexed = new ArrayList<>();
         int total = paths.size();
@@ -279,6 +281,7 @@ public class IndexTaskHandler {
             try {
                 indexed.add(indexing.indexFile(userId, path));
             } catch (Exception error) {
+                rethrowIfInterrupted(error, "embedding_interrupted");
                 Map<String, Object> skipped = new LinkedHashMap<>();
                 skipped.put("path", path);
                 skipped.put("indexed", false);
@@ -293,7 +296,8 @@ public class IndexTaskHandler {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", indexed);
         progress.reportNow(0, 0, "文件向量化：全文索引完成，开始生成向量");
-        result.put("embedding", embeddings.embed(userId, paths, 64, force, progress));
+        result.put("embedding", requireEmbeddingSuccess(
+                embeddings.embed(userId, paths, 64, force, progress), false));
         return result;
     }
 
@@ -308,8 +312,8 @@ public class IndexTaskHandler {
      */
     private Map<String, Object> visionFiles(UUID userId, List<String> paths, boolean force,
                                             TaskProgressReporter progress) {
-        if (vision == null) return Map.of("vectorized", false, "reason", "vision_handler_unavailable");
-        if (paths.isEmpty()) return Map.of("vectorized", false, "reason", "vision_files_required");
+        if (vision == null) throw new IllegalStateException("vision_handler_unavailable");
+        if (paths.isEmpty()) throw new IllegalArgumentException("vision_files_required");
         List<Map<String, Object>> results = new ArrayList<>();
         List<String> indexedPaths = new ArrayList<>();
         int processed = 0;
@@ -321,8 +325,9 @@ public class IndexTaskHandler {
                 Map<String, Object> indexed = new LinkedHashMap<>(indexing.indexDescription(userId, path, json));
                 indexed.put("model", described.get("model"));
                 results.add(indexed);
-                indexedPaths.add(path);
+                if (Boolean.TRUE.equals(indexed.get("indexed"))) indexedPaths.add(path);
             } catch (Exception error) {
+                rethrowIfInterrupted(error, "vision_interrupted");
                 Map<String, Object> skipped = new LinkedHashMap<>();
                 skipped.put("path", path);
                 skipped.put("indexed", false);
@@ -337,11 +342,37 @@ public class IndexTaskHandler {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", results);
         result.put("described", indexedPaths.size());
+        if (indexedPaths.isEmpty()) throw new IllegalStateException("vision_all_files_failed");
+        if (embeddings == null) throw new IllegalStateException("embedding_failed: embedding_handler_unavailable");
         progress.reportNow(0, 0, "图片索引：视觉识别完成，开始生成向量");
-        result.put("embedding", embeddings == null
-                ? Map.of("vectorized", false, "reason", "embedding_handler_unavailable")
-                : embeddings.embed(userId, indexedPaths, 64, force, progress));
+        result.put("embedding", requireEmbeddingSuccess(
+                embeddings.embed(userId, indexedPaths, 64, force, progress), false));
         return result;
+    }
+
+    /** 将 embedding 服务的结果语义转换为任务状态；仅全文索引允许“未配置”降级。 */
+    private Map<String, Object> requireEmbeddingSuccess(Map<String, Object> result,
+                                                         boolean allowNotConfigured) {
+        if (result != null && Boolean.TRUE.equals(result.get("vectorized"))) return result;
+        String reason = result == null ? "embedding_result_missing"
+                : String.valueOf(result.getOrDefault("reason", "embedding_failed"));
+        if (allowNotConfigured && "embedding_not_configured".equals(reason)) return result;
+        throw new IllegalStateException("embedding_failed: " + reason);
+    }
+
+    /** 中断不能被逐文件容错吞掉，否则停机后任务会继续调用 provider。 */
+    private static void rethrowIfInterrupted(Exception error, String message) {
+        if (!isInterrupted(error)) return;
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException(message, error);
+    }
+
+    private static boolean isInterrupted(Throwable error) {
+        if (Thread.currentThread().isInterrupted()) return true;
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof InterruptedException) return true;
+        }
+        return false;
     }
 
     /**

@@ -75,7 +75,7 @@ public interface TaskWorkerStore {
     boolean fail(String workerId, String taskId, String error);
 
     /**
-     * 回收已过期租约，将可重试任务重新置为 queued，并把超过尝试次数的任务置为终态。
+     * 回收已过期租约，将可重试任务置为 retry_wait，并把取消或超过尝试次数的任务置为终态。
      * @return 本次回收或终止的任务数量。
      */
     int recoverExpiredLeases();

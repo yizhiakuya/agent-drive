@@ -7,7 +7,7 @@ import {
 } from "./frontend-actions";
 
 type Tab = "chat" | "files" | "tasks" | "settings";
-export type AuthMode = "loading" | "setup" | "login" | "ready" | "rescan"; // rescan=原生 App 待扫码授权
+export type AuthMode = "loading" | "setup" | "login" | "ready" | "rescan" | "server-error"; // rescan=原生 App 待扫码授权
 
 interface AppState {
   configured: boolean;
@@ -17,7 +17,7 @@ interface AppState {
   sessionId: string | null;
   sessionsVersion: number; // 会话列表刷新信号
   frontendActions: PendingFrontendAction[]; // Agent 请求浏览器执行的待处理动作
-  authMode: AuthMode; // loading=启动中 / setup=首次设密 / login=登录 / ready=已认证
+  authMode: AuthMode; // server-error 保留凭据并允许重试，只有 401/403 进入 login/rescan
   setConfigured: (v: boolean) => void;
   setLoading: (v: boolean) => void;
   setModelName: (v: string) => void;

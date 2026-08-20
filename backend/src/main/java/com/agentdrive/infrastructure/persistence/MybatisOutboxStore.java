@@ -15,7 +15,7 @@ import java.util.UUID;
 /**
  * 通过 MyBatis 实现 owner-scoped outbox 事件存储。
  * <p>业务事务先写事件，发布器随后读取未发布事件并以 event ID 标记完成；payload 在边界处编码为 JSON，
- * 读取时解析失败则以空对象返回，避免发布流程被历史坏数据阻断。</p>
+ * 读取时解析失败会携带显式 {@code payload_error}，由消费者持久化为死信而不是伪造空事件。</p>
  */
 public class MybatisOutboxStore implements OutboxStore {
     private final OutboxMapper mapper;
@@ -87,6 +87,16 @@ public class MybatisOutboxStore implements OutboxStore {
         return mapper.markPublished(userId.toString(), eventId) > 0;
     }
 
+    /** 记录 Worker 投递失败，并可将不可恢复事件持久化为死信。 */
+    @Override
+    @Transactional
+    public boolean recordFailure(long eventId, String error, boolean deadLetter) {
+        if (eventId <= 0) throw new IllegalArgumentException("eventId must be positive");
+        String message = error == null || error.isBlank() ? "outbox_delivery_failed" : error;
+        return mapper.recordFailure(eventId, message.substring(0, Math.min(1000, message.length())),
+                deadLetter) > 0;
+    }
+
     /**
      * 将 outbox 数据库行转换为发布器使用的字段 Map。
      * @param row Mapper 返回的事件行。
@@ -100,23 +110,28 @@ public class MybatisOutboxStore implements OutboxStore {
         result.put("aggregate_type", row.get("aggregate_type"));
         result.put("aggregate_id", row.get("aggregate_id"));
         result.put("idempotency_key", row.get("idempotency_key"));
-        result.put("payload", parse(row.get("payload_json")));
+        ParsedPayload parsed = parse(row.get("payload_json"));
+        result.put("payload", parsed.value());
+        if (parsed.error() != null) result.put("payload_error", parsed.error());
+        result.put("failure_count", row.get("failure_count"));
+        result.put("last_error", row.get("last_error"));
         result.put("created_at", row.get("created_at"));
         result.put("published_at", row.get("published_at"));
+        result.put("dead_lettered_at", row.get("dead_lettered_at"));
         return result;
     }
 
     /**
      * 解析 outbox payload JSON。
      * @param value JSON 文本或数据库值。
-     * @return 解析后的对象；空值或坏 JSON 返回空 Map。
+     * @return 解析值和可选稳定错误；坏 JSON 不会被当作有效空 payload。
      */
-    private Object parse(Object value) {
-        if (value == null) return Map.of();
+    private ParsedPayload parse(Object value) {
+        if (value == null) return new ParsedPayload(Map.of(), "missing_payload");
         try {
-            return objectMapper.readValue(String.valueOf(value), Object.class);
+            return new ParsedPayload(objectMapper.readValue(String.valueOf(value), Object.class), null);
         } catch (JsonProcessingException error) {
-            return Map.of();
+            return new ParsedPayload(Map.of(), "invalid_payload_json");
         }
     }
 
@@ -141,5 +156,8 @@ public class MybatisOutboxStore implements OutboxStore {
      */
     private static void requireUser(UUID userId) {
         if (userId == null) throw new IllegalArgumentException("userId must not be null");
+    }
+
+    private record ParsedPayload(Object value, String error) {
     }
 }

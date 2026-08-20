@@ -49,11 +49,28 @@ class MybatisTaskStoreIntegrationTest {
             assertThat(((Map<?, ?>) tasks.overview(owner).get("counts")).get("queued")).isEqualTo(1L);
             assertThat(tasks.events(owner, 0, 50)).hasSize(2);
 
-            Map<String, Object> cancelled = tasks.cancel(owner, taskId);
-            assertThat(cancelled).containsEntry("status", "cancelled");
-            Map<String, Object> retried = tasks.retry(owner, taskId);
-            assertThat(retried).containsEntry("status", "queued");
-            assertThat(tasks.latestEventId(owner)).isGreaterThan(2L);
+            TaskStore.TransitionResult cancelled = tasks.cancel(owner, taskId);
+            assertThat(cancelled.changed()).isTrue();
+            assertThat(cancelled.task()).containsEntry("status", "cancelled");
+            long cancelEventId = tasks.latestEventId(owner);
+
+            TaskStore.TransitionResult repeatedCancel = tasks.cancel(owner, taskId);
+            assertThat(repeatedCancel.changed()).isFalse();
+            assertThat(repeatedCancel.reason()).isEqualTo("task_not_active");
+            assertThat(repeatedCancel.task().get("updated_at")).isEqualTo(cancelled.task().get("updated_at"));
+            assertThat(tasks.latestEventId(owner)).isEqualTo(cancelEventId);
+
+            TaskStore.TransitionResult retried = tasks.retry(owner, taskId);
+            assertThat(retried.changed()).isTrue();
+            assertThat(retried.task()).containsEntry("status", "queued");
+            assertThat(tasks.latestEventId(owner)).isGreaterThan(cancelEventId);
+
+            TaskStore.TransitionResult repeatedRetry = tasks.retry(owner, taskId);
+            assertThat(repeatedRetry.changed()).isFalse();
+            assertThat(repeatedRetry.reason()).isEqualTo("task_not_retryable");
+            TaskStore.TransitionResult missingRetry = tasks.retry(owner, UUID.randomUUID());
+            assertThat(missingRetry.task()).isNull();
+            assertThat(missingRetry.reason()).isEqualTo("task_not_found");
         } finally {
             jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
         }

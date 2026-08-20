@@ -127,14 +127,19 @@ public interface IndexStore {
     List<Map<String, Object>> chunks(UUID userId, String fingerprint, List<String> paths, int limit);
 
     /**
-     * 清除指定文件的已有向量，使其在后续 embedding 任务中重新生成。
-     * 空路径列表表示不限定文件范围；实现应仍按用户隔离，并返回实际清除的 chunk 数。
+     * 为强制重算按稳定 chunk 游标读取当前 revision 的记录，可选择包含已有相同指纹的向量。
+     * 该入口只读取数据；调用方应在 provider 成功后逐条覆盖，从而让失败前未处理的旧向量继续可用。
      *
      * @param userId 文件归属用户的 UUID。
-     * @param paths 要清除向量的用户相对路径列表。
-     * @return 被清除向量的 chunk 数量。
+     * @param fingerprint 当前 provider/base URL/model 的指纹。
+     * @param paths 要处理的用户相对文件路径列表；空列表表示全部文件。
+     * @param includeCurrent 是否同时返回已有相同 fingerprint 的 chunk。
+     * @param afterChunkId 仅返回该 UUID 之后的 chunk；首批传 {@code null}。
+     * @param limit 本次最多返回的 chunk 数量。
+     * @return 按 UUID 升序排列的 chunk 批次。
      */
-    int clearEmbeddings(UUID userId, List<String> paths);
+    List<Map<String, Object>> chunks(UUID userId, String fingerprint, List<String> paths,
+                                     boolean includeCurrent, UUID afterChunkId, int limit);
 
     /**
      * 把 provider 返回的向量写回一个 chunk，并记录当前 fingerprint。

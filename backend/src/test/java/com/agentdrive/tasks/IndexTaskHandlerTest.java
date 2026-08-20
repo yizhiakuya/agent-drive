@@ -4,6 +4,7 @@ import com.agentdrive.files.FileStorageService;
 import com.agentdrive.index.IndexingService;
 import com.agentdrive.index.EmbeddingService;
 import com.agentdrive.progress.TaskProgressReporter;
+import com.agentdrive.vision.VisionDescriptionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -11,8 +12,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -102,6 +105,117 @@ class IndexTaskHandlerTest {
                         Map.of("path", "a.txt", "indexed", true),
                         Map.of("path", "b.md", "indexed", true)),
                 "embedding", Map.of("vectorized", true, "embedded", 2))));
+    }
+
+    @Test
+    void marksExplicitEmbeddingTaskFailedWhenProviderReturnsFailureResult() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        when(workers.claim("worker", "index", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "index.embed",
+                "payload_json", "{}"));
+        when(embeddings.embed(eq(owner), eq(List.of()), eq(64), eq(false), any(TaskProgressReporter.class)))
+                .thenReturn(Map.of("vectorized", false, "reason", "provider_http_502", "embedded", 0));
+        IndexTaskHandler handler = new IndexTaskHandler(workers, indexing, new ObjectMapper(), embeddings);
+
+        assertThat(handler.runOnce("worker")).isTrue();
+
+        verify(workers).fail(eq("worker"), eq(taskId), eq("embedding_failed: provider_http_502"));
+        verify(workers, never()).succeed(eq("worker"), eq(taskId), any());
+    }
+
+    @Test
+    void failsVisionTaskWithoutCallingEmbeddingWhenEveryDescriptionFails() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        VisionDescriptionService vision = mock(VisionDescriptionService.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        List<String> paths = List.of("photos/a.jpg", "photos/b.jpg");
+        when(workers.claim("worker", "index", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "index.vision",
+                "payload_json", "{\"files\":[\"photos/a.jpg\",\"photos/b.jpg\"]}"));
+        when(vision.describeFile(owner, "photos/a.jpg")).thenThrow(new IllegalStateException("provider_500"));
+        when(vision.describeFile(owner, "photos/b.jpg")).thenThrow(new IllegalStateException("provider_500"));
+        IndexTaskHandler handler = new IndexTaskHandler(
+                workers, indexing, new ObjectMapper(), embeddings, null, vision);
+
+        assertThat(handler.runOnce("worker")).isTrue();
+
+        verify(embeddings, never()).embed(eq(owner), eq(paths), eq(64), eq(false), any());
+        verify(embeddings, never()).embed(eq(owner), eq(List.of()), eq(64), eq(false), any());
+        verify(workers).fail(eq("worker"), eq(taskId), eq("vision_all_files_failed"));
+        verify(workers, never()).succeed(eq("worker"), eq(taskId), any());
+    }
+
+    @Test
+    void preservesPerFileVisionFailuresWhenAnotherFileSucceeds() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        VisionDescriptionService vision = mock(VisionDescriptionService.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        when(workers.claim("worker", "index", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "index.vision",
+                "payload_json", "{\"files\":[\"photos/a.jpg\",\"photos/b.jpg\"]}"));
+        when(vision.describeFile(owner, "photos/a.jpg")).thenThrow(new IllegalStateException("provider_500"));
+        when(vision.describeFile(owner, "photos/b.jpg")).thenReturn(Map.of(
+                "description", Map.of("summary", "receipt"), "model", "vision-test"));
+        when(indexing.indexDescription(eq(owner), eq("photos/b.jpg"), any()))
+                .thenReturn(Map.of("path", "photos/b.jpg", "indexed", true));
+        when(embeddings.embed(eq(owner), eq(List.of("photos/b.jpg")), eq(64), eq(false),
+                any(TaskProgressReporter.class)))
+                .thenReturn(Map.of("vectorized", true, "embedded", 1));
+        IndexTaskHandler handler = new IndexTaskHandler(
+                workers, indexing, new ObjectMapper(), embeddings, null, vision);
+
+        assertThat(handler.runOnce("worker")).isTrue();
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Map<String, Object>> resultCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(workers).succeed(eq("worker"), eq(taskId), resultCaptor.capture());
+        Map<String, Object> result = resultCaptor.getValue();
+        assertThat(result).containsEntry("described", 1)
+                .containsEntry("embedding", Map.of("vectorized", true, "embedded", 1));
+        assertThat((List<Map<String, Object>>) result.get("files"))
+                .anySatisfy(item -> assertThat(item).containsEntry("path", "photos/a.jpg")
+                        .containsEntry("indexed", false).containsEntry("error", "provider_500"))
+                .anySatisfy(item -> assertThat(item).containsEntry("path", "photos/b.jpg")
+                        .containsEntry("indexed", true).containsEntry("model", "vision-test"));
+    }
+
+    @Test
+    void preservesThreadInterruptWhenVisionRequestIsInterrupted() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        VisionDescriptionService vision = mock(VisionDescriptionService.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        when(workers.claim("worker", "index", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "index.vision",
+                "payload_json", "{\"files\":[\"photos/a.jpg\"]}"));
+        when(vision.describeFile(owner, "photos/a.jpg")).thenAnswer(ignored -> {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("vision_request_failed", new InterruptedException("stopped"));
+        });
+        IndexTaskHandler handler = new IndexTaskHandler(
+                workers, indexing, new ObjectMapper(), embeddings, null, vision);
+
+        try {
+            assertThat(handler.runOnce("worker")).isTrue();
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            verify(workers).fail(eq("worker"), eq(taskId), eq("vision_interrupted"));
+            verify(embeddings, never()).embed(any(), any(), eq(64), eq(false), any());
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     @Test

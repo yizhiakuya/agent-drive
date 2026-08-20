@@ -107,9 +107,24 @@ export default function SettingsPage() {
       if (request !== loadRequestRef.current) return;
       setCfg(d);
       setVisionCfg(vision);
-      if (d.llm) setLlmForm((f) => ({ ...f, type: d.llm!.type, base_url: d.llm!.base_url, model: d.llm!.model }));
-      if (d.embeddings) setEmbForm((f) => ({ ...f, provider: d.embeddings!.provider, base_url: d.embeddings!.base_url, model: d.embeddings!.model }));
-      if (vision.configured) setVisionForm((f) => ({ ...f, provider: vision.provider, base_url: vision.base_url, model: vision.model }));
+      setLlmForm((current) => d.llm ? {
+        type: d.llm.type,
+        base_url: d.llm.base_url,
+        model: d.llm.model,
+        api_key: "",
+      } : { ...current, api_key: "" });
+      setEmbForm((current) => d.embeddings ? {
+        provider: d.embeddings.provider,
+        base_url: d.embeddings.base_url,
+        model: d.embeddings.model,
+        api_key: "",
+      } : { ...current, api_key: "" });
+      setVisionForm((current) => vision.configured ? {
+        provider: vision.provider,
+        base_url: vision.base_url,
+        model: vision.model,
+        api_key: "",
+      } : { ...current, api_key: "" });
     } catch (e) {
       if (request === loadRequestRef.current) setMsg({ kind: "error", text: String(e) });
     }
@@ -141,7 +156,10 @@ export default function SettingsPage() {
       const r = await configureLLM({ ...llmForm }) as { ok?: boolean; error?: string; test?: { error?: string } };
       if (r.ok === false) {
         setLlmMsg({ kind: "error", text: `保存失败：${r.error || r.test?.error || "连接测试失败"}` });
-      } else setLlmMsg({ kind: "ok", text: "LLM 配置已保存并测试通过" });
+      } else {
+        setLlmForm((form) => ({ ...form, api_key: "" }));
+        setLlmMsg({ kind: "ok", text: "LLM 配置已保存并测试通过" });
+      }
       await load();
     } catch (e) { setLlmMsg({ kind: "error", text: String(e) }); }
     finally { setSaving(null); }
@@ -166,7 +184,12 @@ export default function SettingsPage() {
     setLlmForm((f) => {
       const prev = protocolOf(f.type);
       const baseIsDefault = !f.base_url || (prev ? f.base_url === prev.defaultBaseUrl : false);
-      return { ...f, type, base_url: baseIsDefault && proto ? proto.defaultBaseUrl : f.base_url };
+      return {
+        ...f,
+        type,
+        base_url: baseIsDefault && proto ? proto.defaultBaseUrl : f.base_url,
+        api_key: type === f.type ? f.api_key : "",
+      };
     });
     invalidateModelLookup();
   }
@@ -205,6 +228,7 @@ export default function SettingsPage() {
       };
       if (d.ok) {
         const suffix = d.rebuild_task ? " · 索引重建已进入后台" : "";
+        setEmbForm((form) => ({ ...form, api_key: "" }));
         setEmbMsg({ kind: "ok", text: `向量化已保存 · 连接: ${d.test?.ok ? `ok(${d.test.dimensions}维)` : d.test?.error}${suffix}` });
         if (d.rebuild_task) emitTasksChanged();
       }
@@ -230,6 +254,7 @@ export default function SettingsPage() {
     setSaving("vision");
     try {
       const result = await saveVision(visionForm) as { ok?: boolean; test?: { error?: string }; message?: string };
+      if (result.ok) setVisionForm((form) => ({ ...form, api_key: "" }));
       setVisionMsg(result.ok
         ? { kind: "ok", text: "视觉模型已保存并测试通过" }
         : { kind: "error", text: result.message || result.test?.error || "视觉模型连接测试失败" });
@@ -272,7 +297,12 @@ export default function SettingsPage() {
   }
 
   const handleLlmBaseUrlChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    setLlmForm((f) => ({ ...f, base_url: event.target.value }));
+    const baseUrl = event.target.value;
+    setLlmForm((f) => ({
+      ...f,
+      base_url: baseUrl,
+      api_key: baseUrl === f.base_url ? f.api_key : "",
+    }));
     invalidateModelLookup();
   }, [invalidateModelLookup]);
 
@@ -282,7 +312,11 @@ export default function SettingsPage() {
   }, [invalidateModelLookup]);
 
   const handleVisionBaseUrlChange = useCallback((value: string) => {
-    setVisionForm((f) => ({ ...f, base_url: value }));
+    setVisionForm((f) => ({
+      ...f,
+      base_url: value,
+      api_key: value === f.base_url ? f.api_key : "",
+    }));
     invalidateVisionModelLookup();
   }, [invalidateVisionModelLookup]);
 
@@ -290,6 +324,22 @@ export default function SettingsPage() {
     setVisionForm((f) => ({ ...f, api_key: value }));
     invalidateVisionModelLookup();
   }, [invalidateVisionModelLookup]);
+
+  const handleEmbeddingBaseUrlChange = useCallback((value: string) => {
+    setEmbForm((f) => ({
+      ...f,
+      base_url: value,
+      api_key: value === f.base_url ? f.api_key : "",
+    }));
+  }, []);
+
+  const handleEmbeddingModelChange = useCallback((value: string) => {
+    setEmbForm((f) => ({
+      ...f,
+      model: value,
+      api_key: value === f.model ? f.api_key : "",
+    }));
+  }, []);
 
   return (
     <section className="flex-1 overflow-auto bg-bg px-4 py-5 sm:px-6">
@@ -394,10 +444,10 @@ export default function SettingsPage() {
           <p className="text-sm">{EMBEDDING_PROVIDERS[0]?.label || "Jina AI"}（当前唯一支持）</p>
         </div>
         <SettingsField label="接口地址" value={embForm.base_url}
-                       onChange={(value) => setEmbForm((f) => ({ ...f, base_url: value }))}
+                       onChange={handleEmbeddingBaseUrlChange}
                        placeholder={EMBEDDING_PROVIDERS[0].defaultBaseUrl} />
         <SettingsField label="模型" value={embForm.model}
-                       onChange={(value) => setEmbForm((f) => ({ ...f, model: value }))}
+                       onChange={handleEmbeddingModelChange}
                        placeholder={EMBEDDING_PROVIDERS[0].placeholderModel} />
         <SettingsField label="API Key" value={embForm.api_key}
                        onChange={(value) => setEmbForm((f) => ({ ...f, api_key: value }))}

@@ -51,4 +51,44 @@ class MybatisTaskWorkerStoreIntegrationTest {
             jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
         }
     }
+
+    @Test
+    void failedAttemptReleasesLeaseAndEntersDelayedRetryWait() {
+        String userId = UUID.randomUUID().toString();
+        try {
+            jdbc.update("INSERT INTO users(id, username, password_hash) VALUES (?::uuid, ?, ?)",
+                    userId, "worker-retry-" + userId, "test-hash");
+            UUID owner = UUID.fromString(userId);
+            TaskStore.EnqueueResult queued = tasks.enqueue(
+                    owner, "integration.retry", "integration-retry", Map.of(),
+                    "worker-retry-dedupe-" + userId, "api", null
+            );
+            String taskId = String.valueOf(queued.task().get("id"));
+
+            assertThat(workers.claim("worker-retry", "integration-retry", 30))
+                    .containsEntry("id", taskId)
+                    .containsEntry("attempts", 1);
+            assertThat(workers.fail("worker-retry", taskId, "temporary provider failure")).isTrue();
+
+            Map<String, Object> row = jdbc.queryForMap("""
+                    SELECT status, attempt, max_attempts, error, lease_owner, lease_until, finished_at,
+                           available_at > now() AS delayed
+                    FROM tasks
+                    WHERE id = ?::uuid
+                    """, taskId);
+            assertThat(row).containsEntry("status", "retry_wait")
+                    .containsEntry("attempt", 1)
+                    .containsEntry("error", "temporary provider failure")
+                    .containsEntry("delayed", true);
+            assertThat(row.get("lease_owner")).isNull();
+            assertThat(row.get("lease_until")).isNull();
+            assertThat(row.get("finished_at")).isNull();
+            assertThat(((Number) row.get("max_attempts")).intValue()).isGreaterThan(1);
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM task_events WHERE task_id = ?::uuid AND event_type = 'failed'",
+                    Integer.class, taskId)).isEqualTo(1);
+        } finally {
+            jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
+        }
+    }
 }

@@ -32,6 +32,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 重扫会吊销旧设备令牌；设置页移除设备也会写入 `revoked_at`。
 - 浏览器使用 HttpOnly、SameSite=Lax、生产 Secure Cookie。Android 后台请求使用 Bearer；`?token=` 只兼容媒体 raw/download GET。
 - `/api/v1/auth/status|setup|login|logout|pair-exchange` 是认证流程端点，其他路由不能借初始化状态绕过 owner 校验。
+- 前端启动检查只有在 401/403 时切换登录或重扫码；5xx、网络、JSON 解析和字段契约错误进入独立可重试状态并保留现有 Cookie/设备令牌，避免把服务故障误判为凭据失效或首次初始化。
 
 ## 3. 文件与路径安全
 
@@ -47,7 +48,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 模型不能提供任意 URL、Cookie、Bearer、Authorization、请求头、Python 入口、Java 类名、JavaScript 或 `eval`。
 - 当前 Request 的 Cookie/Bearer 只在进程内传给 backend dispatcher；Worker 通过 PostgreSQL 任务租约和 owner-scoped payload 执行，不接收模型提供的凭据。
 - GET 和只读 probe 自动执行；写操作按 operation 风险处理，red 操作需要签名确认、nonce TTL 和一次性消费。非 red 操作按 session/tool/arguments 做确定性 replay。
-- provider API key 只在 provider/base URL 相同且表单留空时复用，落库使用 AES-GCM；响应、日志、会话、工具轨迹和 `last_trace` 只保留掩码/脱敏值。
+- provider API key 只在后端规定的配置边界相同且表单留空时复用（embedding 还要求 model 相同），落库使用 AES-GCM；响应、日志、会话、工具轨迹和 `last_trace` 只保留掩码/脱敏值。设置页在协议/base URL 边界变化时清空对应 key，embedding 模型变化时同样清空；保存成功或重新加载脱敏配置后销毁前端状态中的明文 key。
 - API key、Cookie、Bearer、设备 token、query credential、完整消息和文件内容不进入普通日志。聊天日志记录 request ID、provider/model、工具 operation、状态和耗时；异常 message/cause 与 SSE error 先脱敏。
 
 ## 5. Android 令牌与权限

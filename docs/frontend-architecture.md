@@ -30,7 +30,7 @@ frontend/src/
 
 ## 2. 页面与状态
 
-`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载，避免切换页面时丢失 SSE 流和工具步骤。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
+`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。启动检查把 401/403 与服务故障分开：前者进入 web 登录或原生重扫码，5xx、网络、JSON 解析和布尔字段契约错误进入保留凭据的 `server-error`，通过同一入口重新执行完整认证与配置检查。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载，避免切换页面时丢失 SSE 流和工具步骤。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
 
 对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。会话列表在 `md` 以下隐藏，文件栏在 `xl` 以下隐藏；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。
 
@@ -54,9 +54,9 @@ frontend/src/
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
 - ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。
 
-解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
+解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。流异常收尾必须先同步 `flush` 并 `cancel` 当前帧，再清理空助手占位和追加错误消息；已经上屏或待冲刷的正文、reasoning 与工具步骤不能被错误气泡或迟到 timer 覆盖。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
 
-ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即清空旧会话的临时内容，但迟到的历史响应只能被丢弃；模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的规则，并以发起探测时的表单快照调用接口，避免用户修改地址或 key 后旧结果污染当前选择器。
+ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即清空旧会话的临时内容，但迟到的历史响应只能被丢弃；模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的规则，并以发起探测时的表单快照调用接口，避免用户修改地址或 key 后旧结果污染当前选择器。LLM/视觉的协议或 base URL 变化、embedding 的 provider/base URL/model 变化时必须清空对应 API key 草稿；任一配置保存成功或从服务端重载后也要销毁表单中的明文 key。
 
 ## 4. 文件页请求生命周期
 
@@ -82,6 +82,7 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 ## 5. 认证与原生桥
 
 - Web/PWA 使用 HttpOnly Cookie；401 通过 `agent-drive:unauthorized` 返回认证入口。
+- 启动阶段只有 401/403 表示身份失效；`/auth/status`、`/config/status` 的 5xx、网络、JSON 解析或字段契约错误展示可重试服务故障，不清理 Cookie/设备令牌，也不降级成“AI 未配置”。
 - Android 首启扫码兑换设备令牌，原生侧写入独立 EncryptedSharedPreferences；没有令牌时进入重扫码页，密码登录是逃生口。
 - AI 配置只在 web 设置页提供，App 通过原生插件管理服务器地址、设备令牌和相册同步。
 - `MainActivity` 必须在 `super.onCreate()` 前注册 Capacitor 插件；插件生命周期、权限回调和 observer 约束见 [`android.md`](android.md) 与 [`AGENTS.md`](../AGENTS.md)。

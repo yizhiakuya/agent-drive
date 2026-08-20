@@ -155,20 +155,20 @@ public class MybatisIndexStore implements IndexStore {
     public List<Map<String, Object>> chunks(UUID userId, String fingerprint, List<String> paths, int limit) {
         requireUser(userId);
         return mapper.selectChunks(userId.toString(), fingerprint,
-                paths == null ? List.of() : List.copyOf(paths), Math.max(1, Math.min(limit, 500)));
+                paths == null ? List.of() : List.copyOf(paths), false, null,
+                Math.max(1, Math.min(limit, 500)));
     }
 
     /**
-     * 清除指定路径的 embedding，迫使后续任务按新配置重新向量化。
-     * @param userId chunk 所属 owner 的 UUID。
-     * @param paths 要清除的文件相对路径列表。
-     * @return 清除的 embedding 数量。
+     * 使用 UUID 游标读取强制重算批次；不预先删除任何已有向量。
      */
     @Override
-    @Transactional
-    public int clearEmbeddings(UUID userId, List<String> paths) {
+    public List<Map<String, Object>> chunks(UUID userId, String fingerprint, List<String> paths,
+                                             boolean includeCurrent, UUID afterChunkId, int limit) {
         requireUser(userId);
-        return mapper.clearEmbeddings(userId.toString(), paths == null ? List.of() : List.copyOf(paths));
+        return mapper.selectChunks(userId.toString(), fingerprint,
+                paths == null ? List.of() : List.copyOf(paths), includeCurrent,
+                afterChunkId == null ? null : afterChunkId.toString(), Math.max(1, Math.min(limit, 500)));
     }
 
     /**

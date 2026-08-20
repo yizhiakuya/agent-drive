@@ -112,14 +112,14 @@
         UPDATE tasks
         SET status = CASE
                 WHEN status IN ('queued', 'retry_wait') THEN 'cancelled'
-                WHEN status IN ('running', 'cancelling') THEN 'cancelling'
-                ELSE status
+                ELSE 'cancelling'
             END,
-            cancel_requested = CASE WHEN status IN ('queued', 'retry_wait', 'running', 'cancelling') THEN true ELSE cancel_requested END,
+            cancel_requested = true,
             finished_at = CASE WHEN status IN ('queued', 'retry_wait') THEN now() ELSE finished_at END,
             updated_at = now()
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+          AND status IN ('queued', 'retry_wait', 'running')
     </update>
 
     <update id="retryTask">

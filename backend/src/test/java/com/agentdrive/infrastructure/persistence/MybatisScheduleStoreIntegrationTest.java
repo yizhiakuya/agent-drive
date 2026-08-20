@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 @SpringBootTest
 @EnabledIfEnvironmentVariable(named = "AGENT_DRIVE_JDBC_TEST_URL", matches = ".+")
@@ -55,8 +56,25 @@ class MybatisScheduleStoreIntegrationTest {
             assertThat(nextRun.doubleValue()).isGreaterThan(System.currentTimeMillis() / 1000.0 - 5);
             assertThat(tasks.list(owner, java.util.List.of(), "index.file", false, 20, 0))
                     .singleElement().satisfies(task -> assertThat(task).containsEntry("origin", "schedule"));
+            assertThatIllegalArgumentException().isThrownBy(() -> schedules.upsert(owner, "invalid", null,
+                    "daily", "25:00", "index.cleanup", "index", Map.of(), true, 0, 3, "UTC"));
+            jdbc.update("""
+                    INSERT INTO task_schedules(user_id, name, cron, schedule_kind, schedule_value,
+                                               task_kind, payload, enabled, next_run_at)
+                    VALUES (?::uuid, ?, ?, ?, ?, ?, '{}'::jsonb, true, to_timestamp(1))
+                    """, owner, "legacy-invalid", "broken", "daily", "25:00", "index.cleanup");
+            assertThat(schedules.dispatchDue(owner, 5)).singleElement().satisfies(item ->
+                    assertThat(item).containsEntry("schedule", "legacy-invalid").containsEntry("disabled", true));
+            assertThat(jdbc.queryForMap("""
+                    SELECT enabled, last_error FROM task_schedules
+                    WHERE user_id = ?::uuid AND name = 'legacy-invalid'
+                    """, owner)).satisfies(row -> {
+                assertThat(row).containsEntry("enabled", false);
+                assertThat(row.get("last_error")).asString().contains("daily schedule_value");
+            });
             assertThat(schedules.delete(owner, "nightly")).isTrue();
             assertThat(schedules.delete(owner, "every-second")).isTrue();
+            assertThat(schedules.delete(owner, "legacy-invalid")).isTrue();
             assertThat(schedules.list(owner)).isEmpty();
             assertThat(schedules.delete(owner, "nightly")).isFalse();
         } finally {
