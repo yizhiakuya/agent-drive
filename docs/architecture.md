@@ -54,7 +54,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
 - Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件；前端收到传输异常时先冲刷并取消当前 80ms 帧，再保留已生成正文/工具轨迹并追加错误提示。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
-- 模型只看到稳定的 `backend_api`、`frontend_api` 及 plan/skills 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
+- 模型只看到稳定的 `backend_api`、`frontend_api` 及 plan/skills 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；backend discover 使用 offset/limit 分页并返回 total/has_more/next_offset，单页最多 20 项。模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
 - 非 red 工具按 `session_id + tool + arguments` 使用持久 replay；red 写操作使用签名确认和一次性 nonce。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
 - provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。`model` 只覆盖当前请求，动态 resolver 始终从 owner 已保存配置取得 Provider 地址和 API key。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
 

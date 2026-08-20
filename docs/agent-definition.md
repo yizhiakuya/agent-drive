@@ -1,6 +1,6 @@
 # Agent Drive Agent 定义
 
-> 现行 Agent 契约（2026-08-19）。本文描述当前生产 Agent 的能力边界和可靠性约束；接口细节以 [`architecture.md`](architecture.md) 和 [`security.md`](security.md) 为准。
+> 现行 Agent 契约（2026-08-21）。本文描述当前生产 Agent 的能力边界和可靠性约束；接口细节以 [`architecture.md`](architecture.md) 和 [`security.md`](security.md) 为准。
 
 ## 1. 角色与目标
 
@@ -40,7 +40,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 | `plan` | 保存和推进用户目标 | 只记录计划状态，不代替业务 mutation |
 | `read_skill` | 按需加载技能说明 | 只读登记的 skill，不执行任意文件/代码 |
 
-`backend_api` 使用 `action=discover|call` 信封。HTTP operation 标识为 `METHOD /api/v1/path`，内部 operation 标识为 `INTERNAL name`。模型不能直接选择 Java 方法、React handler、文件系统绝对路径或未登记能力。
+`backend_api` 使用 `action=discover|call` 信封。HTTP operation 标识为 `METHOD /api/v1/path`，内部 operation 标识为 `INTERNAL name`。discover 以 `discovery_offset` 和 `discovery_limit` 分页，默认返回 6 项、单页最多 20 项；每页同时返回完整匹配数、实际窗口、`has_more` 和 `next_offset`。模型必须在分页完成后才能把聚合结果称为完整匹配集。模型不能直接选择 Java 方法、React handler、文件系统绝对路径或未登记能力。
 
 ## 4. 执行循环
 

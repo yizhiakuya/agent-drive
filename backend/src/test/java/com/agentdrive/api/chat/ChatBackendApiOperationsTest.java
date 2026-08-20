@@ -2,9 +2,11 @@ package com.agentdrive.api.chat;
 
 import com.agentdrive.agent.BackendApiDispatcher;
 import com.agentdrive.agent.BackendApiRequest;
+import com.agentdrive.agent.OperationCatalog;
 import com.agentdrive.agent.OperationDefinition;
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -14,6 +16,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ChatBackendApiOperationsTest {
+    @Test
+    void paginatesTheRegisteredCatalogWithoutGapsOrDuplicates() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+        Set<String> discovered = new LinkedHashSet<>();
+        int offset = 0;
+        int total = -1;
+        boolean hasMore;
+
+        do {
+            OperationCatalog.DiscoveryPage page = catalog.discover("后端接口", offset, 20);
+            if (total < 0) total = page.totalMatches();
+            assertThat(page.totalMatches()).isEqualTo(total);
+            assertThat(page.offset()).isEqualTo(offset);
+            assertThat(page.operations()).allSatisfy(operation ->
+                    assertThat(discovered.add(operation.operation())).isTrue());
+            offset = page.nextOffset();
+            hasMore = page.hasMore();
+        } while (hasMore);
+
+        assertThat(discovered).hasSize(total);
+        assertThat(offset).isEqualTo(total);
+        assertThat(total).isGreaterThan(OperationCatalog.MAX_DISCOVERY_LIMIT);
+    }
+
     @Test
     void routesRegisteredOperationToItsOwnerScopedHandler() {
         UUID owner = UUID.randomUUID();

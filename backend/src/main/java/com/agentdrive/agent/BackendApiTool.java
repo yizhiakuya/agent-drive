@@ -76,6 +76,8 @@ public class BackendApiTool implements AgentTool {
      *
      * @param action {@code discover} 或 {@code call}
      * @param query 用于发现 operation 的自然语言查询
+     * @param discoveryOffset discover 结果起始偏移
+     * @param discoveryLimit discover 单页数量，最大 20
      * @param operation discover 返回的精确 operation 名称
      * @param pathParams operation 允许的路径参数
      * @param queryParams operation 允许的查询参数
@@ -83,19 +85,22 @@ public class BackendApiTool implements AgentTool {
      * @param files operation 允许的文件元数据
      * @return 可直接交给模型解析的 JSON 字符串
      */
-    @Tool(name = "backend_api", value = {"Discover and safely call a registered backend operation. Use discover before call.",
+    @Tool(name = "backend_api", value = {"Discover and safely call a registered backend operation. Use discover before call. Discovery is paginated; continue from next_offset while has_more is true.",
             "Use path_params only for {placeholder} segments in the operation path. Query-string values such as /api/v1/files path, q, mode=semantic, or md5 belong in query_params.",
             "The model cannot provide arbitrary URLs, headers, credentials, or Java entry points."})
     public String execute(
             @P(name = "action", value = "discover or call", required = false) String action,
             @P(name = "query", value = "Natural-language discovery query", required = false) String query,
+            @P(name = "discovery_offset", value = "Discover result offset; use next_offset from the previous page", required = false) Integer discoveryOffset,
+            @P(name = "discovery_limit", value = "Discover page size from 1 to 20; defaults to 6", required = false) Integer discoveryLimit,
             @P(name = "operation", value = "Exact operation returned by discover", required = false) String operation,
             @P(name = "path_params", value = "Only placeholders that literally appear inside the operation path, such as sessionId in /sessions/{sessionId}", required = false) Map<String, String> pathParams,
             @P(name = "query_params", value = "Query-string parameters; for GET /api/v1/files, put path here", required = false) Map<String, Object> queryParams,
             @P(name = "body", value = "Validated JSON request body", required = false) Map<String, Object> body,
             @P(name = "files", value = "Validated multipart file metadata", required = false) Map<String, Object> files
     ) {
-        BackendApiRequest request = new BackendApiRequest(action, query, operation, pathParams, queryParams, body, files);
+        BackendApiRequest request = new BackendApiRequest(
+                action, query, discoveryOffset, discoveryLimit, operation, pathParams, queryParams, body, files);
         return execute(request, null);
     }
 
@@ -112,7 +117,7 @@ public class BackendApiTool implements AgentTool {
     /**
      * 校验并执行一个工具请求。
      *
-     * <p>discover 返回最多六个候选 operation；call 要求 operation 非空、必须登记且
+     * <p>discover 返回带总数和继续偏移的候选页；call 要求 operation 非空、必须登记且
      * 由 dispatcher 执行。未知 operation 会附带名称建议，实际执行结果保留 operation
      * 风险等级供上层确认流程使用。</p>
      *
@@ -171,11 +176,19 @@ public class BackendApiTool implements AgentTool {
             return jsonError("invalid_request", "request must not be null", null);
         }
         if (request.isDiscover()) {
-            return json(Map.of(
-                    "ok", true,
-                    "action", "discover",
-                    "operations", catalog.discover(request.query())
-            ));
+            OperationCatalog.DiscoveryPage page = catalog.discover(
+                    request.query(), request.discoveryOffset(), request.discoveryLimit());
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("ok", true);
+            result.put("action", "discover");
+            result.put("operations", page.operations());
+            result.put("total_matches", page.totalMatches());
+            result.put("returned", page.operations().size());
+            result.put("offset", page.offset());
+            result.put("limit", page.limit());
+            result.put("has_more", page.hasMore());
+            result.put("next_offset", page.nextOffset());
+            return json(result);
         }
         if (!request.isCall()) {
             return jsonError("invalid_action", "action must be discover or call", null);
