@@ -126,7 +126,7 @@ public final class ChatController {
                                     requestId, safeId(normalized.sessionId()), owner(normalized),
                                     ChatLogSupport.safeThrowable(error));
                         }
-                        return Flux.just(encode(ChatSseEvents.error(errorMessage(error))));
+                        return Flux.just(encode(ChatSseEvents.error(errorMessage(error), normalized.sessionId())));
                     })
                     .map(payload -> response.bufferFactory().wrap(payload.getBytes(StandardCharsets.UTF_8)))
                     .doFinally(signal -> {

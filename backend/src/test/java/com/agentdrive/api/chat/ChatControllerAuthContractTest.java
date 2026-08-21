@@ -80,4 +80,60 @@ class ChatControllerAuthContractTest {
         assertThat(seen.get().sessionId()).isEqualTo(sessionId.toString());
         assertThat(seen.get().authenticatedUserId()).isEqualTo(userId);
     }
+
+    @Test
+    void streamErrorKeepsSessionCreatedBeforeProviderFailure() {
+        UUID userId = UUID.randomUUID();
+        UUID sessionId = UUID.randomUUID();
+        ChatRuntime runtime = new ChatRuntime() {
+            @Override
+            public Mono<ChatResponse> complete(ChatRequest request) {
+                return Mono.error(new UnsupportedOperationException());
+            }
+
+            @Override
+            public Flux<ChatSseEvent> stream(ChatRequest request) {
+                return Flux.error(new IllegalStateException("upstream rate limit"));
+            }
+        };
+        ConversationSessionStore sessions = new ConversationSessionStore() {
+            @Override
+            public Optional<ConversationSession> findOwned(UUID ignoredUserId, UUID ignoredSessionId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public ConversationSession create(UUID actualUserId) {
+                return new ConversationSession(sessionId, actualUserId);
+            }
+        };
+        WebRequestPrincipalResolver resolver = new WebRequestPrincipalResolver(credential ->
+                "session-token".equals(credential)
+                        ? Optional.of(new AuthenticatedPrincipal(
+                                userId, AuthenticatedPrincipal.CredentialKind.SESSION
+                        ))
+                        : Optional.empty());
+
+        String body = WebTestClient.bindToController(new ChatController(
+                        runtime,
+                        new ObjectMapper(),
+                        new ConversationSessionService(sessions),
+                        resolver
+                ))
+                .build()
+                .post()
+                .uri("/api/v1/chat/stream")
+                .header("Authorization", "Bearer session-token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("message", "hello"))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertThat(body).contains("event: error");
+        assertThat(body).contains("upstream rate limit");
+        assertThat(body).contains("\"session_id\":\"" + sessionId + "\"");
+    }
 }

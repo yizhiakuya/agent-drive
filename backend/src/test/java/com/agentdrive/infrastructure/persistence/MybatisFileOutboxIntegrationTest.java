@@ -71,8 +71,13 @@ class MybatisFileOutboxIntegrationTest {
                     owner, "file-text-" + owner, "test-hash");
             Map<String, Object> result = files.writeText(owner, "Agent/notes/report.md", "你好\n报告", true);
 
-            assertThat(result).containsEntry("path", "Agent/notes/report.md");
+            assertThat(result.get("uploaded")).isEqualTo(Map.of(
+                    "path", "Agent/notes/report.md", "size", 13L));
             assertThat(Files.readString(files.fileForRead(owner, "Agent/notes/report.md"))).isEqualTo("你好\n报告");
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM files
+                    WHERE user_id = ?::uuid AND path IN ('Agent', 'Agent/notes') AND is_dir = true
+                    """, Integer.class, owner)).isEqualTo(2);
             assertThat(outbox.pending(owner, 10)).anySatisfy(event -> {
                 assertThat(event.get("event_type")).isEqualTo("file.changed");
                 assertThat(event.get("payload")).isEqualTo(Map.of(

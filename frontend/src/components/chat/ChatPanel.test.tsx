@@ -45,8 +45,12 @@ async function typeAndSend(text: string) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => { resolve = settle; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("ChatPanel 主流程", () => {
@@ -346,6 +350,45 @@ describe("ChatPanel 主流程", () => {
     await waitFor(() => {
       expect(screen.getByText(/出错了：后端连接失败/)).toBeInTheDocument();
     });
+  });
+
+  it("流错误保留服务端会话并阻止后续请求重复创建", async () => {
+    chatStream.mockRejectedValueOnce(Object.assign(new Error("上游限流"), { sessionId: "failed-session" }))
+      .mockResolvedValueOnce(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+
+    await typeAndSend("第一次提问");
+    expect(await screen.findByText(/出错了：上游限流/)).toBeInTheDocument();
+    expect(useAppStore.getState().sessionId).toBe("failed-session");
+
+    await typeAndSend("第二次提问");
+    expect(chatStream.mock.calls[1][2]).toBe("failed-session");
+  });
+
+  it("后台会话失败只刷新会话列表且不污染当前会话", async () => {
+    const completion = deferred<Record<string, unknown>>();
+    chatStream.mockImplementation(() => completion.promise);
+    getSession.mockImplementation(async (sid: string) => ({
+      messages: sid === "session-b"
+        ? [{ role: "assistant", content: "B 会话仍在前台" }]
+        : [],
+    }));
+
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-a"); });
+    await typeAndSend("A 后台任务");
+    await act(async () => { useAppStore.getState().setSessionId("session-b"); });
+    expect(await screen.findByText("B 会话仍在前台")).toBeInTheDocument();
+
+    await act(async () => {
+      completion.reject(Object.assign(new Error("A 会话失败"), { sessionId: "session-a" }));
+      try { await completion.promise; } catch { /* 由流错误分支处理。 */ }
+    });
+
+    expect(useAppStore.getState().sessionId).toBe("session-b");
+    expect(screen.getByText("B 会话仍在前台")).toBeInTheDocument();
+    expect(screen.queryByText(/A 会话失败/)).not.toBeInTheDocument();
   });
 
   it("部分正文后流失败时保留正文且错误不被迟到帧覆盖", async () => {

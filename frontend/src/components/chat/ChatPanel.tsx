@@ -481,7 +481,7 @@ export default function ChatPanel() {
                     />
                     <ComboboxContent side="top" className="min-w-[min(16rem,calc(100vw-2rem))]">
                       <ComboboxList>
-                        {(item) => <ComboboxItem value={String(item.value)}>{String(item.label)}</ComboboxItem>}
+                        {(item) => <ComboboxItem key={String(item.value)} value={String(item.value)}>{String(item.label)}</ComboboxItem>}
                       </ComboboxList>
                       <ComboboxEmpty>{modelsLoading ? "获取中…" : modelLoadError || "暂无可用模型"}</ComboboxEmpty>
                     </ComboboxContent>

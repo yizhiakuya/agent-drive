@@ -53,6 +53,12 @@ function streamKey(sessionId: string | null): string {
   return sessionId ?? NEW_SESSION_KEY;
 }
 
+function currentErrorSessionId(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const sessionId = (error as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId : null;
+}
+
 /**
  * 流式对话发送 hook：按 session 隔离 chatStream、80ms 节流帧、事件→消息映射、
  * 会话建立/列表刷新/计划流、AbortController 生命周期与错误兜底。
@@ -103,6 +109,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     setPending(null);
     setPlan([]);
     setContextUsage(null);
+
     const controller = new AbortController();
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
     const frame = createChatStreamFrame({
@@ -168,17 +175,28 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
         if (onFinish) setTimeout(onFinish, 50);
       }
-    } catch (e) {
-      if ((e as Error).name === "AbortError" || streamsRef.current.get(key) !== run) return;
+    } catch (error) {
+      if ((error as Error).name === "AbortError" || streamsRef.current.get(key) !== run) return;
+      const visible = isVisible(run);
+      const resolvedSid = currentErrorSessionId(error);
+      if (resolvedSid) {
+        if (sendSid === null && visible) {
+          sessionIdRef.current = resolvedSid;
+          setSessionId(resolvedSid);
+        }
+        bumpSessions();
+      }
       // 先把待提交的正文/reasoning 同步落地并取消定时帧，再追加错误；否则迟到的
       // 80ms commit 会覆盖错误，直接替换末项也会吞掉已经完成的工具步骤。
       frame.flush();
       frame.cancel();
-      if (isVisible(run)) {
+      if (visible) {
+        const message = error instanceof Error ? error.message : String(error);
         setMessages((m) => [
           ...removeEmptyAssistantMessages(m),
-          { type: "assistant", content: `出错了：${(e as Error).message}` },
+          { type: "assistant", content: `出错了：${message}` },
         ]);
+        if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
       }
     } finally {
       if (streamsRef.current.get(key) === run) {

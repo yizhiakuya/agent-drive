@@ -20,6 +20,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class LangChainAgentRuntimeTest {
     @Test
@@ -113,6 +117,39 @@ class LangChainAgentRuntimeTest {
                 .collectList().block(Duration.ofSeconds(2)))
                 .hasRootCauseInstanceOf(AssertionError.class)
                 .hasRootCauseMessage("fatal tool failure");
+    }
+
+    @Test
+    void persistsSanitizedAssistantErrorAndLastTrace() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.http("GET", "/api/v1/files", "List files"))),
+                (operation, request) -> {
+                    throw new AssertionError("fatal?api_key=sk-provider-secret");
+                },
+                mapper
+        );
+        ChatTranscriptStore transcriptStore = mock(ChatTranscriptStore.class);
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new FixedProviderRuntimeResolver(new ConfiguredChatModel(
+                        new FatalToolModel(), new OpenAiChatRequestFactory())),
+                List.of(backendApiTool),
+                mapper,
+                ConfirmationService.random(mapper),
+                new InMemoryToolReplayStore(mapper),
+                transcriptStore,
+                "",
+                4
+        );
+
+        assertThatThrownBy(() -> runtime.stream(new ChatRequest(
+                        "列出文件", null, null, "failed-session", "auto"))
+                .collectList().block(Duration.ofSeconds(2)))
+                .hasRootCauseInstanceOf(AssertionError.class);
+
+        verify(transcriptStore).appendAssistant(
+                "failed-session", "出错了：fatal?api_key=[REDACTED]", "");
+        verify(transcriptStore).updateLastTrace(eq("failed-session"), anyList());
     }
 
     @Test

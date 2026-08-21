@@ -155,6 +155,22 @@ public final class ChatSseEvents {
      * @return {@code event=error, data={error: ...}} 事件。
      */
     public static ChatSseEvent error(String message) {
-        return new ChatSseEvent("error", Map.of("error", message == null ? "" : message));
+        return error(message, null);
+    }
+
+    /**
+     * 创建携带当前会话 ID 的流内错误事件。
+     *
+     * @param message 面向客户端的错误消息；空值编码为空字符串。
+     * @param sessionId 已由服务端确认的会话 ID，可为空。
+     * @return {@code event=error, data={error: ..., session_id?: ...}} 事件。
+     */
+    public static ChatSseEvent error(String message, String sessionId) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("error", message == null ? "" : message);
+        if (sessionId != null && !sessionId.isBlank()) {
+            data.put("session_id", sessionId);
+        }
+        return new ChatSseEvent("error", data);
     }
 }
