@@ -14,10 +14,11 @@ import { getStatus, getConfig } from "@/lib/api/config";
 import LoginCard from "@/components/auth/LoginCard";
 import RescanCard from "@/components/auth/RescanCard";
 import ServerNotReadyCard from "@/components/auth/ServerNotReadyCard";
-import { ApiError, authenticatedFetch, ensureBase, getDeviceToken } from "@/lib/api/client";
+import { authenticatedFetch, ensureBase, getDeviceToken } from "@/lib/api/client";
 import { Capacitor } from "@capacitor/core";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
+import { authModeForBootFailure } from "@/lib/boot-errors";
 import { EV, emitFilesChanged, emitRefresh } from "@/lib/events";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HardDrive } from "lucide-react";
@@ -51,7 +52,6 @@ function SkeletonScreen() {
 }
 
 export default function Home() {
-  const loading = useAppStore((s) => s.loading);
   const authMode = useAppStore((s) => s.authMode);
   const configured = useAppStore((s) => s.configured);
   const tab = useAppStore((s) => s.tab);
@@ -108,11 +108,33 @@ export default function Home() {
   const toggleFiles = useCallback(() => togglePanel("files"), [togglePanel]);
 
   const boot = useCallback(async () => {
+    setLoading(true);
+    const native = Capacitor.isNativePlatform();
     try {
-      await ensureBase(); // 原生 App：从扫码配置解析服务器地址与设备令牌
-      const native = Capacitor.isNativePlatform();
+      try {
+        await ensureBase(); // 原生 App：从扫码配置解析服务器地址与设备令牌
+      } catch (error) {
+        if (native) {
+          window.dispatchEvent(new CustomEvent(EV.toast, {
+            detail: { kind: "error", text: `安全配置读取失败：${String(error)}` },
+          }));
+          setAuthMode("rescan");
+        } else {
+          setAuthMode("server-error");
+        }
+        return;
+      }
       if (native) {
-        const { server } = await ServerConfig.getServer();
+        let server: string | null;
+        try {
+          ({ server } = await ServerConfig.getServer());
+        } catch (error) {
+          window.dispatchEvent(new CustomEvent(EV.toast, {
+            detail: { kind: "error", text: `安全配置读取失败：${String(error)}` },
+          }));
+          setAuthMode("rescan");
+          return;
+        }
         if (!server) {
           window.dispatchEvent(new CustomEvent(EV.toast, {
             detail: { kind: "error", text: "未连接服务器：请扫码连接" },
@@ -122,13 +144,30 @@ export default function Home() {
         }
       }
       // 认证门：web=设密/登录页；App=扫码授权（无令牌即重扫码）
-      const ares = await authenticatedFetch("/auth/status");
-      if (!ares.ok) {
-        setAuthMode(native ? "rescan" : "login");
+      let ares: Response;
+      try {
+        ares = await authenticatedFetch("/auth/status");
+      } catch (error) {
+        setAuthMode(authModeForBootFailure(native, error));
         return;
       }
-      const a = await ares.json() as { initialized: boolean };
-      if (!a.initialized) {
+      if (!ares.ok) {
+        setAuthMode(authModeForBootFailure(native, ares.status));
+        return;
+      }
+      let authStatus: unknown;
+      try {
+        authStatus = await ares.json();
+      } catch (error) {
+        setAuthMode(authModeForBootFailure(native, error));
+        return;
+      }
+      if (typeof authStatus !== "object" || authStatus === null
+          || typeof (authStatus as { initialized?: unknown }).initialized !== "boolean") {
+        setAuthMode("server-error");
+        return;
+      }
+      if (!(authStatus as { initialized: boolean }).initialized) {
         if (native) {
           window.dispatchEvent(new CustomEvent(EV.toast, {
             detail: { kind: "error", text: "请先在网页端设置密码，再扫码连接" },
@@ -145,36 +184,29 @@ export default function Home() {
       }
       setAuthMode("ready");
       try {
-        const status = await getStatus() as { configured: boolean };
-        setConfigured(status.configured);
-        if (status.configured) {
+        const status: unknown = await getStatus();
+        if (typeof status !== "object" || status === null
+            || typeof (status as { configured?: unknown }).configured !== "boolean") {
+          throw new Error("invalid configuration status response");
+        }
+        const configuredNow = (status as { configured: boolean }).configured;
+        setConfigured(configuredNow);
+        if (configuredNow) {
           try {
             const cfg = await getConfig();
             setModelName(cfg.llm?.model || "");
           } catch { /* 忽略 */ }
         }
       } catch (e) {
-        // Auth errors can cross a separately bundled client boundary, so inspect the status structurally too.
-        const statusCode = e instanceof ApiError
-          ? e.status
-          : typeof e === "object" && e !== null && "status" in e
-            && typeof (e as { status?: unknown }).status === "number"
-            ? (e as { status: number }).status
-            : null;
-        if (statusCode === 401 || statusCode === 403) {
-          setAuthMode(native ? "rescan" : "login");
-          return;
-        }
-        // A failed authenticated status check must never masquerade as missing AI configuration.
-        setAuthMode(native ? "rescan" : "login");
+        setAuthMode(authModeForBootFailure(native, e));
       }
     } catch (error) {
-      if (Capacitor.isNativePlatform()) {
+      if (native) {
         window.dispatchEvent(new CustomEvent(EV.toast, {
-          detail: { kind: "error", text: `安全配置读取失败：${String(error)}` },
+          detail: { kind: "error", text: `启动检查失败：${String(error)}` },
         }));
       }
-      setAuthMode(Capacitor.isNativePlatform() ? "rescan" : "login");
+      setAuthMode("server-error");
     } finally {
       setLoading(false);
     }
@@ -225,15 +257,17 @@ export default function Home() {
     boot();
   }, [boot]);
 
-  if (loading) return <SkeletonScreen />;
+  if (authMode === "loading") return <SkeletonScreen />;
   if (authMode === "rescan")
     return <><RescanCard onPasswordFallback={() => setAuthMode("login")} /><ToastStack /></>;
   if (authMode === "setup") return <><LoginCard mode="setup" onDone={boot} /><ToastStack /></>;
   if (authMode === "login") return <><LoginCard mode="login" onDone={boot} /><ToastStack /></>;
+  if (authMode === "server-error")
+    return <><ServerNotReadyCard reason="unavailable" onRetry={boot} /><ToastStack /></>;
   // AI 未配置：web 端走 Onboarding 向导；原生 App 只提示到网页配置（App 不含 AI 设置界面）
   if (!configured)
     return <>
-      {Capacitor.isNativePlatform() ? <ServerNotReadyCard onRetry={boot} /> : <Onboarding />}
+      {Capacitor.isNativePlatform() ? <ServerNotReadyCard reason="configuration" onRetry={boot} /> : <Onboarding />}
       <ToastStack />
     </>;
 

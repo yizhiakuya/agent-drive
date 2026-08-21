@@ -14,11 +14,14 @@
     <select id="pending" resultType="map">
         SELECT id, user_id::text AS user_id, event_type, aggregate_type, aggregate_id, idempotency_key,
                payload::text AS payload_json,
+               failure_count, last_error,
                EXTRACT(EPOCH FROM created_at) AS created_at,
-               EXTRACT(EPOCH FROM published_at) AS published_at
+               EXTRACT(EPOCH FROM published_at) AS published_at,
+               EXTRACT(EPOCH FROM dead_lettered_at) AS dead_lettered_at
         FROM outbox_events
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND published_at IS NULL
+          AND dead_lettered_at IS NULL
         ORDER BY id ASC
         LIMIT #{limit}
     </select>
@@ -26,10 +29,13 @@
     <select id="pendingAll" resultType="map">
         SELECT id, user_id::text AS user_id, event_type, aggregate_type, aggregate_id, idempotency_key,
                payload::text AS payload_json,
+               failure_count, last_error,
                EXTRACT(EPOCH FROM created_at) AS created_at,
-               EXTRACT(EPOCH FROM published_at) AS published_at
+               EXTRACT(EPOCH FROM published_at) AS published_at,
+               EXTRACT(EPOCH FROM dead_lettered_at) AS dead_lettered_at
         FROM outbox_events
         WHERE published_at IS NULL
+          AND dead_lettered_at IS NULL
         ORDER BY id ASC
         LIMIT #{limit}
     </select>
@@ -40,5 +46,16 @@
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND id = #{eventId}
           AND published_at IS NULL
+          AND dead_lettered_at IS NULL
+    </update>
+
+    <update id="recordFailure">
+        UPDATE outbox_events
+        SET failure_count = failure_count + 1,
+            last_error = LEFT(#{error, jdbcType=VARCHAR}, 1000),
+            dead_lettered_at = CASE WHEN #{deadLetter} THEN now() ELSE dead_lettered_at END
+        WHERE id = #{eventId}
+          AND published_at IS NULL
+          AND dead_lettered_at IS NULL
     </update>
 </mapper>

@@ -1,6 +1,6 @@
 # Android 客户端
 
-> 现行方案（2026-08-19）：Capacitor 7 原生壳复用 Next.js 静态前端。PWA 是日常主用形态，App 只承载 PWA 无法可靠提供的扫码配对、后台同步、MediaStore、通知和设备集成。当前版本号为 `1.0.28`（versionCode `28`）。
+> 现行方案（2026-08-21）：Capacitor 7 原生壳复用 Next.js 静态前端。PWA 是日常主用形态，App 只承载 PWA 无法可靠提供的扫码配对、后台同步、MediaStore、通知和设备集成。当前版本号为 `1.0.29`（versionCode `29`）。
 
 ## 1. 工程与职责
 
@@ -45,7 +45,8 @@ frontend/out ──Capacitor──▶ APK 本地 web 资源
 - 客户端可先 `GET /api/v1/files/dedupe?md5=...` 做只读预检，但只有服务端 verified 且 revision 仍匹配才命中秒传。
 - 真正上传始终由服务端重新计算 MD5；multipart part 名为 `file`，`path` 为 query 参数，`md5` 和 `noclobber` 为表单字段。
 - 同名文件使用原子 noclobber 自动改名，不覆盖已有文件。
-- 永久 4xx（400/413/415/416/422）跳过该项并推进连续水位；连接失败、401/403、5xx 和其他可能瞬时错误中止本批并退避重试。
+- HTTP 永久 4xx（400/413/415/416/422）跳过该项并推进连续水位；其他 4xx 冻结当前秒水位并继续本批，连接失败、401/403 和 5xx 中止本批并退避重试。
+- 本地媒体已删除（`FileNotFoundException`）或读取权限永久拒绝（`SecurityException`）时跳过该项；其他本地 I/O 失败冻结当前秒水位等待下轮重试。显式 `InterruptedException` 或已中断线程会保留/重设中断位、中止本批并保留 pending，不能被“单张失败继续”吞掉。
 
 ### 调度与权限
 

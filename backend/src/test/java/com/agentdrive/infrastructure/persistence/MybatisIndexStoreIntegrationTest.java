@@ -47,6 +47,9 @@ class MybatisIndexStoreIntegrationTest {
                     .satisfies(row -> assertThat(row)
                             .containsEntry("path", "notes.txt")
                             .containsKey("search_snippet"));
+            assertThat(index.chunks(owner, "embedding-test", List.of("notes.txt"), 10)).hasSize(1);
+            assertThat(index.chunks(owner, "embedding-test", List.of("notes.txt"), true, null, 10))
+                    .hasSize(2);
             assertThat(index.chunks(other, null, 10)).isEmpty();
             assertThat(index.file(other, "notes.txt")).isNull();
             jdbc.update("UPDATE files SET revision = 2 WHERE id = ?::uuid", fileId);

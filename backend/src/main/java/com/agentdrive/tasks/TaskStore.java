@@ -79,6 +79,26 @@ public interface TaskStore {
                           String dedupeKey, String origin, UUID parentId);
 
     /**
+     * 创建带显式优先级和最大尝试次数的任务。默认实现保留旧适配器行为；PostgreSQL
+     * 实现会把两个调度字段写入任务行。
+     * @param userId 任务归属 owner。
+     * @param type Worker 分发的任务类型。
+     * @param lane Worker 领取 lane。
+     * @param payload 任务结构化参数。
+     * @param dedupeKey owner 活跃任务范围内的去重键。
+     * @param origin 创建来源。
+     * @param parentId 可选父任务 UUID。
+     * @param priority 调度优先级。
+     * @param maxAttempts 最大执行次数。
+     * @return 新任务或同 owner 去重命中的现有任务。
+     */
+    default EnqueueResult enqueue(UUID userId, String type, String lane, Map<String, Object> payload,
+                                  String dedupeKey, String origin, UUID parentId,
+                                  int priority, int maxAttempts) {
+        return enqueue(userId, type, lane, payload, dedupeKey, origin, parentId);
+    }
+
+    /**
      * 请求取消一条属于用户的任务。
      * queued/retry_wait 任务可直接转为 cancelled，running 任务写入 cancel_requested 供 Worker 在下次状态迁移时处理，终态任务保持不变。
      *
@@ -86,7 +106,7 @@ public interface TaskStore {
      * @param taskId 要取消的任务 UUID。
      * @return 取消请求后的任务状态和是否发生状态变化等结果。
      */
-    Map<String, Object> cancel(UUID userId, UUID taskId);
+    TransitionResult cancel(UUID userId, UUID taskId);
 
     /**
      * 对可重试的失败任务创建下一次执行机会，并清理或更新其租约、尝试次数和状态。
@@ -96,7 +116,7 @@ public interface TaskStore {
      * @param taskId 要重试的任务 UUID。
      * @return 重试后的任务状态和调度信息。
      */
-    Map<String, Object> retry(UUID userId, UUID taskId);
+    TransitionResult retry(UUID userId, UUID taskId);
 
     /**
      * 返回用户任务事件表当前的最大事件 ID，供 SSE 客户端建立增量读取起点。
@@ -166,6 +186,16 @@ public interface TaskStore {
      * @param created 本次调用插入新任务时为 {@code true}，命中活跃 dedupe key 时为 {@code false}。
      */
     record EnqueueResult(Map<String, Object> task, boolean created) {
+    }
+
+    /**
+     * 用户触发的任务状态迁移结果。
+     *
+     * @param task 迁移后或未迁移时的任务快照；任务不存在时为 {@code null}。
+     * @param changed 本次调用是否实际改变了数据库状态并写入对应事件。
+     * @param reason 稳定的结果原因，供 HTTP 与 Agent 入口统一映射错误语义。
+     */
+    record TransitionResult(Map<String, Object> task, boolean changed, String reason) {
     }
 
     /** 单个任务删除的业务结果；{@code reason} 仅在未删除时用于映射稳定的 API 错误。 */

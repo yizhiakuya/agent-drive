@@ -12,7 +12,7 @@ frontend/src/
 │   ├── chat/            # ChatPanel、工具轨迹、流事件/状态/帧模块
 │   ├── files/           # FilePage、FilePanel、FilePreview、FileDetails
 │   ├── sessions/        # 会话列表和摘要刷新
-│   ├── settings/        # provider、embedding、设备和同步设置
+│   ├── settings/        # provider、embedding、Skill、设备和同步设置
 │   ├── tasks/           # 任务列表、详情和状态流
 │   ├── workspace/       # 工作区面板收缩、拖拽调整和键盘分隔轨道
 │   ├── onboarding/      # web-only AI 配置引导
@@ -30,7 +30,7 @@ frontend/src/
 
 ## 2. 页面与状态
 
-`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载，避免切换页面时丢失 SSE 流和工具步骤。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
+`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。启动检查把 401/403 与服务故障分开：前者进入 web 登录或原生重扫码，5xx、网络、JSON 解析和布尔字段契约错误进入保留凭据的 `server-error`，通过同一入口重新执行完整认证与配置检查。整页 Skeleton 只由初次 `authMode=loading` 控制；下拉刷新仍更新 store.loading，但工作区继续挂载，因此未发送草稿、SSE 和工具步骤不会丢失。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
 
 对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。会话列表在 `md` 以下隐藏，文件栏在 `xl` 以下隐藏；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。
 
@@ -54,15 +54,17 @@ frontend/src/
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
 - ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。
 
-解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
+解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。流异常收尾必须先同步 `flush` 并 `cancel` 当前帧，再清理空助手占位和追加错误消息；已经上屏或待冲刷的正文、reasoning 与工具步骤不能被错误气泡或迟到 timer 覆盖。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
 
-ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即清空旧会话的临时内容，但迟到的历史响应只能被丢弃；模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的规则，并以发起探测时的表单快照调用接口，避免用户修改地址或 key 后旧结果污染当前选择器。
+ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即清空旧会话的临时内容，但迟到的历史响应只能被丢弃；模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的规则，并以发起探测时的表单快照调用接口，避免用户修改地址或 key 后旧结果污染当前选择器。LLM/视觉的协议或 base URL 变化、embedding 的 provider/base URL/model 变化时必须清空对应 API key 草稿；任一配置保存成功或从服务端重载后也要销毁表单中的明文 key。
 
 ## 4. 文件页请求生命周期
 
-`FilePage` 对列表、选中文件详情、完整文本和索引刷新分别维护请求代次，并在响应提交前校验当前路径/选中文件。目录切换、文件切换和卸载都会使旧请求失效；迟到响应不能覆盖新状态。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
+`FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
 
 `FilePanel` 对目录列表和文件详情使用独立请求代次；`TaskPage` 的任务筛选列表、`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
+
+`SkillsManager` 独立维护列表与详情请求代次，搜索和分页读取摘要，选中后才加载完整 instructions。内置 Skill 只读且始终启用；自定义 Skill 支持新建、编辑、启停和删除，mutation 后重拉当前查询。新建名称保存后不可改名，避免把 rename 隐式实现成跨记录覆盖。
 
 任务中心列表由 `listTasks` 提供顶层任务摘要，并通过 `has_more` 判断是否还有下一页；Worker 的 `progress` 事件触发列表刷新，已展开的任务随后重新读取 `getTaskDetail`，因此详情区能持续显示当前阶段、当前对象、计数/百分比、执行输入、结果、失败原因、时间/尝试次数和子任务进度。确定总量显示百分比，未知总量显示不定进度和阶段提示；详情请求使用独立请求代次，快速切换任务或卸载页面时，迟到详情不得覆盖当前展开任务；结构化 JSON 展示必须经过 `formatJson` 脱敏。
 
@@ -82,6 +84,7 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 ## 5. 认证与原生桥
 
 - Web/PWA 使用 HttpOnly Cookie；401 通过 `agent-drive:unauthorized` 返回认证入口。
+- 启动阶段只有 401/403 表示身份失效；`/auth/status`、`/config/status` 的 5xx、网络、JSON 解析或字段契约错误展示可重试服务故障，不清理 Cookie/设备令牌，也不降级成“AI 未配置”。
 - Android 首启扫码兑换设备令牌，原生侧写入独立 EncryptedSharedPreferences；没有令牌时进入重扫码页，密码登录是逃生口。
 - AI 配置只在 web 设置页提供，App 通过原生插件管理服务器地址、设备令牌和相册同步。
 - `MainActivity` 必须在 `super.onCreate()` 前注册 Capacitor 插件；插件生命周期、权限回调和 observer 约束见 [`android.md`](android.md) 与 [`AGENTS.md`](../AGENTS.md)。

@@ -28,9 +28,9 @@ public interface ScheduleMapper {
     /**
      * 插入或更新 owner 指定名称的任务调度配置。
      *
-     * <p>首次插入保存全部调度字段，并将 {@code next_run_at} 和 {@code updated_at} 设为当前时间；
+     * <p>首次插入保存全部调度字段，并使用调用方已校验计算的 {@code next_run_at}；
      * 同一 owner 和名称冲突时更新 cron、调度参数、任务参数、启用状态、优先级、最大尝试次数和
-     * 时区，同时重置 {@code next_run_at} 为当前时间。语句返回更新后的完整调度记录。
+     * 时区，同时替换 {@code next_run_at} 并清除旧错误。语句返回更新后的完整调度记录。
      *
      * @param userId 调度配置所属 owner 的 UUID 字符串
      * @param name owner 内唯一的调度名称
@@ -44,6 +44,7 @@ public interface ScheduleMapper {
      * @param priority 到期任务的优先级
      * @param maxAttempts 到期任务允许的最大尝试次数
      * @param timezone 解释 cron 的时区
+     * @param nextRunAt 已按表达式计算的首次运行 Unix 秒
      * @return 插入或更新后的调度字段映射，包含数据库生成的 ID 和时间字段
      */
     Map<String, Object> upsert(@Param("userId") String userId,
@@ -57,7 +58,8 @@ public interface ScheduleMapper {
                                @Param("enabled") boolean enabled,
                                @Param("priority") int priority,
                                @Param("maxAttempts") int maxAttempts,
-                               @Param("timezone") String timezone);
+                               @Param("timezone") String timezone,
+                               @Param("nextRunAt") double nextRunAt);
 
     /**
      * 删除 owner 指定名称的调度配置。
@@ -108,4 +110,8 @@ public interface ScheduleMapper {
      */
     int markDispatched(@Param("userId") String userId, @Param("scheduleId") String scheduleId,
                        @Param("nextRunAt") double nextRunAt, @Param("taskId") String taskId);
+
+    /** 禁用无法解析的历史计划并保留稳定错误说明，避免其反复占据 Worker 队首。 */
+    int disableInvalid(@Param("userId") String userId, @Param("scheduleId") String scheduleId,
+                       @Param("error") String error);
 }

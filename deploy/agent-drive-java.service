@@ -8,7 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=/opt/agent-drive-java
-ExecStart=/usr/bin/java -jar /opt/agent-drive-java/agent-drive-backend.jar --spring.profiles.active=db,java-chat --app.mode=api
+ExecStart=/usr/bin/java -jar /opt/agent-drive-java/agent-drive-backend.jar --spring.profiles.active=db,java-chat --app.mode=api --server.address=127.0.0.1
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30

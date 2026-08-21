@@ -64,19 +64,17 @@ function adoptStreamSession(sessionId: unknown, lifecycle: StreamLifecycle): voi
   lifecycle.bumpSessions();
 }
 
-function appendStreamError(error: unknown, setMessages: StreamLifecycle["setMessages"]): void {
+function appendStreamError(
+  error: unknown,
+  lifecycle: StreamLifecycle,
+): void {
+  lifecycle.frame.flush();
+  lifecycle.frame.cancel();
   const message = error instanceof Error ? error.message : String(error);
-  setMessages((messages) => {
-    const copy = [...messages];
-    const errorMessage = { type: "assistant" as const, content: `出错了：${message}` };
-    const last = copy.at(-1);
-    if (last?.type === "assistant" && !last.content && !last.reasoning) {
-      copy[copy.length - 1] = errorMessage;
-    } else {
-      copy.push(errorMessage);
-    }
-    return copy;
-  });
+  lifecycle.setMessages((messages) => [
+    ...removeEmptyAssistantMessages(messages),
+    { type: "assistant" as const, content: `出错了：${message}` },
+  ]);
 }
 
 function finishStream(result: Record<string, unknown> | null, lifecycle: StreamLifecycle): void {
@@ -213,7 +211,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     } catch (error) {
       if (isAbortError(error) || generation !== streamGenerationRef.current) return;
       adoptStreamSession(currentErrorSessionId(error), lifecycle);
-      appendStreamError(error, setMessages);
+      appendStreamError(error, lifecycle);
     } finally {
       if (frameRef.current === frame) frameRef.current = null;
       if (generation === streamGenerationRef.current) applyBusy(false);

@@ -118,7 +118,8 @@ public class MybatisTaskWorkerStore implements TaskWorkerStore {
     }
 
     /**
-     * 在 Worker 仍持有租约时将任务置为 failed，并记录事件。
+     * 在 Worker 仍持有租约时记录本次执行失败，按取消标志和最大尝试次数进入
+     * cancelled、retry_wait 或 failed，释放租约并追加 failed 事件。
      * @param workerId 当前 Worker 的 ID。
      * @param taskId 已领取任务的 UUID 文本。
      * @param error 失败原因；非空文本截断到 2000 个 Java 字符。
@@ -132,7 +133,7 @@ public class MybatisTaskWorkerStore implements TaskWorkerStore {
     }
 
     /**
-     * 回收已过期任务租约，使任务重新进入可领取状态。
+     * 回收已过期任务租约，使可重试任务进入 retry_wait，取消或耗尽重试的任务进入终态。
      * @return 被恢复的任务数量。
      */
     @Override

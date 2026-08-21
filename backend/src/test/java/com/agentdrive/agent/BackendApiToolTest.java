@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,6 +42,81 @@ class BackendApiToolTest {
         assertThat(result.path("operations").size()).isGreaterThan(0);
         assertThat(result.path("operations").findValuesAsText("operation"))
                 .contains("POST /api/v1/files/upload");
+        assertThat(result.path("total_matches").asInt()).isEqualTo(2);
+        assertThat(result.path("returned").asInt()).isEqualTo(2);
+        assertThat(result.path("has_more").asBoolean()).isFalse();
+        assertThat(result.path("next_offset").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void paginatesDiscoveryAndReportsTheCompleteMatchWindow() throws Exception {
+        OperationCatalog pagedCatalog = new OperationCatalog(IntStream.range(0, 23)
+                .mapToObj(index -> OperationDefinition.http(
+                        "GET", "/api/v1/resources/%02d".formatted(index), "Registered API resource"))
+                .toList());
+        BackendApiTool tool = new BackendApiTool(pagedCatalog, (operation, request) -> Map.of(), mapper);
+
+        JsonNode first = mapper.readTree(tool.executeRaw("""
+                {"action":"discover","query":"api","discovery_offset":0,"discovery_limit":10}
+                """, null));
+        JsonNode second = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "api", 10, 10, null, null, null, null, null)));
+        JsonNode last = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "api", 20, 10, null, null, null, null, null)));
+
+        assertThat(first.path("operations")).hasSize(10);
+        assertThat(first.path("total_matches").asInt()).isEqualTo(23);
+        assertThat(first.path("returned").asInt()).isEqualTo(10);
+        assertThat(first.path("offset").asInt()).isZero();
+        assertThat(first.path("limit").asInt()).isEqualTo(10);
+        assertThat(first.path("has_more").asBoolean()).isTrue();
+        assertThat(first.path("next_offset").asInt()).isEqualTo(10);
+        assertThat(first.path("operations").get(0).path("operation").asText())
+                .isEqualTo("GET /api/v1/resources/00");
+
+        assertThat(second.path("operations")).hasSize(10);
+        assertThat(second.path("offset").asInt()).isEqualTo(10);
+        assertThat(second.path("next_offset").asInt()).isEqualTo(20);
+        assertThat(second.path("operations").get(0).path("operation").asText())
+                .isEqualTo("GET /api/v1/resources/10");
+
+        assertThat(last.path("operations")).hasSize(3);
+        assertThat(last.path("returned").asInt()).isEqualTo(3);
+        assertThat(last.path("offset").asInt()).isEqualTo(20);
+        assertThat(last.path("has_more").asBoolean()).isFalse();
+        assertThat(last.path("next_offset").asInt()).isEqualTo(23);
+    }
+
+    @Test
+    void discoversGenericChineseBackendVocabulary() throws Exception {
+        BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> Map.of(), mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "查看后端接口和操作", null, null, null, null, null)));
+
+        assertThat(result.path("total_matches").asInt()).isEqualTo(3);
+        assertThat(result.path("operations")).hasSize(3);
+        assertThat(result.path("has_more").asBoolean()).isFalse();
+    }
+
+    @Test
+    void normalizesDiscoveryOffsetAndCapsPageSize() throws Exception {
+        OperationCatalog pagedCatalog = new OperationCatalog(IntStream.range(0, 23)
+                .mapToObj(index -> OperationDefinition.http(
+                        "GET", "/api/v1/resources/%02d".formatted(index), "Registered API resource"))
+                .toList());
+        BackendApiTool tool = new BackendApiTool(pagedCatalog, (operation, request) -> Map.of(), mapper);
+
+        JsonNode capped = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "api", -10, 100, null, null, null, null, null)));
+        JsonNode defaulted = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "api", 0, 0, null, null, null, null, null)));
+
+        assertThat(capped.path("offset").asInt()).isZero();
+        assertThat(capped.path("limit").asInt()).isEqualTo(OperationCatalog.MAX_DISCOVERY_LIMIT);
+        assertThat(capped.path("returned").asInt()).isEqualTo(OperationCatalog.MAX_DISCOVERY_LIMIT);
+        assertThat(defaulted.path("limit").asInt()).isEqualTo(OperationCatalog.DISCOVERY_LIMIT);
+        assertThat(defaulted.path("returned").asInt()).isEqualTo(OperationCatalog.DISCOVERY_LIMIT);
     }
 
     @Test
@@ -134,7 +210,10 @@ class BackendApiToolTest {
 
         assertThat(specifications).hasSize(1);
         assertThat(specifications.get(0).name()).isEqualTo("backend_api");
-        assertThat(specifications.get(0).parameters().properties()).containsKeys("action", "operation", "query_params");
+        assertThat(specifications.get(0).description())
+                .contains("paginated", "next_offset", "has_more");
+        assertThat(specifications.get(0).parameters().properties()).containsKeys(
+                "action", "operation", "query_params", "discovery_offset", "discovery_limit");
     }
 
     @Test

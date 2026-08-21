@@ -1,6 +1,8 @@
 package com.agentdrive.tasks;
 
 import com.agentdrive.outbox.OutboxStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +16,7 @@ import java.util.UUID;
 @Service
 @Profile({"java-files", "java-auth", "java-chat"})
 public class IndexOutboxConsumer {
+    private static final Logger LOGGER = LoggerFactory.getLogger(IndexOutboxConsumer.class);
     private final OutboxStore outbox;
     private final TaskStore tasks;
 
@@ -30,39 +33,86 @@ public class IndexOutboxConsumer {
     /**
      * 批量读取待发布事件，将 {@code file.changed} 的 upsert、move/copy、delete 动作分别映射为
      * {@code index.file}、{@code index.rebuild}、{@code index.cleanup} 任务，并仅在任务入队后
-     * 标记 outbox 事件已发布。事件 ID 进入任务去重键，格式错误或未知事件会跳过且不会伪造发布成功。
+     * 标记 outbox 事件已发布。事件 ID 进入任务去重键；未知类型、坏 payload/action/path 进入死信，
+     * 瞬时入队失败累计错误并留待重试，只有数据库类型保证不可能出现的坏 ID 才只能记录日志。
      * @param limit 本轮最多读取的 outbox 事件数，实际值限制在 1 到 100 之间。
      * @return 成功标记为已发布的事件数量。
      */
     public int consumeOnce(int limit) {
         int consumed = 0;
         for (Map<String, Object> event : outbox.pendingAll(Math.max(1, Math.min(limit, 100)))) {
-            if (!"file.changed".equals(String.valueOf(event.get("event_type")))) continue;
-            UUID userId;
             long eventId;
             try {
-                userId = UUID.fromString(String.valueOf(event.get("user_id")));
                 eventId = number(event.get("id"));
             } catch (RuntimeException invalidEvent) {
+                LOGGER.warn("outbox event has invalid database id error_type={}",
+                        invalidEvent.getClass().getSimpleName());
                 continue;
             }
-            Map<String, Object> payload = event.get("payload") instanceof Map<?, ?> map
-                    ? cast(map) : Map.of();
-            String action = String.valueOf(payload.getOrDefault("action", "upsert"));
-            Object rawPaths = payload.get("paths");
-            String path = rawPaths instanceof java.util.List<?> paths && !paths.isEmpty()
-                    ? String.valueOf("move".equals(action) ? paths.get(paths.size() - 1) : paths.get(0)) : "";
+            UUID userId;
+            try {
+                userId = UUID.fromString(String.valueOf(event.get("user_id")));
+            } catch (RuntimeException invalidOwner) {
+                deadLetter(eventId, "invalid_user_id");
+                continue;
+            }
+            if (!"file.changed".equals(event.get("event_type"))) {
+                deadLetter(eventId, "unsupported_event_type");
+                continue;
+            }
+            if (event.get("payload_error") instanceof String payloadError && !payloadError.isBlank()) {
+                deadLetter(eventId, payloadError);
+                continue;
+            }
+            if (!(event.get("payload") instanceof Map<?, ?> rawPayload)) {
+                deadLetter(eventId, "payload_must_be_object");
+                continue;
+            }
+            Map<String, Object> payload = cast(rawPayload);
+            if (!(payload.get("action") instanceof String action)
+                    || !("upsert".equals(action) || "delete".equals(action)
+                    || "move".equals(action) || "copy".equals(action))) {
+                deadLetter(eventId, "unsupported_action");
+                continue;
+            }
+            if (!(payload.get("paths") instanceof java.util.List<?> rawPaths)) {
+                deadLetter(eventId, "paths_must_be_list");
+                continue;
+            }
+            java.util.List<String> paths;
+            try {
+                paths = IndexTaskPaths.normalize(rawPaths);
+            } catch (IllegalArgumentException invalidPaths) {
+                deadLetter(eventId, "invalid_paths");
+                continue;
+            }
             String type = switch (action) {
                 case "delete" -> "index.cleanup";
                 case "move", "copy" -> "index.rebuild";
-                default -> "index.file";
+                case "upsert" -> "index.file";
+                default -> throw new IllegalStateException("validated action became unsupported");
             };
+            String path = "move".equals(action) ? paths.get(paths.size() - 1) : paths.get(0);
             Map<String, Object> taskPayload = "index.file".equals(type) ? Map.of("path", path) : Map.of();
-            tasks.enqueue(userId, type, "index", taskPayload,
-                    "outbox-index:" + eventId, "outbox.file.changed", null);
+            try {
+                tasks.enqueue(userId, type, "index", taskPayload,
+                        "outbox-index:" + eventId, "outbox.file.changed", null);
+            } catch (RuntimeException enqueueError) {
+                String reason = "enqueue_failed: " + enqueueError.getClass().getSimpleName();
+                outbox.recordFailure(eventId, reason, false);
+                LOGGER.warn("outbox task enqueue failed event_id={} error_type={}",
+                        eventId, enqueueError.getClass().getSimpleName());
+                continue;
+            }
             if (outbox.markPublished(userId, eventId)) consumed++;
         }
         return consumed;
+    }
+
+    /** 将不可恢复事件移出 pending 队列，同时保留失败原因供数据库诊断。 */
+    private void deadLetter(long eventId, String reason) {
+        outbox.recordFailure(eventId, reason, true);
+        LOGGER.warn("outbox event dead-lettered event_id={} reason={}", eventId, reason);
     }
 
     /**

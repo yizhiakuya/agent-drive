@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -27,8 +28,29 @@ public class SyncEngineTest {
 
     @Test
     public void copyAndDigestRejectsUnreadableMedia() {
-        assertThrows(IOException.class,
+        assertThrows(FileNotFoundException.class,
                 () -> SyncEngine.copyAndDigest(null, new ByteArrayOutputStream()));
+    }
+
+    @Test
+    public void classifyLocalMediaFailureMapsPermanentRetryAndInterruptBranches() {
+        assertEquals(SyncEngine.LocalMediaResult.SKIP,
+                SyncEngine.classifyLocalMediaFailure(new FileNotFoundException("deleted"), false));
+        assertEquals(SyncEngine.LocalMediaResult.SKIP,
+                SyncEngine.classifyLocalMediaFailure(new SecurityException("permission"), false));
+        assertEquals(SyncEngine.LocalMediaResult.SKIP,
+                SyncEngine.classifyLocalMediaFailure(
+                        new IOException("wrapped", new FileNotFoundException("deleted")), false));
+
+        assertEquals(SyncEngine.LocalMediaResult.ABORT,
+                SyncEngine.classifyLocalMediaFailure(new InterruptedException("cancelled"), false));
+        assertEquals(SyncEngine.LocalMediaResult.ABORT,
+                SyncEngine.classifyLocalMediaFailure(new IOException("other"), true));
+
+        assertEquals(SyncEngine.LocalMediaResult.RETRY,
+                SyncEngine.classifyLocalMediaFailure(new IOException("temporary"), false));
+        assertEquals(SyncEngine.LocalMediaResult.RETRY,
+                SyncEngine.classifyLocalMediaFailure(new IllegalStateException("temporary"), false));
     }
 
     @Test

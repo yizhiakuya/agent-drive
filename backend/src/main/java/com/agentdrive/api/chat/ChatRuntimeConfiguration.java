@@ -19,7 +19,7 @@ import java.util.List;
 /**
  * 在 {@code java-chat} profile 下组装生产聊天 runtime 的 Spring bean。
  *
- * <p>配置把签名确认、operation catalog、backend_api 工具和持久化 owner-aware
+ * <p>配置把签名确认、operation catalog、backend_api/read_skill 工具和持久化 owner-aware
  * {@link LangChainAgentRuntime} 串起来；任务 Worker 和 HTTP API 共享同一套 operation
  * 定义与 PostgreSQL 状态存储，不在这里执行聊天或工具调用。
  */

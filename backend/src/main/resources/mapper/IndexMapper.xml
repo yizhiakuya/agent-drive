@@ -170,35 +170,22 @@
         WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND d.source_revision = f.revision
           AND c.source_revision = d.source_revision
+          <if test="afterChunkId != null">
+          AND c.id &gt; CAST(#{afterChunkId, jdbcType=VARCHAR} AS uuid)
+          </if>
           <if test="paths != null and paths.size() > 0">
           AND f.path IN
           <foreach collection="paths" item="path" open="(" separator="," close=")">
               #{path, jdbcType=VARCHAR}
           </foreach>
           </if>
+          <if test="includeCurrent == false">
           AND (#{fingerprint, jdbcType=VARCHAR} IS NULL
                OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR})
+          </if>
         ORDER BY c.id ASC
         LIMIT #{limit}
     </select>
-
-    <update id="clearEmbeddings">
-        UPDATE document_chunks c
-        SET embedding = NULL,
-            embedding_fingerprint = NULL
-        FROM documents d
-        JOIN files f ON f.id = d.file_id
-        WHERE c.document_id = d.id
-          AND d.source_revision = f.revision
-          AND c.source_revision = d.source_revision
-          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
-          <if test="paths != null and paths.size() > 0">
-          AND f.path IN
-          <foreach collection="paths" item="path" open="(" separator="," close=")">
-              #{path, jdbcType=VARCHAR}
-          </foreach>
-          </if>
-    </update>
 
     <update id="updateEmbedding">
         UPDATE document_chunks c

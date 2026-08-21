@@ -150,11 +150,33 @@ public class MybatisTaskStore implements TaskStore {
     @Transactional
     public EnqueueResult enqueue(UUID userId, String type, String lane, Map<String, Object> payload,
                                  String dedupeKey, String origin, UUID parentId) {
+        return enqueue(userId, type, lane, payload, dedupeKey, origin, parentId, 0, 3);
+    }
+
+    /**
+     * 在事务内创建带调度优先级和最大尝试次数的任务。
+     * @param userId 任务所属 owner。
+     * @param type Worker 分发的任务类型。
+     * @param lane Worker 领取 lane。
+     * @param payload 任务结构化参数。
+     * @param dedupeKey owner 活跃任务范围内的去重键。
+     * @param origin 创建来源。
+     * @param parentId 可选父任务 UUID。
+     * @param priority 非负调度优先级；负值收敛为 0。
+     * @param maxAttempts 最大尝试次数；小于 1 收敛为 1。
+     * @return 新任务或 owner 内同去重键的现有活跃任务。
+     */
+    @Override
+    @Transactional
+    public EnqueueResult enqueue(UUID userId, String type, String lane, Map<String, Object> payload,
+                                 String dedupeKey, String origin, UUID parentId,
+                                 int priority, int maxAttempts) {
         requireUser(userId);
         String serialized = json(payload == null ? Map.of() : payload);
         Map<String, Object> row = mapper.insertTask(
                 userId.toString(), parentId == null ? null : parentId.toString(), type, lane,
-                dedupeKey, serialized, origin == null ? "api" : origin
+                dedupeKey, serialized, origin == null ? "api" : origin,
+                Math.max(0, priority), Math.max(1, maxAttempts)
         );
         boolean created = row != null;
         if (!created && dedupeKey != null) {
@@ -172,36 +194,43 @@ public class MybatisTaskStore implements TaskStore {
      * 请求取消 owner 的任务并追加 cancel_requested 事件。
      * @param userId 任务所属 owner 的 UUID。
      * @param taskId 要取消的任务 UUID。
-     * @return 更新后的任务快照；任务不存在时为 {@code null}。
+     * @return 任务快照、是否实际变化及稳定原因；重复取消不会重复写事件。
      */
     @Override
     @Transactional
-    public Map<String, Object> cancel(UUID userId, UUID taskId) {
+    public TransitionResult cancel(UUID userId, UUID taskId) {
         requireUser(userId);
-        Map<String, Object> before = mapper.selectTask(userId.toString(), taskId.toString());
-        if (before == null) return null;
-        mapper.cancelTask(userId.toString(), taskId.toString());
-        mapper.insertEvent(taskId.toString(), "cancel_requested", "{}");
-        return task(mapper.selectTask(userId.toString(), taskId.toString()));
+        int changed = mapper.cancelTask(userId.toString(), taskId.toString());
+        if (changed > 0) {
+            mapper.insertEvent(taskId.toString(), "cancel_requested", "{}");
+            return new TransitionResult(
+                    task(mapper.selectTask(userId.toString(), taskId.toString())), true, "cancel_requested");
+        }
+        Map<String, Object> current = task(mapper.selectTask(userId.toString(), taskId.toString()));
+        return current == null
+                ? new TransitionResult(null, false, "task_not_found")
+                : new TransitionResult(current, false, "task_not_active");
     }
 
     /**
      * 仅对 failed/cancelled 任务执行重试转换并追加 retried 事件。
      * @param userId 任务所属 owner 的 UUID。
      * @param taskId 要重试的任务 UUID。
-     * @return 重试后的任务快照；状态不允许重试或更新未命中时为 {@code null}。
+     * @return 任务快照、是否实际变化及稳定原因；不存在与不可重试明确区分。
      */
     @Override
     @Transactional
-    public Map<String, Object> retry(UUID userId, UUID taskId) {
+    public TransitionResult retry(UUID userId, UUID taskId) {
         requireUser(userId);
-        Map<String, Object> before = mapper.selectTask(userId.toString(), taskId.toString());
-        if (before == null || !("failed".equals(before.get("status")) || "cancelled".equals(before.get("status")))) {
-            return null;
+        if (mapper.retryTask(userId.toString(), taskId.toString()) > 0) {
+            mapper.insertEvent(taskId.toString(), "retried", "{}");
+            return new TransitionResult(
+                    task(mapper.selectTask(userId.toString(), taskId.toString())), true, "retried");
         }
-        if (mapper.retryTask(userId.toString(), taskId.toString()) == 0) return null;
-        mapper.insertEvent(taskId.toString(), "retried", "{}");
-        return task(mapper.selectTask(userId.toString(), taskId.toString()));
+        Map<String, Object> current = task(mapper.selectTask(userId.toString(), taskId.toString()));
+        return current == null
+                ? new TransitionResult(null, false, "task_not_found")
+                : new TransitionResult(current, false, "task_not_retryable");
     }
 
     /**

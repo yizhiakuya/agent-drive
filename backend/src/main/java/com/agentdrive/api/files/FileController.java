@@ -23,7 +23,9 @@ import reactor.core.scheduler.Schedulers;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -39,6 +41,12 @@ import java.util.function.Function;
 @Profile({"java-files", "java-auth", "java-chat"})
 @RequestMapping("/api/v1/files")
 public final class FileController {
+    private static final Set<String> INLINE_MEDIA_TYPES = Set.of(
+            "application/pdf",
+            "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp",
+            "audio/mpeg", "audio/wav", "audio/mp4", "audio/flac", "audio/ogg",
+            "video/mp4", "video/webm", "video/ogg", "video/quicktime"
+    );
     private final FileStorageService files;
     private final WebRequestPrincipalResolver principalResolver;
 
@@ -326,17 +334,51 @@ public final class FileController {
         return principalResolver.resolveMedia(exchange)
                 .flatMap(principal -> Mono.fromCallable(() -> {
                     Path file = files.fileForRead(principal.userId(), path);
-                    Resource resource = new FileSystemResource(file);
                     String contentType = Files.probeContentType(file);
-                    MediaType mediaType = contentType == null
-                            ? MediaType.APPLICATION_OCTET_STREAM
-                            : MediaType.parseMediaType(contentType);
-                    ResponseEntity.BodyBuilder response = ResponseEntity.ok().contentType(mediaType);
-                    if (download) {
+                    String normalizedType = contentType == null ? ""
+                            : contentType.toLowerCase(Locale.ROOT).trim();
+                    boolean inline = INLINE_MEDIA_TYPES.contains(normalizedType);
+                    Resource resource = inline
+                            ? new FileSystemResource(file)
+                            : new OpaqueFileSystemResource(file);
+                    MediaType mediaType = inline
+                            ? MediaType.parseMediaType(normalizedType)
+                            : MediaType.APPLICATION_OCTET_STREAM;
+                    ResponseEntity.BodyBuilder response = ResponseEntity.ok()
+                            .contentType(mediaType)
+                            .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                            .header("X-Content-Type-Options", "nosniff")
+                            .header("Referrer-Policy", "no-referrer")
+                            .header("Content-Security-Policy", "sandbox; default-src 'none'")
+                            .header("Cross-Origin-Resource-Policy", "same-origin");
+                    if (download || !inline) {
                         response.header(HttpHeaders.CONTENT_DISPOSITION,
                                 ContentDisposition.attachment().filename(file.getFileName().toString()).build().toString());
                     }
                     return response.body(resource);
                 }).subscribeOn(Schedulers.boundedElastic()));
+    }
+
+    /**
+     * 隐藏资源文件名，防止 WebFlux 在显式 octet-stream 响应上按扩展名重新推断活动内容类型。
+     * 真实下载名仍由控制器写入的 {@code Content-Disposition} 提供。
+     */
+    private static final class OpaqueFileSystemResource extends FileSystemResource {
+        /**
+         * 创建指向真实文件、但不向消息编码器暴露文件名的资源。
+         * @param path 要流式读取的文件路径。
+         */
+        private OpaqueFileSystemResource(Path path) {
+            super(path);
+        }
+
+        /**
+         * 禁止消息编码器根据扩展名覆盖控制器选择的媒体类型。
+         * @return 始终为 null。
+         */
+        @Override
+        public String getFilename() {
+            return null;
+        }
     }
 }

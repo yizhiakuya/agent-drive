@@ -12,6 +12,7 @@ import androidx.core.app.NotificationManagerCompat;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -33,8 +34,8 @@ import java.util.Locale;
  *   pending（_ID 水位续传），绝不因 DATE_ADDED > 检查点 永久跳过照片
  * - 内容去重（秒传）：服务端按 MD5 命中则跳过传输；重试时已传文件零流量
  * - 同名冲突：noclobber 参数让服务端自动加序号，绝不覆盖
- * - 单张失败不阻塞整批：永久 4xx（400/413/415/416/422）跳过并推进水位，其余
- *   4xx 冻结水位下轮重试；失败计数由 Worker 决定退避重试
+ * - 单张失败不阻塞整批：永久 4xx 和已删除/无权限的本地媒体跳过并推进水位，其余
+ *   4xx/本地 I/O 冻结水位下轮重试；线程中断会保留中断位并中止整批
  */
 public final class SyncEngine {
 
@@ -73,6 +74,45 @@ public final class SyncEngine {
         SKIP,
         /** 其余 4xx（404/405/408/409/429 等）：可能瞬时，冻结水位下轮重试。 */
         RETRY
+    }
+
+    /** 单张本地媒体读取失败的处理类别（纯函数输出）。 */
+    enum LocalMediaResult {
+        /** 媒体已删除或权限永久拒绝：跳过并推进连续水位。 */
+        SKIP,
+        /** 普通本地 I/O 故障：冻结当前秒水位，下轮重试。 */
+        RETRY,
+        /** 显式或线程级中断：保留中断位并中止整批。 */
+        ABORT
+    }
+
+    /**
+     * 纯函数：按异常链和调用方捕获到的线程中断状态分类本地媒体失败。
+     *
+     * @param error 单张处理抛出的异常。
+     * @param threadInterrupted 捕获异常时线程是否已处于中断状态。
+     * @return 永久跳过、可重试或整批中止。
+     */
+    static LocalMediaResult classifyLocalMediaFailure(Throwable error, boolean threadInterrupted) {
+        if (threadInterrupted || hasCause(error, InterruptedException.class)) {
+            return LocalMediaResult.ABORT;
+        }
+        if (hasCause(error, FileNotFoundException.class) || hasCause(error, SecurityException.class)) {
+            return LocalMediaResult.SKIP;
+        }
+        return LocalMediaResult.RETRY;
+    }
+
+    /** 判断异常链中是否包含指定类型，并防止异常自引用造成死循环。 */
+    private static boolean hasCause(Throwable error, Class<? extends Throwable> type) {
+        Throwable current = error;
+        while (current != null) {
+            if (type.isInstance(current)) return true;
+            Throwable cause = current.getCause();
+            if (cause == current) break;
+            current = cause;
+        }
+        return false;
     }
 
     /**
@@ -307,6 +347,7 @@ public final class SyncEngine {
         boolean truncated = false;
         long truncatedSecond = -1;
         boolean aborted = false;
+        boolean interruptedAbort = false;
         boolean checkpointCommitted = false;
         Cursor c = null;
         running = true;
@@ -365,6 +406,12 @@ public final class SyncEngine {
                 String relFolder = folder + "/" + dateDir;
 
                 Uri uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                if (Thread.currentThread().isInterrupted()) {
+                    aborted = true;
+                    interruptedAbort = true;
+                    checkpoint.failure();
+                    break;
+                }
                 try {
                     uploadOne(ctx, base, relFolder, name, mime, uri, deviceToken);
                     count++;
@@ -381,9 +428,23 @@ public final class SyncEngine {
                     aborted = true;           // 连接级失败：中止整批
                     checkpoint.failure();     // 当前秒挂 pending，检查点不能越过
                     break;
-                } catch (Exception ignored) {
-                    failures++;               // 单张失败不阻塞整批；同秒下轮重试
-                    checkpoint.failure();
+                } catch (Exception error) {
+                    LocalMediaResult localResult = classifyLocalMediaFailure(
+                            error, Thread.currentThread().isInterrupted());
+                    if (localResult == LocalMediaResult.SKIP) {
+                        checkpoint.skip(id);
+                        currentFile = name;
+                        emitProgress();
+                    } else if (localResult == LocalMediaResult.ABORT) {
+                        Thread.currentThread().interrupt();
+                        aborted = true;
+                        interruptedAbort = true;
+                        checkpoint.failure();
+                        break;
+                    } else {
+                        failures++;           // 普通本地 I/O：同秒冻结，下轮重试
+                        checkpoint.failure();
+                    }
                 }
             }
             if (c != null) {
@@ -411,7 +472,9 @@ public final class SyncEngine {
             checkpointCommitted = true;
 
             if (aborted) {
-                ServerConfigStore.setLastError(ctx, "网络或服务器异常，已中止本批，将自动重试");
+                ServerConfigStore.setLastError(ctx, interruptedAbort
+                        ? "相册同步已中断，本批未完成"
+                        : "网络或服务器异常，已中止本批，将自动重试");
             } else if (failures > 0) {
                 ServerConfigStore.setLastError(ctx, failures + " 张上传失败，将自动重试");
             } else {
@@ -514,7 +577,7 @@ public final class SyncEngine {
 
     static String copyAndDigest(InputStream in, OutputStream out) throws Exception {
         if (in == null) {
-            throw new IOException("无法读取相册文件");
+            throw new FileNotFoundException("相册文件已删除或无法读取");
         }
         MessageDigest digest = MessageDigest.getInstance("MD5");
         byte[] buf = new byte[16384];

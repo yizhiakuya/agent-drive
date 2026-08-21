@@ -1,9 +1,9 @@
 package com.agentdrive.agent;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -16,15 +16,19 @@ import java.util.stream.Collectors;
  * 管理 Agent 可见的后端 operation 定义及其发现结果。
  *
  * <p>构造时按 operation 名去重并冻结列表和索引；discover 采用 operation、HTTP 方法、
- * 路径及摘要的包含匹配，最多返回六项。中文别名会先转换为稳定的英文检索词，供模型
+ * 路径及摘要的包含匹配，再按稳定顺序分页。中文别名会先转换为稳定的英文检索词，供模型
  * 从自然语言找到精确 operation。</p>
  */
 public final class OperationCatalog {
     public static final int DISCOVERY_LIMIT = 6;
+    public static final int MAX_DISCOVERY_LIMIT = 20;
 
     private static final Map<String, String> ALIASES = Map.ofEntries(
             Map.entry("文件", "file"),
             Map.entry("目录", "file"),
+            Map.entry("后端", "api"),
+            Map.entry("接口", "api"),
+            Map.entry("操作", "api"),
             Map.entry("上传", "upload"),
             Map.entry("移动", "move"),
             Map.entry("复制", "copy"),
@@ -40,7 +44,8 @@ public final class OperationCatalog {
             Map.entry("审计", "audit"),
             Map.entry("创建", "create"),
             Map.entry("查询", "query"),
-            Map.entry("设置", "setting")
+            Map.entry("设置", "setting"),
+            Map.entry("技能", "skill")
     );
 
     private final List<OperationDefinition> operations;
@@ -74,16 +79,58 @@ public final class OperationCatalog {
     }
 
     /**
-     * 根据自然语言查询返回最多六个最相关的 operation。
-     *
-     * <p>空查询返回目录前六项；非空查询按命中词计分，operation 名命中权重更高，
-     * 同分时按 operation 名排序，保证结果稳定。</p>
+     * 返回完整且冻结的登记目录，供内置 Skill 等确定性消费者使用。
+     * @return 按登记顺序排列的 operation
+     */
+    public List<OperationDefinition> operations() {
+        return operations;
+    }
+
+    /**
+     * 根据自然语言查询返回默认大小的第一页 operation。
      * @param query 用户或模型的检索词，可为空
-     * @return 排序后的候选 operation 列表
+     * @return 排序后的第一页候选 operation
      */
     public List<OperationDefinition> discover(String query) {
+        return discover(query, 0, DISCOVERY_LIMIT).operations();
+    }
+
+    /**
+     * 根据自然语言查询和分页窗口返回稳定的 operation 候选页。
+     *
+     * <p>空查询保留登记顺序；非空查询按命中词计分，operation 名命中权重更高，
+     * 同分时按 operation 名排序。偏移小于 0 时按 0 处理，页大小限制在 1 到
+     * {@link #MAX_DISCOVERY_LIMIT}，空值或非正数使用默认值。</p>
+     * @param query 用户或模型的检索词，可为空
+     * @param offset 匹配结果起始偏移，可为空
+     * @param limit 期望单页数量，可为空
+     * @return 包含总数、实际窗口和下一偏移的发现页
+     */
+    public DiscoveryPage discover(String query, Integer offset, Integer limit) {
+        List<OperationDefinition> matches = matches(query);
+        int pageLimit = limit == null || limit <= 0
+                ? DISCOVERY_LIMIT
+                : Math.min(limit, MAX_DISCOVERY_LIMIT);
+        int pageOffset = Math.min(Math.max(offset == null ? 0 : offset, 0), matches.size());
+        int end = Math.min(pageOffset + pageLimit, matches.size());
+        return new DiscoveryPage(
+                matches.subList(pageOffset, end),
+                matches.size(),
+                pageOffset,
+                pageLimit,
+                end < matches.size(),
+                end
+        );
+    }
+
+    /**
+     * 计算完整且稳定排序的 discover 匹配集。
+     * @param query 用户或模型的检索词，可为空
+     * @return 未分页的不可变匹配列表
+     */
+    private List<OperationDefinition> matches(String query) {
         if (query == null || query.isBlank()) {
-            return operations.stream().limit(DISCOVERY_LIMIT).toList();
+            return operations;
         }
         List<String> terms = terms(query);
         return operations.stream()
@@ -91,9 +138,37 @@ public final class OperationCatalog {
                 .filter(entry -> entry.getValue() > 0)
                 .sorted(Map.Entry.<OperationDefinition, Integer>comparingByValue(Comparator.reverseOrder())
                         .thenComparing(entry -> entry.getKey().operation()))
-                .limit(DISCOVERY_LIMIT)
                 .map(Map.Entry::getKey)
                 .toList();
+    }
+
+    /**
+     * 保存一页 discover 结果及继续读取所需的稳定游标元数据。
+     * @param operations 当前页 operation
+     * @param totalMatches 完整匹配数量
+     * @param offset 当前页实际起始偏移
+     * @param limit 当前页规范化大小
+     * @param hasMore 当前页之后是否仍有匹配项
+     * @param nextOffset 下一页起始偏移；末页等于 totalMatches
+     */
+    public record DiscoveryPage(List<OperationDefinition> operations,
+                                int totalMatches,
+                                int offset,
+                                int limit,
+                                boolean hasMore,
+                                int nextOffset) {
+        /**
+         * 冻结当前页列表，避免目录构造后被调用方修改。
+         * @param operations 当前页 operation
+         * @param totalMatches 完整匹配数量
+         * @param offset 当前页实际起始偏移
+         * @param limit 当前页规范化大小
+         * @param hasMore 当前页之后是否仍有匹配项
+         * @param nextOffset 下一页起始偏移
+         */
+        public DiscoveryPage {
+            operations = List.copyOf(operations);
+        }
     }
 
     /**
@@ -156,12 +231,12 @@ public final class OperationCatalog {
     }
 
     /**
-     * 把查询拆成小写检索词，并将中文业务词映射为目录使用的英文词。
+     * 把查询拆成去重的小写检索词，并将中文业务词映射为目录使用的英文词。
      * @param query 原始查询文本
      * @return 用于包含匹配的检索词列表
      */
     private static List<String> terms(String query) {
-        List<String> result = new ArrayList<>();
+        LinkedHashSet<String> result = new LinkedHashSet<>();
         String normalized = query.toLowerCase(Locale.ROOT);
         for (Map.Entry<String, String> alias : ALIASES.entrySet()) {
             if (normalized.contains(alias.getKey())) {
@@ -173,6 +248,6 @@ public final class OperationCatalog {
                 result.add(ALIASES.getOrDefault(raw, raw));
             }
         }
-        return result;
+        return List.copyOf(result);
     }
 }

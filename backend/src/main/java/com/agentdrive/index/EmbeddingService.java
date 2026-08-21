@@ -62,12 +62,12 @@ public interface EmbeddingService {
 
     /**
      * 按批次调用 provider，为指定范围的 chunks 生成向量并持久化。
-     * {@code force} 为真时先清除指定范围的已有向量；未配置 provider 时返回未配置结果，网络、响应数量或向量格式错误时返回可重试的失败统计。
+     * {@code force} 为真时通过稳定游标逐批覆盖指定范围的已有向量；未配置 provider 时返回未配置结果，网络、响应数量或向量格式错误时返回可重试的失败统计。
      *
      * @param userId 文件归属用户的 UUID。
      * @param paths 要处理的用户相对文件路径列表；空列表表示全部文件。
      * @param limit 每轮从索引选取的上限，实际批次还受 provider 的 64 条上限约束。
-     * @param force 是否先清除目标范围的旧向量。
+     * @param force 是否包含并覆盖目标范围的当前向量。
      * @return 含 {@code vectorized}、{@code embedded}、{@code batches} 和失败原因的结果 map。
      */
     Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force);
@@ -78,7 +78,7 @@ public interface EmbeddingService {
      * @param userId embedding 配置所属用户的 UUID。
      * @param paths 要处理的用户相对文件路径列表；空列表表示全部文件。
      * @param limit 每批最多处理的 chunk 数。
-     * @param force 是否先清除目标范围的旧向量。
+     * @param force 是否通过稳定游标包含并覆盖目标范围的当前向量。
      * @param progress 当前任务进度回调，可为空。
      * @return 向量化结果及处理统计。
      */
@@ -135,7 +135,7 @@ public interface EmbeddingService {
          * @param userId 文件归属用户的 UUID。
          * @param paths 要筛选的用户相对路径列表。
          * @param limit 每轮查询上限，最终会限制在 1 到 64 之间。
-         * @param force 是否先清除所选文件的旧向量。
+         * @param force 是否通过稳定游标包含并覆盖所选文件的当前向量。
          * @return provider 调用和索引写回的累计结果。
          */
         @Override
@@ -150,7 +150,7 @@ public interface EmbeddingService {
          * @param userId 文件归属用户的 UUID。
          * @param paths 要筛选的用户相对路径列表。
          * @param limit 每轮查询上限，最终会限制在 1 到 64 之间。
-         * @param force 是否清除并重算所选文件已有向量。
+         * @param force 是否包含并逐批覆盖所选文件已有向量。
          * @param progress 当前任务进度回调，可为空。
          * @return provider 调用和索引写回的累计结果。
          */
@@ -171,19 +171,25 @@ public interface EmbeddingService {
             }
             String fingerprint = fingerprint(config);
             List<String> selectedPaths = paths == null ? List.of() : List.copyOf(paths);
-            if (force) index.clearEmbeddings(userId, selectedPaths);
             String selectionFingerprint = fingerprint;
             int batchSize = Math.max(1, Math.min(limit, MAX_BATCH_SIZE));
             int embedded = 0;
             int batches = 0;
+            UUID afterChunkId = null;
             reporter.report(0, 0, selectedPaths.isEmpty()
                     ? "向量化：准备处理全部文本块"
                     : "向量化：准备处理 " + selectedPaths.size() + " 个文件");
             try {
                 while (true) {
-                    List<Map<String, Object>> chunks = selectedPaths.isEmpty()
-                            ? index.chunks(userId, selectionFingerprint, batchSize)
-                            : index.chunks(userId, selectionFingerprint, selectedPaths, batchSize);
+                    List<Map<String, Object>> chunks;
+                    if (force) {
+                        chunks = index.chunks(userId, selectionFingerprint, selectedPaths,
+                                true, afterChunkId, batchSize);
+                    } else {
+                        chunks = selectedPaths.isEmpty()
+                                ? index.chunks(userId, selectionFingerprint, batchSize)
+                                : index.chunks(userId, selectionFingerprint, selectedPaths, batchSize);
+                    }
                     if (chunks.isEmpty()) {
                         reporter.report(embedded, embedded, embedded == 0
                                 ? "向量化：没有待处理文本块"
@@ -214,6 +220,9 @@ public interface EmbeddingService {
                     }
                     embedded += batchEmbedded;
                     batches++;
+                    if (force) {
+                        afterChunkId = UUID.fromString(String.valueOf(chunks.get(chunks.size() - 1).get("id")));
+                    }
                     reporter.report(embedded, 0, "向量化：第 " + batches + " 批完成，已写入 "
                             + embedded + " 个文本块");
                 }

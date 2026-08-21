@@ -122,8 +122,9 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
 
     private Map<String, Object> taskTransition(BackendApiRequest request, UUID userId, boolean retry) {
         UUID taskId = UUID.fromString(BackendApiParams.requiredPath(request, "task_id"));
-        Map<String, Object> task = retry ? tasks.retry(userId, taskId) : tasks.cancel(userId, taskId);
-        String error = retry ? "task_not_retryable" : "task_not_found";
-        return task == null ? Map.of("ok", false, "error", error) : Map.of("task", task);
+        TaskStore.TransitionResult result = retry ? tasks.retry(userId, taskId) : tasks.cancel(userId, taskId);
+        if (result.task() == null) return Map.of("ok", false, "error", "task_not_found");
+        if (retry && !result.changed()) return Map.of("ok", false, "error", "task_not_retryable");
+        return Map.of("task", result.task(), "changed", result.changed());
     }
 }

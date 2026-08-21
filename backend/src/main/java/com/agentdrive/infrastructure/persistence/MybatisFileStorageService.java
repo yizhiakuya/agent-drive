@@ -8,14 +8,23 @@ import com.agentdrive.index.SemanticSearchService;
 import com.agentdrive.outbox.OutboxStore;
 import com.agentdrive.tasks.TaskStore;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.agentdrive.infrastructure.persistence.mapper.FileMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
@@ -31,6 +40,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -50,10 +60,10 @@ import java.util.stream.Stream;
  * <p>每个 owner 的可见根目录是 {@code root/&lt;owner UUID&gt;}。公共路径先规范化为
  * owner 根下的相对路径，再拒绝绝对路径、{@code ..} 越界、首段内部名称、符号链接和非普通
  * 文件类型；因此调用方不能通过文件 API 访问其他 owner 或 {@code .trash} 等内部区域。</p>
- * <p>上传、文本写入、移动和回收站恢复先在 {@code .upload.*} 临时文件或已校验路径上完成
- * 文件移动，再更新 MyBatis metadata、revision、dedupe 行，并按配置写入 {@code file.changed}
- * outbox 事件供索引/同步任务处理。进程内 mutation lock 与 root 下的 {@code .storage.lock}
- * 共同串行化文件变更；原子移动是文件可见性的提交点，数据库和 outbox 更新是随后的副作用。</p>
+ * <p>上传、文本写入、移动、复制和回收站变更先在 storage lock 内完成磁盘可见性提交，
+ * 再更新 MyBatis metadata、revision、dedupe 行，并在同一数据库事务写入
+ * {@code file.changed} outbox。storage lock 会持有到事务完成：提交后清理旧目标，回滚或
+ * 提交失败时恢复原文件，避免客户端收到失败时磁盘内容却已经不可逆改变。</p>
  */
 public class MybatisFileStorageService implements FileStorageService {
     private static final int INDEX_DETAIL_LIMIT = 100;
@@ -502,7 +512,7 @@ public class MybatisFileStorageService implements FileStorageService {
      * 仍有效的 dedupe 命中时，不移动临时文件而直接返回去重结果。否则在 storage lock 内
      * 选择目标并移动文件：{@code noclobber} 使用序号名称且不覆盖，覆盖模式拒绝已有目录并
      * 替换其他已有目标。文件移动后写入 content、revision 和 verified dedupe 行，并可写入
-     * {@code file.changed} outbox；这些数据库/事件副作用不会由文件移动本身回滚。</p>
+     * {@code file.changed} outbox；storage lock 持有到数据库事务完成，失败时恢复发布前内容。</p>
      * @param ownerId 文件所属 owner 的 UUID。
      * @param directory owner 根下的相对目录。
      * @param filename 目标文件名，不得含路径分隔符。
@@ -536,16 +546,17 @@ public class MybatisFileStorageService implements FileStorageService {
             }
             String requested = joinPath(directory, filename);
             Path target = safePath(ownerId, requested, false);
-            try (StorageLock ignored = storageLock()) {
+            try (MutationScope mutation = mutationScope()) {
                 if (noclobber) {
                     target = uniqueTarget(target);
                 } else if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)
                         && Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
                     throw new FileStorageException(409, "目标是目录: " + requested);
                 }
-                createParent(target);
                 syncParentMetadata(ownerId, target.getParent());
-                moveIntoPlace(temp, target, noclobber);
+                PublishedMove publication = new PublishedMove(ownerId, temp, target, false);
+                mutation.onPublished(publication::commit, publication::rollback);
+                publication.publish();
                 mapper.upsertContent(ownerId.toString(), relative(ownerId, target), size, digests.md5(), digests.sha256());
                 mapper.insertRevision(ownerId.toString(), relative(ownerId, target), size, digests.md5(), digests.sha256());
                 Map<String, Object> metadata = mapper.selectByPath(ownerId.toString(), relative(ownerId, target));
@@ -554,6 +565,7 @@ public class MybatisFileStorageService implements FileStorageService {
                 mapper.upsertDedupe(ownerId.toString(), digests.md5(), publishedPath, revision, true);
                 publishChange(ownerId, "upsert", List.of(publishedPath),
                         "file-change:" + ownerId + ":" + publishedPath + ":" + revision);
+                mutation.complete();
                 return mapOf("uploaded", mapOf("path", publishedPath, "size", size), "indexed", null);
             }
         } catch (FileStorageException error) {
@@ -690,7 +702,7 @@ public class MybatisFileStorageService implements FileStorageService {
         if (Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS) && target.startsWith(sourcePath)) {
             throw new FileStorageException(400, "目标不能位于源目录内部");
         }
-        try (StorageLock ignored = storageLock()) {
+        try (MutationScope mutation = mutationScope()) {
             recoverCopyTransactions(ownerId);
             if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !overwrite) {
                 throw new FileStorageException(409, "目标已存在");
@@ -704,11 +716,14 @@ public class MybatisFileStorageService implements FileStorageService {
                 throw new FileStorageException(409, "文件和目录类型不兼容");
             }
             CopyTransaction transaction = stageAndPublishCopy(ownerId, sourcePath, target);
+            mutation.onPublished(
+                    () -> cleanupPublishedCopyStrict(transaction),
+                    () -> rollbackPublishedCopy(transaction));
             mapper.deletePrefix(ownerId.toString(), relative(ownerId, target));
             refreshMetadata(ownerId, target);
             publishChange(ownerId, "copy", List.of(relative(ownerId, target)),
                     "file-copy:" + ownerId + ":" + relative(ownerId, target));
-            cleanupPublishedCopy(transaction);
+            mutation.complete();
             return mapOf("copied", normalizePath(source) + " → " + normalizePath(destination));
         } catch (IOException error) {
             throw new FileStorageException(500, "复制失败", error);
@@ -734,11 +749,14 @@ public class MybatisFileStorageService implements FileStorageService {
         Path stored = trashRoot(ownerId).resolve(trashId);
         Map<String, Object> metadata = mapper.selectByPath(ownerId.toString(), original);
         long revision = metadata == null ? 1 : longValue(metadata.get("revision"));
-        try (StorageLock ignored = storageLock()) {
-            moveIntoPlace(source, stored, false);
+        try (MutationScope mutation = mutationScope()) {
+            PublishedMove publication = new PublishedMove(ownerId, source, stored, true);
+            mutation.onPublished(publication::commit, publication::rollback);
+            publication.publish();
             mapper.insertTrash(trashId, ownerId.toString(), original, ".trash/" + trashId, revision);
             publishChange(ownerId, "delete", List.of(original), "file-delete:" + ownerId + ":" + trashId);
             long size = Files.isRegularFile(stored, LinkOption.NOFOLLOW_LINKS) ? Files.size(stored) : 0;
+            mutation.complete();
             return mapOf("path", original, "trash_id", trashId, "trash_path", trashId,
                     "deleted_at", Instant.now().toEpochMilli() / 1000.0, "size", size,
                     "is_dir", Files.isDirectory(stored, LinkOption.NOFOLLOW_LINKS));
@@ -800,19 +818,21 @@ public class MybatisFileStorageService implements FileStorageService {
         String original = String.valueOf(row.get("original_path"));
         Path target = safePath(ownerId, original, false);
         Path stored = safeInternalTrash(ownerId, String.valueOf(row.get("stored_path")));
-        try (StorageLock ignored = storageLock()) {
+        try (MutationScope mutation = mutationScope()) {
             if (!Files.exists(stored, LinkOption.NOFOLLOW_LINKS)) {
                 throw new FileStorageException(404, "回收站内容不存在");
             }
             if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
                 throw new FileStorageException(409, "原路径已存在");
             }
-            createParent(target);
-            moveIntoPlace(stored, target, false);
+            PublishedMove publication = new PublishedMove(ownerId, stored, target, true);
+            mutation.onPublished(publication::commit, publication::rollback);
+            publication.publish();
             mapper.deleteTrash(ownerId.toString(), String.valueOf(row.get("trash_id")));
             refreshMetadata(ownerId, target);
             publishChange(ownerId, "upsert", List.of(original),
                     "file-restore:" + ownerId + ":" + row.get("trash_id"));
+            mutation.complete();
             return mapOf("restored", original);
         } catch (FileStorageException error) {
             throw error;
@@ -978,6 +998,244 @@ public class MybatisFileStorageService implements FileStorageService {
     }
 
     /**
+     * 创建一次持有 storage lock 的文件与数据库联合变更范围。
+     * @return 尚未发布磁盘变更的生命周期句柄。
+     */
+    private MutationScope mutationScope() {
+        return new MutationScope(storageLock());
+    }
+
+    /** 可抛出 I/O 异常的文件提交或回滚动作。 */
+    @FunctionalInterface
+    private interface MutationAction {
+        /**
+         * 执行一次文件提交清理或回滚。
+         * @throws IOException 文件恢复、删除或持久化失败时抛出。
+         */
+        void run() throws IOException;
+    }
+
+    /**
+     * 把可见文件变更与当前 Spring 事务的最终状态绑定，并在完成前持续持有 storage lock。
+     * <p>无事务同步时 {@link #complete()} 立即提交；有事务同步时由 afterCompletion 决定清理
+     * backup 或恢复旧内容。调用方在 complete 前抛错时，try-with-resources 会立即回滚。</p>
+     */
+    private final class MutationScope implements AutoCloseable {
+        private final StorageLock storageLock;
+        private MutationAction commitAction = () -> { };
+        private MutationAction rollbackAction = () -> { };
+        private boolean published;
+        private boolean deferred;
+        private boolean finished;
+
+        /**
+         * 保存当前变更独占持有的 storage lock。
+         * @param storageLock 已取得的跨进程存储锁。
+         */
+        private MutationScope(StorageLock storageLock) {
+            this.storageLock = storageLock;
+        }
+
+        /**
+         * 登记磁盘可见性提交后的清理与回滚动作。
+         * @param commitAction 数据库提交后清理隐藏 backup 的动作。
+         * @param rollbackAction 数据库未提交时恢复发布前内容的动作。
+         */
+        private void onPublished(MutationAction commitAction, MutationAction rollbackAction) {
+            if (published) throw new IllegalStateException("一个文件变更范围只能登记一次发布");
+            this.commitAction = commitAction;
+            this.rollbackAction = rollbackAction;
+            this.published = true;
+        }
+
+        /** 标记数据库写入阶段成功，并按当前事务同步状态提交或延后文件收尾。 */
+        private void complete() {
+            if (finished || deferred) return;
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                deferred = true;
+                try {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        /**
+                         * 根据数据库事务终态提交或回滚磁盘变更，并始终释放 storage lock。
+                         * @param status Spring 事务完成状态。
+                         */
+                        @Override
+                        public void afterCompletion(int status) {
+                            finishDeferred(status == TransactionSynchronization.STATUS_COMMITTED);
+                        }
+                    });
+                } catch (RuntimeException error) {
+                    deferred = false;
+                    rollbackNow(error);
+                    throw error;
+                }
+                return;
+            }
+            commitNow();
+        }
+
+        /**
+         * 在 Spring 事务回调中完成文件收尾；回调发生在数据库终态之后，因此异常只记录日志。
+         * @param committed 数据库事务是否已经提交。
+         */
+        private void finishDeferred(boolean committed) {
+            if (finished) return;
+            try {
+                if (published) {
+                    if (committed) commitAction.run();
+                    else rollbackAction.run();
+                }
+            } catch (Exception error) {
+                if (committed) {
+                    LOGGER.warn("数据库已提交但文件变更 artifact 清理失败，将保守保留: {}", root, error);
+                } else {
+                    LOGGER.error("数据库事务未提交且文件内容回滚失败: {}", root, error);
+                }
+            } finally {
+                finished = true;
+                try {
+                    storageLock.close();
+                } catch (RuntimeException error) {
+                    LOGGER.error("事务完成后释放文件存储锁失败", error);
+                }
+            }
+        }
+
+        /** 无事务同步时提交文件变更；提交后的清理失败不把已发布操作改报为失败。 */
+        private void commitNow() {
+            try {
+                if (published) commitAction.run();
+            } catch (Exception error) {
+                LOGGER.warn("文件变更已发布但 artifact 清理失败，将保守保留: {}", root, error);
+            } finally {
+                finished = true;
+                try {
+                    storageLock.close();
+                } catch (RuntimeException error) {
+                    LOGGER.error("文件变更提交后释放存储锁失败", error);
+                }
+            }
+        }
+
+        /**
+         * 立即回滚文件变更并释放 storage lock。
+         * @param original 触发回滚的原异常；回滚异常会附加到该异常。
+         */
+        private void rollbackNow(RuntimeException original) {
+            try {
+                if (published) rollbackAction.run();
+            } catch (Exception rollbackError) {
+                original.addSuppressed(rollbackError);
+            } finally {
+                finished = true;
+                try {
+                    storageLock.close();
+                } catch (RuntimeException closeError) {
+                    original.addSuppressed(closeError);
+                }
+            }
+        }
+
+        /** complete 前离开范围时恢复磁盘内容；已登记事务回调时由回调负责最终收尾。 */
+        @Override
+        public void close() {
+            if (finished || deferred) return;
+            RuntimeException failure = new FileStorageException(500, "文件变更未完成，已尝试恢复");
+            rollbackNow(failure);
+            if (failure.getSuppressed().length > 0) throw failure;
+        }
+    }
+
+    /**
+     * 把源路径发布到目标路径，并保留已有目标用于数据库回滚补偿。
+     * <p>普通移动回滚时先把新目标移回源路径；上传发布不恢复一次性临时文件，只删除新目标。
+     * 随后再把隐藏 backup 恢复为原目标。</p>
+     */
+    private final class PublishedMove {
+        private final Path ownerRoot;
+        private final Path source;
+        private final Path target;
+        private final Path backup;
+        private final boolean restoreSource;
+        private boolean backupMoved;
+        private boolean sourceMoved;
+
+        /**
+         * 创建一次尚未执行的可补偿移动。
+         * @param ownerId 源和目标所属 owner。
+         * @param source 要发布的源路径。
+         * @param target 对外可见目标路径。
+         * @param restoreSource 回滚时是否把新目标移回源路径。
+         */
+        private PublishedMove(UUID ownerId, Path source, Path target, boolean restoreSource) {
+            this.ownerRoot = ownerRoot(ownerId);
+            this.source = source;
+            this.target = target;
+            this.backup = this.ownerRoot.resolve(COPY_OLD_PREFIX + UUID.randomUUID());
+            this.restoreSource = restoreSource;
+        }
+
+        /**
+         * 先隐藏已有目标，再以独占移动发布源路径。
+         * @throws IOException 创建父目录、移动或 fsync 失败时抛出。
+         */
+        private void publish() throws IOException {
+            createParent(target);
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                moveIntoPlace(target, backup, true);
+                backupMoved = true;
+                forceDirectory(ownerRoot);
+            }
+            moveIntoPlace(source, target, true);
+            sourceMoved = true;
+            forcePublishedPath(target);
+        }
+
+        /**
+         * 数据库提交后删除隐藏旧目标。
+         * @throws IOException backup 删除或 owner 目录 fsync 失败时抛出。
+         */
+        private void commit() throws IOException {
+            if (!backupMoved) return;
+            validateCopyArtifact(backup);
+            deleteTree(backup);
+            forceDirectory(ownerRoot);
+        }
+
+        /**
+         * 数据库未提交时撤销新目标，并恢复源路径及被覆盖的旧目标。
+         * @throws IOException 无法证明路径未被并发占用或移动/删除失败时抛出。
+         */
+        private void rollback() throws IOException {
+            if (sourceMoved) {
+                if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IOException("文件回滚时已发布目标不存在: " + target);
+                }
+                if (restoreSource) {
+                    if (Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
+                        throw new IOException("文件回滚时源路径已被占用: " + source);
+                    }
+                    createParent(source);
+                    moveIntoPlace(target, source, true);
+                    forcePublishedPath(source);
+                } else {
+                    deleteTree(target);
+                    forceDirectory(target.getParent());
+                }
+            }
+            if (backupMoved) {
+                if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IOException("文件回滚时目标与 backup 同时存在: " + target);
+                }
+                validateCopyArtifact(backup);
+                createParent(target);
+                moveIntoPlace(backup, target, true);
+                forcePublishedPath(target);
+            }
+        }
+    }
+
+    /**
      * 封装一次文件存储操作持有的 JVM 锁和操作系统文件锁。
      * <p>该资源只能通过 try-with-resources 关闭；关闭时无论释放文件锁是否报错，都会释放
      * 外层的进程内 mutation lock。</p>
@@ -1029,16 +1287,31 @@ public class MybatisFileStorageService implements FileStorageService {
                                          boolean overwrite, String resultKey) {
         Path sourcePath = requireExisting(ownerId, source);
         Path target = safePath(ownerId, destination, false);
+        Path ownerRoot = ownerRoot(ownerId);
         String sourceRelative = relative(ownerId, sourcePath);
         String targetRelative = relative(ownerId, target);
-        try (StorageLock ignored = storageLock()) {
+        try (MutationScope mutation = mutationScope()) {
             if (sourcePath.equals(target)) {
                 throw new FileStorageException(400, "源与目标相同");
+            }
+            if (sourcePath.equals(ownerRoot) || target.equals(ownerRoot)) {
+                throw new FileStorageException(400, "不能移动 owner 根目录");
+            }
+            if (Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS) && target.startsWith(sourcePath)) {
+                throw new FileStorageException(400, "目标不能位于源目录内部");
             }
             if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !overwrite) {
                 throw new FileStorageException(409, "目标已存在");
             }
-            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                rejectSpecial(target);
+                boolean sourceDirectory = Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS);
+                boolean targetDirectory = Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS);
+                if (sourceDirectory != targetDirectory) {
+                    throw new FileStorageException(409, "文件和目录类型不兼容");
+                }
+            }
+            if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)
                     && Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS)) {
                 try (Stream<Path> children = Files.list(target)) {
                     if (children.findAny().isPresent()) {
@@ -1046,16 +1319,15 @@ public class MybatisFileStorageService implements FileStorageService {
                     }
                 }
             }
-            createParent(target);
-            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                deleteTree(target);
-            }
-            moveIntoPlace(sourcePath, target, false);
+            PublishedMove publication = new PublishedMove(ownerId, sourcePath, target, true);
+            mutation.onPublished(publication::commit, publication::rollback);
+            publication.publish();
             mapper.deletePrefix(ownerId.toString(), sourceRelative);
             mapper.deletePrefix(ownerId.toString(), targetRelative);
             refreshMetadata(ownerId, target);
             publishChange(ownerId, "move", List.of(sourceRelative, targetRelative),
                     "file-move:" + ownerId + ":" + sourceRelative + "->" + targetRelative);
+            mutation.complete();
             return mapOf(resultKey, normalizePath(source) + " → " + normalizePath(destination));
         } catch (FileStorageException error) {
             throw error;
@@ -1494,18 +1766,58 @@ public class MybatisFileStorageService implements FileStorageService {
      * @throws IOException 无法打开或读取文件时抛出。
      */
     private String readTextPreview(Path file, int maxChars) throws IOException {
+        int byteLimit = Math.max(1, maxChars);
         byte[] bytes;
         try (InputStream input = Files.newInputStream(file)) {
-            bytes = input.readNBytes(maxChars);
+            bytes = input.readNBytes(byteLimit + 1);
         }
-        for (String charset : List.of("UTF-8", "GBK", "ISO-8859-1")) {
+        boolean truncated = bytes.length > byteLimit;
+        if (truncated) bytes = Arrays.copyOf(bytes, byteLimit);
+        return decodeTextPreview(bytes, truncated);
+    }
+
+    /**
+     * 严格尝试 UTF-8、GBK 和 ISO-8859-1，避免替换字符让首个编码永远伪成功。
+     * 截断预览允许末尾保留一个未完成码点，但正文中的坏字节仍会触发下一编码。
+     * @param bytes 要解码的预览字节。
+     * @param truncated 字节是否因预览上限被截断。
+     * @return 首个严格匹配候选编码得到的文本。
+     */
+    static String decodeTextPreview(byte[] bytes, boolean truncated) {
+        for (Charset charset : List.of(StandardCharsets.UTF_8, Charset.forName("GBK"), StandardCharsets.ISO_8859_1)) {
             try {
-                return new String(bytes, java.nio.charset.Charset.forName(charset));
-            } catch (Exception ignored) {
+                return decodeStrict(bytes, charset, !truncated);
+            } catch (CharacterCodingException ignored) {
                 // Try the next compatibility encoding.
             }
         }
-        return "(二进制文件，无法以文本读取: " + file.getFileName() + ")";
+        throw new IllegalStateException("ISO-8859-1 decoder rejected input");
+    }
+
+    /**
+     * 使用 REPORT 模式执行一次字符集解码。
+     * @param bytes 输入字节。
+     * @param charset 候选字符集。
+     * @param endOfInput 输入是否包含文件的真实结尾。
+     * @return 解码后的文本。
+     * @throws CharacterCodingException 输入包含候选字符集无法表示的字节时抛出。
+     */
+    private static String decodeStrict(byte[] bytes, Charset charset, boolean endOfInput)
+            throws CharacterCodingException {
+        CharsetDecoder decoder = charset.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        ByteBuffer input = ByteBuffer.wrap(bytes);
+        int capacity = Math.max(1, (int) Math.ceil(bytes.length * decoder.maxCharsPerByte()));
+        CharBuffer output = CharBuffer.allocate(capacity);
+        CoderResult result = decoder.decode(input, output, endOfInput);
+        if (result.isError()) result.throwException();
+        if (endOfInput) {
+            result = decoder.flush(output);
+            if (result.isError()) result.throwException();
+        }
+        output.flip();
+        return output.toString();
     }
 
     /**
@@ -1868,6 +2180,27 @@ public class MybatisFileStorageService implements FileStorageService {
             Files.deleteIfExists(transaction.marker());
             forceDirectory(transaction.ownerRoot());
         }
+    }
+
+    /**
+     * 数据库未提交时删除已经发布的新副本，并把覆盖前隐藏的旧目标恢复到原路径。
+     * @param transaction 已发生可见性提交的复制事务。
+     * @throws IOException 新目标删除、backup 恢复或 artifact 清理失败时抛出。
+     */
+    private void rollbackPublishedCopy(CopyTransaction transaction) throws IOException {
+        validateCopyArtifact(transaction.staging());
+        validateCopyArtifact(transaction.backup());
+        if (Files.exists(transaction.target(), LinkOption.NOFOLLOW_LINKS)) {
+            rejectSpecial(transaction.target());
+            deleteTree(transaction.target());
+            forceDirectory(transaction.target().getParent());
+        }
+        if (Files.exists(transaction.backup(), LinkOption.NOFOLLOW_LINKS)) {
+            restoreCopyBackup(transaction);
+        }
+        deleteTree(transaction.staging());
+        Files.deleteIfExists(transaction.marker());
+        forceDirectory(transaction.ownerRoot());
     }
 
     /**

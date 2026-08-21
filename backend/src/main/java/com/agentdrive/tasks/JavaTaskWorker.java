@@ -71,16 +71,22 @@ public final class JavaTaskWorker implements ApplicationRunner, AutoCloseable {
 
     /**
      * 执行一轮后台工作：最多派发 20 个到期 schedule、消费 20 条 outbox，再按 lane 优先级执行一条任务。
-     * RuntimeException 只终止当前 tick，不终止定时线程；具体已领取任务的业务异常由 {@link IndexTaskHandler} 写入任务失败状态。
+     * schedule、outbox 和 task 各自隔离 RuntimeException；前一阶段失败不跳过后续阶段，
+     * 具体已领取任务的业务异常由 {@link IndexTaskHandler} 写入任务失败状态。
      */
-    private void tick() {
+    void tick() {
+        runStage("schedule", () -> schedules.dispatchDueAll(20));
+        runStage("outbox", () -> outboxConsumer.consumeOnce(20));
+        runStage("task", () -> handler.runOnce(workerId));
+    }
+
+    /** 单独隔离每个轮询阶段，确保前一阶段失败不会跳过后续阶段。 */
+    private void runStage(String stage, Runnable operation) {
         try {
-            schedules.dispatchDueAll(20);
-            outboxConsumer.consumeOnce(20);
-            handler.runOnce(workerId);
+            operation.run();
         } catch (RuntimeException error) {
-            LOGGER.warn("java task worker tick failed worker_id={} error_type={}",
-                    workerId, error.getClass().getSimpleName());
+            LOGGER.warn("java task worker stage failed worker_id={} stage={} error_type={}",
+                    workerId, stage, error.getClass().getSimpleName());
         }
     }
 

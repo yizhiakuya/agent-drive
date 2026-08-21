@@ -23,6 +23,30 @@ class MybatisTaskStoreIntegrationTest {
     private TaskStore tasks;
 
     @Test
+    void activeDedupeKeysAreIsolatedByOwnerAndKeepExplicitSchedulingFields() {
+        String firstUser = UUID.randomUUID().toString();
+        String secondUser = UUID.randomUUID().toString();
+        String dedupe = "shared-owner-scoped-key-" + UUID.randomUUID();
+        try {
+            jdbc.update("INSERT INTO users(id, username, password_hash) VALUES (?::uuid, ?, ?), (?::uuid, ?, ?)",
+                    firstUser, "task-owner-a-" + firstUser, "test-hash",
+                    secondUser, "task-owner-b-" + secondUser, "test-hash");
+
+            TaskStore.EnqueueResult first = tasks.enqueue(UUID.fromString(firstUser), "index.file", "index",
+                    Map.of("path", "a.txt"), dedupe, "schedule", null, 9, 7);
+            TaskStore.EnqueueResult second = tasks.enqueue(UUID.fromString(secondUser), "index.file", "index",
+                    Map.of("path", "b.txt"), dedupe, "schedule", null, 4, 5);
+
+            assertThat(first.created()).isTrue();
+            assertThat(second.created()).isTrue();
+            assertThat(first.task()).containsEntry("priority", 9).containsEntry("max_attempts", 7);
+            assertThat(second.task()).containsEntry("priority", 4).containsEntry("max_attempts", 5);
+        } finally {
+            jdbc.update("DELETE FROM users WHERE id IN (?::uuid, ?::uuid)", firstUser, secondUser);
+        }
+    }
+
+    @Test
     void persistsOwnerScopedDedupeStateTransitionsAndEvents() {
         String userId = UUID.randomUUID().toString();
         try {
@@ -49,11 +73,28 @@ class MybatisTaskStoreIntegrationTest {
             assertThat(((Map<?, ?>) tasks.overview(owner).get("counts")).get("queued")).isEqualTo(1L);
             assertThat(tasks.events(owner, 0, 50)).hasSize(2);
 
-            Map<String, Object> cancelled = tasks.cancel(owner, taskId);
-            assertThat(cancelled).containsEntry("status", "cancelled");
-            Map<String, Object> retried = tasks.retry(owner, taskId);
-            assertThat(retried).containsEntry("status", "queued");
-            assertThat(tasks.latestEventId(owner)).isGreaterThan(2L);
+            TaskStore.TransitionResult cancelled = tasks.cancel(owner, taskId);
+            assertThat(cancelled.changed()).isTrue();
+            assertThat(cancelled.task()).containsEntry("status", "cancelled");
+            long cancelEventId = tasks.latestEventId(owner);
+
+            TaskStore.TransitionResult repeatedCancel = tasks.cancel(owner, taskId);
+            assertThat(repeatedCancel.changed()).isFalse();
+            assertThat(repeatedCancel.reason()).isEqualTo("task_not_active");
+            assertThat(repeatedCancel.task().get("updated_at")).isEqualTo(cancelled.task().get("updated_at"));
+            assertThat(tasks.latestEventId(owner)).isEqualTo(cancelEventId);
+
+            TaskStore.TransitionResult retried = tasks.retry(owner, taskId);
+            assertThat(retried.changed()).isTrue();
+            assertThat(retried.task()).containsEntry("status", "queued");
+            assertThat(tasks.latestEventId(owner)).isGreaterThan(cancelEventId);
+
+            TaskStore.TransitionResult repeatedRetry = tasks.retry(owner, taskId);
+            assertThat(repeatedRetry.changed()).isFalse();
+            assertThat(repeatedRetry.reason()).isEqualTo("task_not_retryable");
+            TaskStore.TransitionResult missingRetry = tasks.retry(owner, UUID.randomUUID());
+            assertThat(missingRetry.task()).isNull();
+            assertThat(missingRetry.reason()).isEqualTo("task_not_found");
         } finally {
             jdbc.update("DELETE FROM users WHERE id = ?::uuid", userId);
         }

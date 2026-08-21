@@ -76,6 +76,7 @@ export default function FilePage() {
   const selectionRequestRef = useRef(0);
   const contentRequestRef = useRef(0);
   const indexingRequestRef = useRef(0);
+  const trashRequestRef = useRef(0);
   const frontendActions = useAppStore((s) => s.frontendActions);
   const consumeFrontendAction = useAppStore((s) => s.consumeFrontendAction);
   const processingFrontendActionRef = useRef<string | null>(null);
@@ -151,6 +152,7 @@ export default function FilePage() {
     selectionRequestRef.current += 1;
     contentRequestRef.current += 1;
     indexingRequestRef.current += 1;
+    trashRequestRef.current += 1;
   }, []);
   useEffect(() => {
     function onFilesChanged() { load(pathRef.current, queryRef.current); }
@@ -221,8 +223,10 @@ export default function FilePage() {
       setSelected((s) => s?.path === it.path
         ? { path: it.path, info: data, text: data.preview_kind === "text" ? (data.snippet || "") : "" }
         : s);
-    } catch {
-      // A later selection owns the preview, so an obsolete detail failure is silent.
+    } catch (error) {
+      if (selectionRequest === selectionRequestRef.current) {
+        emitToast({ kind: "error", text: `文件详情加载失败：${String(error)}` });
+      }
     }
   }
 
@@ -314,12 +318,18 @@ export default function FilePage() {
   const isMarkdown = selected?.info?.path?.toLowerCase().endsWith(".md");
 
   async function openTrash() {
-    setShowTrash(!showTrash);
-    if (!showTrash) {
-      try {
-        const r = await listTrash();
-        setTrashItems(r.items);
-      } catch { /* 忽略 */ }
+    const opening = !showTrash;
+    const request = ++trashRequestRef.current;
+    setShowTrash(opening);
+    if (!opening) return;
+    try {
+      const r = await listTrash();
+      if (request !== trashRequestRef.current) return;
+      setTrashItems(r.items);
+    } catch (error) {
+      if (request === trashRequestRef.current) {
+        emitToast({ kind: "error", text: `回收站加载失败：${String(error)}` });
+      }
     }
   }
 

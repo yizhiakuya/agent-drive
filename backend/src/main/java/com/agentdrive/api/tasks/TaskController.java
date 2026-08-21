@@ -317,9 +317,9 @@ public final class TaskController {
     @PostMapping("/{taskId}/cancel")
     public Mono<Map<String, Object>> cancel(@PathVariable UUID taskId, ServerWebExchange exchange) {
         return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
-            Map<String, Object> task = tasks.cancel(principal.userId(), taskId);
-            if (task == null) throw new ResponseStatusException(NOT_FOUND, "任务不存在");
-            return Map.of("task", task);
+            TaskStore.TransitionResult result = tasks.cancel(principal.userId(), taskId);
+            if (result.task() == null) throw new ResponseStatusException(NOT_FOUND, "任务不存在");
+            return Map.of("task", result.task(), "changed", result.changed());
         }));
     }
 
@@ -334,9 +334,12 @@ public final class TaskController {
     @PostMapping("/{taskId}/retry")
     public Mono<Map<String, Object>> retry(@PathVariable UUID taskId, ServerWebExchange exchange) {
         return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
-            Map<String, Object> task = tasks.retry(principal.userId(), taskId);
-            if (task == null) throw new ResponseStatusException(CONFLICT, "只有失败或已取消的任务可以重试");
-            return Map.of("task", task);
+            TaskStore.TransitionResult result = tasks.retry(principal.userId(), taskId);
+            if (result.task() == null) throw new ResponseStatusException(NOT_FOUND, "任务不存在");
+            if (!result.changed()) {
+                throw new ResponseStatusException(CONFLICT, "只有失败或已取消的任务可以重试");
+            }
+            return Map.of("task", result.task(), "changed", true);
         }));
     }
 

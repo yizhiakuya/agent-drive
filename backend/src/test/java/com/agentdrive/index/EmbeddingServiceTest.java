@@ -12,11 +12,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -126,6 +133,131 @@ class EmbeddingServiceTest {
             assertThat(result).containsEntry("vectorized", true).containsEntry("embedded", 65)
                     .containsEntry("batches", 2);
             assertThat(requests).hasValue(2);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void forceFailureDoesNotClearPreviouslyPersistedVectors() throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/embeddings", exchange -> {
+            exchange.sendResponseHeaders(503, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            UUID owner = UUID.randomUUID();
+            UUID chunk = UUID.randomUUID();
+            EmbeddingRuntimeConfig configs = mock(EmbeddingRuntimeConfig.class);
+            IndexStore index = mock(IndexStore.class);
+            when(configs.find(owner)).thenReturn(Optional.of(new EmbeddingRuntimeConfig.Config(
+                    "jina", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "jina-test", "test-key")));
+            when(index.chunks(eq(owner), anyString(), eq(List.of("notes.txt")), eq(true), eq(null), eq(64)))
+                    .thenReturn(List.of(Map.of("id", chunk.toString(), "content", "old vector stays valid")));
+
+            Map<String, Object> result = new EmbeddingService.Jina(configs, index, new ObjectMapper())
+                    .embed(owner, List.of("notes.txt"), 64, true);
+
+            assertThat(result).containsEntry("vectorized", false).containsEntry("reason", "provider_http_503");
+            verify(index, never()).updateEmbedding(any(), any(), anyString(), anyString());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void interruptedProviderRequestReturnsStableFailureAndPreservesInterruptStatus() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        CountDownLatch requestStarted = new CountDownLatch(1);
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        server.createContext("/v1/embeddings", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            requestStarted.countDown();
+            try {
+                releaseResponse.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+
+        AtomicReference<Map<String, Object>> result = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicBoolean interruptPreserved = new AtomicBoolean();
+        Thread worker = null;
+        try {
+            UUID owner = UUID.randomUUID();
+            UUID chunk = UUID.randomUUID();
+            EmbeddingRuntimeConfig configs = mock(EmbeddingRuntimeConfig.class);
+            IndexStore index = mock(IndexStore.class);
+            when(configs.find(owner)).thenReturn(Optional.of(new EmbeddingRuntimeConfig.Config(
+                    "jina", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "jina-test", "test-key")));
+            when(index.chunks(eq(owner), anyString(), eq(64)))
+                    .thenReturn(List.of(Map.of("id", chunk.toString(), "content", "wait for provider")));
+
+            worker = new Thread(() -> {
+                try {
+                    result.set(new EmbeddingService.Jina(configs, index, new ObjectMapper()).embed(owner, 64));
+                } catch (Throwable error) {
+                    failure.set(error);
+                } finally {
+                    interruptPreserved.set(Thread.currentThread().isInterrupted());
+                }
+            }, "embedding-interruption-test");
+            worker.start();
+
+            assertThat(requestStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            worker.interrupt();
+            worker.join(TimeUnit.SECONDS.toMillis(5));
+
+            assertThat(worker.isAlive()).isFalse();
+            assertThat(failure.get()).isNull();
+            assertThat(result.get()).containsEntry("vectorized", false)
+                    .containsEntry("reason", "embedding_interrupted");
+            assertThat(interruptPreserved).isTrue();
+            verify(index, never()).updateEmbedding(any(), any(), anyString(), anyString());
+        } finally {
+            releaseResponse.countDown();
+            if (worker != null && worker.isAlive()) {
+                worker.interrupt();
+                worker.join(TimeUnit.SECONDS.toMillis(5));
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void forceUsesChunkCursorSoUpdatedRowsAreNotSelectedAgain() throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/embeddings", exchange -> {
+            byte[] body = "{\"data\":[{\"index\":0,\"embedding\":[0.5]}]}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var output = exchange.getResponseBody()) { output.write(body); }
+        });
+        server.start();
+        try {
+            UUID owner = UUID.randomUUID();
+            UUID chunk = UUID.randomUUID();
+            EmbeddingRuntimeConfig configs = mock(EmbeddingRuntimeConfig.class);
+            IndexStore index = mock(IndexStore.class);
+            when(configs.find(owner)).thenReturn(Optional.of(new EmbeddingRuntimeConfig.Config(
+                    "jina", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "jina-test", "test-key")));
+            when(index.chunks(eq(owner), anyString(), eq(List.of("notes.txt")), eq(true), eq(null), eq(64)))
+                    .thenReturn(List.of(Map.of("id", chunk.toString(), "content", "replace me")));
+            when(index.chunks(eq(owner), anyString(), eq(List.of("notes.txt")), eq(true), eq(chunk), eq(64)))
+                    .thenReturn(List.of());
+            when(index.updateEmbedding(eq(owner), eq(chunk), eq("[0.5]"), anyString())).thenReturn(1);
+
+            Map<String, Object> result = new EmbeddingService.Jina(configs, index, new ObjectMapper())
+                    .embed(owner, List.of("notes.txt"), 64, true);
+
+            assertThat(result).containsEntry("vectorized", true).containsEntry("embedded", 1);
+            verify(index).chunks(eq(owner), anyString(), eq(List.of("notes.txt")), eq(true), eq(chunk), eq(64));
         } finally {
             server.stop(0);
         }

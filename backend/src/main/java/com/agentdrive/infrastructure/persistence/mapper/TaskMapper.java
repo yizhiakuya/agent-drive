@@ -78,6 +78,8 @@ public interface TaskMapper {
      * @param dedupeKey 活跃任务去重键，可为 {@code null}。
      * @param payload 任务 JSON 文本，将转换为 {@code jsonb}。
      * @param origin 创建来源；为空时由 SQL 写入 {@code api}。
+     * @param priority 非负任务调度优先级。
+     * @param maxAttempts 至少为 1 的最大执行次数。
      * @return 成功插入并由 {@code RETURNING} 投影出的任务行；活跃去重冲突时返回 {@code null}。
      */
     Map<String, Object> insertTask(@Param("userId") String userId,
@@ -86,7 +88,9 @@ public interface TaskMapper {
                                    @Param("lane") String lane,
                                    @Param("dedupeKey") String dedupeKey,
                                    @Param("payload") String payload,
-                                   @Param("origin") String origin);
+                                   @Param("origin") String origin,
+                                   @Param("priority") int priority,
+                                   @Param("maxAttempts") int maxAttempts);
 
     /**
      * 查找用户仍处于活跃状态的同去重键任务。
@@ -101,11 +105,11 @@ public interface TaskMapper {
     /**
      * 请求取消一个属于用户的任务，并按当前状态推进取消状态机。
      * {@code queued} 和 {@code retry_wait} 直接变为 {@code cancelled} 并写入完成时间；
-     * {@code running} 和 {@code cancelling} 变为或保持 {@code cancelling}，等待 Worker 结束；
-     * 其他终态不改变。活跃任务会设置 {@code cancel_requested=true}，同时刷新 {@code updated_at}。
+     * {@code running} 变为 {@code cancelling}，等待 Worker 结束；已处于 {@code cancelling}
+     * 或终态的任务不更新，避免重复刷新时间戳和写入虚假事件。
      * @param userId 任务所属用户的 UUID 字符串。
      * @param taskId 要取消的任务 UUID 字符串。
-     * @return SQL 实际更新的行数；任务不存在或不属于该用户时为 {@code 0}。
+     * @return SQL 实际更新的行数；任务不存在、不属于该用户或已经不需迁移时为 {@code 0}。
      */
     int cancelTask(@Param("userId") String userId, @Param("taskId") String taskId);
 

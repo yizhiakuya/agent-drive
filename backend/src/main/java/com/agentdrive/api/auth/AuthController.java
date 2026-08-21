@@ -23,6 +23,10 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -229,14 +233,50 @@ public final class AuthController {
      * @throws AuthService.RateLimitExceededException 超过窗口限制时抛出，交由异常处理器返回 429。
      */
     private void requireRate(String operation, ServerWebExchange exchange, int limit) {
-        String address = "unknown";
-        if (exchange.getRequest().getRemoteAddress() != null
-                && exchange.getRequest().getRemoteAddress().getAddress() != null) {
-            address = exchange.getRequest().getRemoteAddress().getAddress().getHostAddress();
-        }
+        String address = clientAddress(exchange.getRequest().getRemoteAddress(),
+                exchange.getRequest().getHeaders().getFirst("X-Forwarded-For"));
         if (!rateLimiter.allow(operation + ":" + address, limit)) {
             throw new AuthService.RateLimitExceededException("too many attempts, try again later");
         }
+    }
+
+    /**
+     * 解析认证限速使用的客户端地址。仅当 TCP 对端是回环地址时才信任 nginx 写入的单个
+     * {@code X-Forwarded-For} IP；直连请求或伪造的多段/非 IP 头始终退回真实对端。
+     * @param remoteAddress TCP 连接的真实对端地址。
+     * @param forwardedFor nginx 覆写后的单个客户端 IP；直连请求可能为空。
+     * @return 用于限速键的可信客户端 IP，无法解析时返回真实对端或 {@code unknown}。
+     */
+    static String clientAddress(InetSocketAddress remoteAddress, String forwardedFor) {
+        InetAddress remote = remoteAddress == null ? null : remoteAddress.getAddress();
+        String fallback = remote == null ? "unknown" : remote.getHostAddress();
+        if (remote == null || !remote.isLoopbackAddress()) return fallback;
+        String candidate = forwardedFor == null ? "" : forwardedFor.trim();
+        if (candidate.isEmpty() || candidate.indexOf(',') >= 0 || !isIpLiteral(candidate)) return fallback;
+        return candidate;
+    }
+
+    /**
+     * 判断值是否为不触发 DNS 解析的 IPv4 或 IPv6 字面量。
+     * @param value 待校验的单个地址文本。
+     * @return 地址是合法 IP 字面量时为 true。
+     */
+    private static boolean isIpLiteral(String value) {
+        if (value.indexOf(':') >= 0) {
+            if (!value.matches("[0-9A-Fa-f:.]+")) return false;
+            try {
+                return InetAddress.getByName(value) instanceof Inet6Address;
+            } catch (UnknownHostException ignored) {
+                return false;
+            }
+        }
+        String[] octets = value.split("\\.", -1);
+        if (octets.length != 4) return false;
+        for (String octet : octets) {
+            if (octet.isEmpty() || octet.length() > 3 || !octet.chars().allMatch(Character::isDigit)) return false;
+            if (Integer.parseInt(octet) > 255) return false;
+        }
+        return true;
     }
 
     /**

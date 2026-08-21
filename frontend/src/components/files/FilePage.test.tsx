@@ -37,8 +37,9 @@ const enqueueVisionIndex = vi.fn();
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => { resolve = settle; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => { resolve = settle; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 function fileInfo(path: string, snippet: string) {
@@ -177,6 +178,55 @@ describe("FilePage 核心操作", () => {
     expect(screen.queryByText("A 的摘要")).not.toBeInTheDocument();
   });
 
+  it("当前文件详情加载失败时发送错误 toast", async () => {
+    getFileInfo.mockRejectedValue(new Error("detail unavailable"));
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText("合同.txt"));
+
+      await waitFor(() => expect(listener).toHaveBeenCalled());
+      expect(listener.mock.calls[0][0]).toHaveProperty(
+        "detail.text",
+        "文件详情加载失败：Error: detail unavailable",
+      );
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
+  it("过期的文件详情失败不会发送 toast", async () => {
+    const first = deferred<ReturnType<typeof fileInfo>>();
+    listFiles.mockResolvedValue({
+      ...rootListing,
+      items: [
+        { name: "A.txt", path: "A.txt", is_dir: false, size: 75, mtime: 1750000000 },
+        { name: "B.txt", path: "B.txt", is_dir: false, size: 75, mtime: 1750000000 },
+      ],
+    });
+    getFileInfo.mockImplementation((requestedPath: string) => requestedPath === "A.txt"
+      ? first.promise
+      : Promise.resolve(fileInfo("B.txt", "B 的摘要")));
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("A.txt")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("A.txt"));
+      fireEvent.click(screen.getByText("B.txt"));
+      await waitFor(() => expect(screen.getByText("B 的摘要")).toBeInTheDocument());
+
+      await act(async () => { first.reject(new Error("stale detail failure")); });
+
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
   it("忽略当前选中文件变化后的全文响应", async () => {
     const content = deferred<{ content: string; truncated: boolean }>();
     listFiles.mockResolvedValue({
@@ -259,6 +309,45 @@ describe("FilePage 核心操作", () => {
     await waitFor(() => expect(screen.getByText("旧文件.txt")).toBeInTheDocument());
     fireEvent.click(screen.getByText("恢复"));
     await waitFor(() => expect(restoreFromTrash).toHaveBeenCalledWith("t1"));
+  });
+
+  it("当前回收站请求失败时发送错误 toast", async () => {
+    listTrash.mockRejectedValue(new Error("trash unavailable"));
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByLabelText("回收站"));
+
+      await waitFor(() => expect(listener).toHaveBeenCalled());
+      expect(listener.mock.calls[0][0]).toHaveProperty(
+        "detail.text",
+        "回收站加载失败：Error: trash unavailable",
+      );
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
+  it("回收站关闭后的迟到失败不会发送 toast", async () => {
+    const trash = deferred<{ items: [] }>();
+    listTrash.mockReturnValue(trash.promise);
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+      fireEvent.click(screen.getByLabelText("回收站"));
+      fireEvent.click(screen.getByLabelText("关闭回收站"));
+
+      await act(async () => { trash.reject(new Error("stale trash failure")); });
+
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
   });
 
   it("回收站清空（确认后调用 emptyTrash）", async () => {

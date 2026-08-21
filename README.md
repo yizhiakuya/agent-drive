@@ -6,12 +6,12 @@ Agent-first 的私人网盘：文件管理、检索、配置和自动化都可�
 
 ## 能力
 
-- Agent 通过统一的 `backend_api` / `frontend_api` discover/call envelope 操作后端和当前浏览器能力。
+- Agent 通过统一的 `backend_api` / `frontend_api` discover/call envelope 操作后端和当前浏览器能力，并通过 `read_skill` 按需加载 owner Skill。
 - 支持 OpenAI 兼容、OpenAI Responses 和 Anthropic provider；支持独立的 embedding 与 vision 配置。
 - Chat 使用 JSON object SSE，支持 reasoning、工具轨迹、确认、确定性 replay 和会话摘要。
 - 文件页支持名称/路径搜索、Jina + pgvector 语义搜索、文本预览/全文查看、回收站和 revision 状态。
 - 上传服务端复算 MD5；文件写入、复制、覆盖、去重和回收站使用原子发布与路径安全边界。
-- PostgreSQL 保存认证、会话、设备、文件 metadata、任务、schedule、outbox、全文和向量状态；实际文件仍在 owner-scoped 本地文件系统。
+- PostgreSQL 保存认证、会话、设备、Skill、文件 metadata、任务、schedule、outbox、全文和向量状态；实际文件仍在 owner-scoped 本地文件系统。
 - 独立 Worker 异步执行 Tika/Tesseract 抽取、全文/embedding/vision 索引、计划任务和维护任务。
 - Web 使用密码登录和 HttpOnly Cookie；Android 使用扫码配对得到的 Bearer 设备令牌。
 - Android App 提供扫码连接、后台相册同步、服务端去重、断点续传、进度通知和设备登记。

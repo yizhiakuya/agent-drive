@@ -81,7 +81,8 @@
     </select>
 
     <select id="insertTask" resultType="map">
-        INSERT INTO tasks(user_id, parent_id, kind, lane, status, dedupe_key, payload, origin, available_at)
+        INSERT INTO tasks(user_id, parent_id, kind, lane, status, dedupe_key, payload, origin,
+                          priority, max_attempts, available_at)
         VALUES (
             CAST(#{userId, jdbcType=VARCHAR} AS uuid),
             CAST(#{parentId, jdbcType=VARCHAR} AS uuid),
@@ -91,9 +92,11 @@
             #{dedupeKey, jdbcType=VARCHAR},
             CAST(#{payload, jdbcType=LONGVARCHAR} AS jsonb),
             COALESCE(#{origin, jdbcType=VARCHAR}, 'api'),
+            #{priority},
+            #{maxAttempts},
             now()
         )
-        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL AND status IN ('queued', 'running', 'retry_wait', 'cancelling')
+        ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL AND status IN ('queued', 'running', 'retry_wait', 'cancelling')
         DO NOTHING
         RETURNING <include refid="task_columns"/>
     </select>
@@ -112,14 +115,14 @@
         UPDATE tasks
         SET status = CASE
                 WHEN status IN ('queued', 'retry_wait') THEN 'cancelled'
-                WHEN status IN ('running', 'cancelling') THEN 'cancelling'
-                ELSE status
+                ELSE 'cancelling'
             END,
-            cancel_requested = CASE WHEN status IN ('queued', 'retry_wait', 'running', 'cancelling') THEN true ELSE cancel_requested END,
+            cancel_requested = true,
             finished_at = CASE WHEN status IN ('queued', 'retry_wait') THEN now() ELSE finished_at END,
             updated_at = now()
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid)
+          AND status IN ('queued', 'retry_wait', 'running')
     </update>
 
     <update id="retryTask">

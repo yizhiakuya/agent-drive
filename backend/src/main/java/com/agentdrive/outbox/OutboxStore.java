@@ -44,4 +44,15 @@ public interface OutboxStore {
      * @return 事件存在且本次完成标记时返回 {@code true}。
      */
     boolean markPublished(UUID userId, long eventId);
+
+    /**
+     * 记录一次投递失败；不可恢复事件同时进入死信状态，之后不再参与 pending 查询。
+     * 该入口只供跨 owner Worker 按数据库事件 ID 使用，不接受事件 payload 提供的任意标识。
+     *
+     * @param eventId outbox 数据库主键。
+     * @param error 稳定、无敏感信息的失败原因。
+     * @param deadLetter 是否将事件永久隔离。
+     * @return 本次是否更新了仍待处理的事件。
+     */
+    boolean recordFailure(long eventId, String error, boolean deadLetter);
 }

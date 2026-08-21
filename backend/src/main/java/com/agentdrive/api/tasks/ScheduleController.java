@@ -2,6 +2,11 @@ package com.agentdrive.api.tasks;
 
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.tasks.ScheduleStore;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -68,14 +73,15 @@ public final class ScheduleController {
      */
     @PutMapping("/{name}")
     public Mono<Map<String, Object>> upsert(@PathVariable String name,
-                                             @RequestBody ScheduleRequest request,
+                                             @Valid @RequestBody ScheduleRequest request,
                                              ServerWebExchange exchange) {
         if (request == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "schedule body is required");
-        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> Map.of(
+        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> Map.<String, Object>of(
                 "schedule", schedules.upsert(principal.userId(), name, request.cron(), request.scheduleKind(),
                         request.scheduleValue(), request.taskType(), request.lane(), request.payload(),
                         request.enabled(), request.priority(), request.maxAttempts(), request.timezone())
-        )));
+        ))).onErrorMap(IllegalArgumentException.class, error ->
+                new ResponseStatusException(HttpStatus.BAD_REQUEST, error.getMessage(), error));
     }
 
     /**
@@ -114,16 +120,16 @@ public final class ScheduleController {
      * 任务输入持久化，enabled、priority 和 maxAttempts 控制后续 Worker 行为。
      */
     public record ScheduleRequest(
-            String cron,
-            String scheduleKind,
-            String scheduleValue,
-            String taskType,
-            String lane,
+            @Size(max = 200) String cron,
+            @Pattern(regexp = "cron|interval|daily") String scheduleKind,
+            @Size(max = 200) String scheduleValue,
+            @NotBlank @Size(max = 100) String taskType,
+            @Size(max = 100) String lane,
             Map<String, Object> payload,
             boolean enabled,
-            int priority,
-            int maxAttempts,
-            String timezone
+            @Min(0) int priority,
+            @Min(1) int maxAttempts,
+            @Size(max = 100) String timezone
     ) {
     }
 }
