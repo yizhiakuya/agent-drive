@@ -31,7 +31,7 @@ describe("Onboarding", () => {
       base_url: "https://api.deepseek.com/v1",
       api_key: "test-key",
     }));
-    await waitFor(() => expect(screen.getByRole("option", { name: "model-a" })).toBeInTheDocument());
+    expect(await screen.findByRole("option", { name: "model-a" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("option", { name: "model-b" }));
     expect(screen.getByRole("combobox", { name: "模型名" })).toHaveValue("model-b");

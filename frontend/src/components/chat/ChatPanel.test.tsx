@@ -254,7 +254,7 @@ describe("ChatPanel 主流程", () => {
     await act(async () => {});
 
     await typeAndSend("第一次提问");
-    await waitFor(() => expect(screen.getByText(/出错了：上游限流/)).toBeInTheDocument());
+    expect(await screen.findByText(/出错了：上游限流/)).toBeInTheDocument();
     expect(useAppStore.getState().sessionId).toBe("failed-session");
 
     await typeAndSend("第二次提问");

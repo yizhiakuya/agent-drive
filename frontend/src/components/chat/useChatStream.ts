@@ -6,7 +6,7 @@ import { useAppStore } from "@/lib/store";
 import type { PlanStep } from "./PlanCard";
 import { createChatStreamFrame, type ChatStreamFrame } from "./chat-stream-frame";
 import { parseChatStreamEvent } from "./chat-stream-events";
-import { dispatchChatStreamEvent } from "./chat-stream-dispatch";
+import { dispatchChatStreamEvent, type ChatStreamEventHandlers } from "./chat-stream-dispatch";
 import { buildChatHistory, removeEmptyAssistantMessages } from "./chat-stream-state";
 import type { ContextUsage, Message, PendingConfirmation, ThinkingLevel } from "./chat-types";
 
@@ -36,6 +36,93 @@ interface UseChatStreamReturn {
   abortStream: () => void;
   /** 当前是否有流式请求在进行中。 */
   busy: boolean;
+}
+
+interface StreamLifecycle extends Pick<UseChatStreamOptions, "setMessages" | "setPending" | "setPlan" | "setContextUsage" | "setSessionId" | "bumpSessions" | "onFinish"> {
+  frame: ChatStreamFrame;
+  generation: number;
+  sendSid: string | null;
+  sessionIdRef: React.MutableRefObject<string | null>;
+  streamGenerationRef: React.MutableRefObject<number>;
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null
+    && (error as { name?: unknown }).name === "AbortError";
+}
+
+function currentErrorSessionId(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const sessionId = (error as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId : null;
+}
+
+function adoptStreamSession(sessionId: unknown, lifecycle: StreamLifecycle): void {
+  if (typeof sessionId !== "string" || !sessionId || lifecycle.sendSid !== lifecycle.sessionIdRef.current) return;
+  lifecycle.sessionIdRef.current = sessionId;
+  lifecycle.setSessionId(sessionId);
+  lifecycle.bumpSessions();
+}
+
+function appendStreamError(error: unknown, setMessages: StreamLifecycle["setMessages"]): void {
+  const message = error instanceof Error ? error.message : String(error);
+  setMessages((messages) => {
+    const copy = [...messages];
+    const errorMessage = { type: "assistant" as const, content: `出错了：${message}` };
+    const last = copy.at(-1);
+    if (last?.type === "assistant" && !last.content && !last.reasoning) {
+      copy[copy.length - 1] = errorMessage;
+    } else {
+      copy.push(errorMessage);
+    }
+    return copy;
+  });
+}
+
+function finishStream(result: Record<string, unknown> | null, lifecycle: StreamLifecycle): void {
+  const { generation, streamGenerationRef, frame, setMessages, sendSid, sessionIdRef } = lifecycle;
+  if (generation !== streamGenerationRef.current) return;
+  if (!frame.flush()) setMessages(removeEmptyAssistantMessages);
+  if (sendSid !== sessionIdRef.current) return;
+  const plan = (result?.plan ?? []) as PlanStep[];
+  if (plan.length) lifecycle.setPlan(plan);
+  if (result?.context_usage) lifecycle.setContextUsage(result.context_usage as ContextUsage);
+  adoptStreamSession(result?.session_id, lifecycle);
+  if (result?.truncated) {
+    setMessages((messages) => [...messages, { type: "system", content: "任务达到最大步数，可能未完成，回复「继续」可接着做。" }]);
+  }
+  if (result?.pending_confirmation) lifecycle.setPending(result.pending_confirmation as PendingConfirmation);
+  setTimeout(() => {
+    if (generation === streamGenerationRef.current) lifecycle.onFinish?.();
+  }, 50);
+}
+
+function createStreamEventHandlers(
+  frame: ChatStreamFrame,
+  setMessages: StreamLifecycle["setMessages"],
+  setPlan: StreamLifecycle["setPlan"],
+): ChatStreamEventHandlers {
+  return {
+    frame,
+    setMessages,
+    setPlan,
+    onFrontendAction: (data) => {
+      const action = normalizeFrontendAction(data);
+      if (action) useAppStore.getState().enqueueFrontendAction(action);
+    },
+  };
+}
+
+function dispatchCurrentStreamEvent(
+  event: string,
+  data: Record<string, unknown>,
+  generation: number,
+  streamGenerationRef: React.MutableRefObject<number>,
+  eventHandlers: ChatStreamEventHandlers,
+): void {
+  if (generation !== streamGenerationRef.current) return;
+  const streamEvent = parseChatStreamEvent(event, data);
+  if (streamEvent) dispatchChatStreamEvent(streamEvent, eventHandlers);
 }
 
 /**
@@ -75,90 +162,58 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     thinkingLevel: ThinkingLevel = "auto",
     model = "",
   ) {
-    // 每次发送绑定一个 generation；停止、切会话或卸载都会递增它，旧流即使晚到也不能回写新会话。
     const msg = message ?? "";
     if (!msg || busyRef.current) return;
     const history = buildChatHistory(messages);
-    setMessages((m) => [...m, { type: "user", content: msg }]);
+    setMessages((current) => [...current, { type: "user", content: msg }]);
     applyBusy(true);
     setPending(null);
     setPlan([]);
     setContextUsage(null);
+
     const controller = new AbortController();
     abortRef.current = controller;
     const sendSid = sessionIdRef.current;
     const generation = ++streamGenerationRef.current;
-    setMessages((m) => [...m, { type: "assistant", content: "" }]);
+    setMessages((current) => [...current, { type: "assistant", content: "" }]);
     const frame = createChatStreamFrame({
       isCurrent: () => generation === streamGenerationRef.current,
       setMessages,
     });
     frameRef.current = frame;
-    // 将协议事件集中交给 dispatcher，保证文本/思考/工具步骤共享同一个帧和消息状态机。
-    const eventHandlers = {
+    const eventHandlers = createStreamEventHandlers(frame, setMessages, setPlan);
+    const lifecycle: StreamLifecycle = {
       frame,
+      generation,
+      sendSid,
+      sessionIdRef,
+      streamGenerationRef,
       setMessages,
+      setPending,
       setPlan,
-      onFrontendAction: (data: Record<string, unknown>) => {
-        const action = normalizeFrontendAction(data);
-        if (action) useAppStore.getState().enqueueFrontendAction(action);
-      },
+      setContextUsage,
+      setSessionId,
+      bumpSessions,
+      onFinish,
     };
 
     try {
-      const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
-        if (generation !== streamGenerationRef.current) return;
-        const streamEvent = parseChatStreamEvent(event, data);
-        if (!streamEvent) return;
-        dispatchChatStreamEvent(streamEvent, eventHandlers);
-      }, controller.signal, thinkingLevel, getFrontendCapabilities(), model);
-
-      if (generation !== streamGenerationRef.current) return;
-      // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
-      if (!frame.flush()) {
-        // 无文本事件（仅工具调用）：清掉空助手占位气泡，只留工具步骤
-        setMessages(removeEmptyAssistantMessages);
-      }
-      if (sendSid !== sessionIdRef.current) return;
-      const rPlan = (r?.plan ?? []) as PlanStep[];
-      if (rPlan.length) setPlan(rPlan);
-      if (r?.context_usage) setContextUsage(r.context_usage as { used: number; total: number; percent: number });
-      if (r?.session_id) {
-        const sid = r.session_id as string;
-        sessionIdRef.current = sid;
-        setSessionId(sid);
-        bumpSessions();
-      }
-      if (r?.truncated) {
-        setMessages((m) => [...m, { type: "system", content: "任务达到最大步数，可能未完成，回复「继续」可接着做。" }]);
-      }
-      if (r?.pending_confirmation) setPending(r.pending_confirmation as PendingConfirmation);
-      setTimeout(() => {
-        if (generation === streamGenerationRef.current) onFinish?.();
-      }, 50);
-    } catch (e) {
-      if ((e as Error).name === "AbortError" || generation !== streamGenerationRef.current) return;
-      const errorSessionId = typeof e === "object" && e !== null && "sessionId" in e
-        && typeof (e as { sessionId?: unknown }).sessionId === "string"
-        ? (e as { sessionId: string }).sessionId
-        : null;
-      if (errorSessionId && sendSid === sessionIdRef.current) {
-        sessionIdRef.current = errorSessionId;
-        setSessionId(errorSessionId);
-        bumpSessions();
-      }
-      const message = e instanceof Error ? e.message : String(e);
-      setMessages((m) => {
-        const copy = [...m];
-        const errorMessage = { type: "assistant" as const, content: `出错了：${message}` };
-        const last = copy.at(-1);
-        if (last?.type === "assistant" && !last.content && !last.reasoning) {
-          copy[copy.length - 1] = errorMessage;
-        } else {
-          copy.push(errorMessage);
-        }
-        return copy;
-      });
+      const result = await chatStream(
+        msg,
+        history,
+        sendSid,
+        confirmations,
+        (event, data) => dispatchCurrentStreamEvent(event, data, generation, streamGenerationRef, eventHandlers),
+        controller.signal,
+        thinkingLevel,
+        getFrontendCapabilities(),
+        model,
+      );
+      finishStream(result, lifecycle);
+    } catch (error) {
+      if (isAbortError(error) || generation !== streamGenerationRef.current) return;
+      adoptStreamSession(currentErrorSessionId(error), lifecycle);
+      appendStreamError(error, setMessages);
     } finally {
       if (frameRef.current === frame) frameRef.current = null;
       if (generation === streamGenerationRef.current) applyBusy(false);

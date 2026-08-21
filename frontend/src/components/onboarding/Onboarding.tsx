@@ -9,13 +9,13 @@ import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, C
 import { Alert } from "@/components/ui/alert";
 import { ArrowRight, Bot, Check, HardDrive, RefreshCw } from "lucide-react";
 
-type FieldProps = {
+type FieldProps = Readonly<{
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
   type?: string;
-};
+}>;
 
 function Field({ label, value, onChange, placeholder, type = "text" }: FieldProps) {
   return (
