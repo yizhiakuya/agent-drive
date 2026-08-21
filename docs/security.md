@@ -48,7 +48,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 ## 4. Agent 和外部 provider
 
 - 模型只能使用稳定的 `backend_api`、`frontend_api`、只读 `read_skill` 和受限 plan 工具；调用后端必须先 discover，再使用登记的 `METHOD /api/v1/path` 或 `INTERNAL name`。
-- 自定义 Skill 按 owner 写入 PostgreSQL，只能经认证 REST/UI 或 red `backend_api` 修改；Agent 只能读取启用 Skill，已知 API key/Bearer 模式落库前不可逆脱敏。Skill 内容是 Markdown 指令，不执行脚本、不加载任意文件/URL，也不能绕过 operation allowlist、owner 注入或 red 确认。内置 Skill 随应用发布且不可修改。
+- 自定义 Skill 按 owner 写入 PostgreSQL，只能经认证 REST/UI 或 red `backend_api` 修改；每次模型请求只注入启用 Skill 的名称/说明目录，完整正文由 `read_skill` 按 exact name 读取。`Agent/AGENT.md`、`USER.md`、`MEMORY.md` 通过 owner 文件服务读取并在进入模型/context transcript 前清理已知 key/Bearer 模式；context 历史只允许当前 owner 查询。Skill 内容是 Markdown 指令，不执行脚本、不加载任意文件/URL，也不能绕过 operation allowlist、owner 注入或 red 确认。内置 Skill 随应用发布且不可修改。
 - 模型不能提供任意 URL、Cookie、Bearer、Authorization、请求头、Python 入口、Java 类名、JavaScript 或 `eval`。
 - 当前 Request 的 Cookie/Bearer 只在进程内传给 backend dispatcher；Worker 通过 PostgreSQL 任务租约和 owner-scoped payload 执行，不接收模型提供的凭据。
 - GET 和只读 probe 自动执行；写操作按 operation 风险处理，red 操作需要签名确认、nonce TTL 和一次性消费。非 red 操作按 session/tool/arguments 做确定性 replay。

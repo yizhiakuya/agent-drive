@@ -3,6 +3,7 @@ import type { Message } from "./chat-types";
 import { parseChatStreamEvent } from "./chat-stream-events";
 import {
   appendToolStep,
+  appendContextMessage,
   buildChatHistory,
   completeToolStep,
   planFromToolTrace,
@@ -34,6 +35,20 @@ describe("chat stream state helpers", () => {
     expect(removeEmptyAssistantMessages(messages)).toHaveLength(2);
   });
 
+  it("把上下文注入插入空助手占位之前", () => {
+    const messages: Message[] = [
+      { type: "user", content: "hello" },
+      { type: "assistant", content: "" },
+    ];
+    expect(appendContextMessage(messages, {
+      type: "context", source: "skill-catalog", content: "catalog",
+    })).toEqual([
+      { type: "user", content: "hello" },
+      { type: "context", source: "skill-catalog", content: "catalog" },
+      { type: "assistant", content: "" },
+    ]);
+  });
+
   it("只保留最后一个同名 running tool step 并标记失败状态", () => {
     const started = appendToolStep([], { tool: "list_files", arguments: {} });
     const messages = appendToolStep(started, { tool: "list_files", arguments: {} });
@@ -57,5 +72,17 @@ describe("chat stream state helpers", () => {
       expect(planFromToolTrace(event.trace)).toEqual([{ step: "检查", status: "completed" }]);
     }
     expect(parseChatStreamEvent("tool_trace", { tool: "list_files" })).toBeNull();
+  });
+
+  it("只接受字段完整的上下文注入事件", () => {
+    expect(parseChatStreamEvent("context", {
+      source: "skill-catalog",
+      kind: "skill-catalog",
+      content: "available skills",
+    })).toEqual({
+      type: "context",
+      context: { source: "skill-catalog", kind: "skill-catalog", content: "available skills" },
+    });
+    expect(parseChatStreamEvent("context", { source: "skill-catalog" })).toBeNull();
   });
 });

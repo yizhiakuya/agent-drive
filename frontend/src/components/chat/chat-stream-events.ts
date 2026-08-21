@@ -4,9 +4,16 @@ export interface ToolTrace {
   parsed?: Record<string, unknown> | unknown[];
 }
 
+export interface ContextTrace {
+  source: string;
+  kind: string;
+  content: string;
+}
+
 export type ChatStreamEvent =
   | { type: "text"; delta: string }
   | { type: "reasoning"; delta: string }
+  | { type: "context"; context: ContextTrace }
   | { type: "frontend_action"; data: Record<string, unknown> }
   | { type: "tool_start"; data: Record<string, unknown> }
   | { type: "tool_trace"; trace: ToolTrace };
@@ -27,6 +34,8 @@ export function parseChatStreamEvent(event: string, data: Record<string, unknown
       const delta = chatTextDelta(data);
       return delta ? { type: "reasoning", delta } : null;
     }
+    case "context":
+      return parseContext(data);
     case "frontend_action":
       return { type: "frontend_action", data };
     case "tool_start":
@@ -36,6 +45,16 @@ export function parseChatStreamEvent(event: string, data: Record<string, unknown
     default:
       return null;
   }
+}
+
+function parseContext(data: Record<string, unknown>): ChatStreamEvent | null {
+  if (typeof data.source !== "string" || !data.source
+      || typeof data.kind !== "string" || !data.kind
+      || typeof data.content !== "string" || !data.content) return null;
+  return {
+    type: "context",
+    context: { source: data.source, kind: data.kind, content: data.content },
+  };
 }
 
 function parseToolTrace(data: Record<string, unknown>): ChatStreamEvent | null {

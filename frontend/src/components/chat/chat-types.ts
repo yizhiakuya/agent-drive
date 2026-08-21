@@ -1,8 +1,10 @@
 export type ThinkingLevel = "auto" | "low" | "medium" | "high";
 
 export interface Message {
-  type: "user" | "assistant" | "tool_step" | "system";
+  type: "user" | "assistant" | "tool_step" | "system" | "context";
   content: string;
+  source?: string;
+  contextKind?: string;
   reasoning?: string;
   tool?: string;
   arguments?: Record<string, unknown>;

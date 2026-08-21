@@ -9,6 +9,7 @@ import { EV, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToolStep } from "./ToolStep";
+import { ContextInjection } from "./ContextInjection";
 import { ContextBar } from "./ContextBar";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
@@ -170,16 +171,17 @@ export default function ChatPanel() {
     }
   }
 
-  /**
-   * 切换会话时先使当前流失效，再读取历史消息；流式请求的取消与消息加载必须保持同一 session 边界。
-   */
+  /** 切换会话时读取目标历史；其他 session 的流继续在后台运行。 */
   async function loadSession(sid: string) {
     const request = ++sessionLoadRequestRef.current;
     try {
-      const r = await getSession(sid) as { messages?: { role: string; content: string; reasoning?: string; tool?: string; arguments?: Record<string, unknown>; output?: string; parsed?: Record<string, unknown> }[] };
+      const r = await getSession(sid) as {
+        meta?: { pending_confirmation?: PendingConfirmation | null };
+        messages?: { role: string; content: string; reasoning?: string; tool?: string; context_source?: string; context_kind?: string; arguments?: Record<string, unknown>; output?: string; parsed?: Record<string, unknown> }[];
+      };
       if (request !== sessionLoadRequestRef.current || sidRef.current !== sid) return;
       const msgs: Message[] = (r.messages || [])
-        .filter((m) => ["user", "assistant", "tool_call"].includes(m.role))
+        .filter((m) => ["user", "assistant", "tool_call", "context"].includes(m.role))
         .map((m) => {
           if (m.role === "tool_call") {
             const failed = m.parsed && (m.parsed as { ok?: boolean }).ok === false;
@@ -193,6 +195,14 @@ export default function ChatPanel() {
               content: "",
             };
           }
+          if (m.role === "context") {
+            return {
+              type: "context" as const,
+              source: m.context_source || "context",
+              contextKind: m.context_kind || "context",
+              content: m.content || "",
+            };
+          }
           return {
             type: m.role as "user" | "assistant",
             content: m.content || "",
@@ -200,6 +210,7 @@ export default function ChatPanel() {
           };
         });
       setMessages(msgs);
+      setPending(r.meta?.pending_confirmation || null);
       setPlan([]);
       setContextUsage(null);
     } catch (error) {
@@ -209,8 +220,9 @@ export default function ChatPanel() {
     }
   }
 
-  const { send, stop, abortStream, busy } = useChatStream({
+  const { send, stop, busy } = useChatStream({
     messages,
+    sessionId,
     sessionIdRef: sidRef,
     setMessages,
     setPending,
@@ -218,6 +230,9 @@ export default function ChatPanel() {
     setContextUsage,
     setSessionId,
     bumpSessions,
+    onReconcile(sid) {
+      void loadSession(sid);
+    },
     onFinish() {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     },
@@ -264,7 +279,6 @@ export default function ChatPanel() {
 
   useEffect(() => {
     if (sessionId !== sidRef.current) {
-      abortStream();
       sidRef.current = sessionId;
       setPending(null);
       if (sessionId) {
@@ -278,7 +292,7 @@ export default function ChatPanel() {
         setContextUsage(null);
       }
     }
-  }, [sessionId, abortStream]);
+  }, [sessionId]);
 
   function onScroll() {
     const el = listRef.current;
@@ -358,6 +372,7 @@ export default function ChatPanel() {
         )}
         {messages.map((m, i) => {
           if (m.type === "tool_step") return <ToolStep key={i} step={{ tool: m.tool || "", arguments: m.arguments, status: m.status || "done", output: m.output, parsed: m.parsed }} />;
+          if (m.type === "context") return <ContextInjection key={i} source={m.source || "context"} content={m.content} />;
           const isThinking = busy && m.type === "assistant" && m.content === "" && !m.reasoning && i === messages.length - 1;
           const isLatestReasoning = busy && m.type === "assistant" && i === messages.length - 1;
           return (

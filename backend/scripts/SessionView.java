@@ -106,13 +106,14 @@ public final class SessionView {
                 : "=== messages (latest " + options.messageLimit() + ", content truncated and token-redacted) ===";
         String messageQuery = """
                 SELECT recent.id AS message_id, recent.role, coalesce(recent.tool_name,'') AS tool,
+                       coalesce(recent.context_source,'') AS context_source,
                        to_char(recent.created_at, 'YYYY-MM-DD HH24:MI:SSOF') AS created_at,
                        left(regexp_replace(regexp_replace(
                          replace(replace(coalesce(recent.content,''), chr(10), ' '), chr(13), ' '),
                          'jina_[A-Za-z0-9_-]+', '[REDACTED]', 'g'),
                          '(sk-|Bearer )[A-Za-z0-9._-]+', '[REDACTED]', 'gi'), %d) AS content
                 FROM (
-                  SELECT id, role, tool_name, created_at, content
+                  SELECT id, role, tool_name, context_source, created_at, content
                   FROM chat_messages
                   WHERE session_id='%s'
                   ORDER BY id DESC%s

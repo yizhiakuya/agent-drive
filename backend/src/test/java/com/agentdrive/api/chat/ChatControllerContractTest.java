@@ -27,6 +27,8 @@ class ChatControllerContractTest {
             public Flux<ChatSseEvent> stream(ChatRequest request) {
                 seenRequest.set(request);
                 return Flux.just(
+                        ChatSseEvents.context(new ChatContext(
+                                "skill-catalog", "skill-catalog", "catalog", true)),
                         ChatSseEvents.reasoning("先检查范围"),
                         ChatSseEvents.text("已完成"),
                         ChatSseEvents.toolStart(1, "backend_api", Map.of("action", "discover")),
@@ -54,10 +56,13 @@ class ChatControllerContractTest {
                 .returnResult();
 
         String body = result.getResponseBody();
+        assertThat(body).contains("event: context");
+        assertThat(body).contains("\"source\":\"skill-catalog\"");
         assertThat(body).contains("event: reasoning\ndata: {\"text\":\"先检查范围\"}");
         assertThat(body).contains("event: tool_start");
         assertThat(body).contains("\"step\":1");
         assertThat(body).contains("event: done");
+        assertThat(body.indexOf("event: context")).isLessThan(body.indexOf("event: reasoning"));
         assertThat(body.indexOf("event: reasoning")).isLessThan(body.indexOf("event: text"));
         assertThat(body.indexOf("event: text")).isLessThan(body.indexOf("event: tool_start"));
         assertThat(body.indexOf("event: tool_start")).isLessThan(body.indexOf("event: tool_trace"));

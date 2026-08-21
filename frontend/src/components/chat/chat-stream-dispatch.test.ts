@@ -28,6 +28,23 @@ describe("dispatchChatStreamEvent", () => {
     expect(target.onFrontendAction).toHaveBeenCalledWith({ operation: "files.open" });
   });
 
+  it("appends context injections as sourced messages", () => {
+    const target = handlers();
+    dispatchChatStreamEvent({
+      type: "context",
+      context: { source: "AGENT.md", kind: "agent-instructions", content: "rules" },
+    }, target);
+
+    expect(target.setMessages).toHaveBeenCalledTimes(1);
+    const update = target.setMessages.mock.calls[0][0] as (messages: unknown[]) => unknown[];
+    expect(update([{ type: "assistant", content: "" }])).toEqual([{
+      type: "context",
+      source: "AGENT.md",
+      contextKind: "agent-instructions",
+      content: "rules",
+    }, { type: "assistant", content: "" }]);
+  });
+
   it("updates tool steps and plans without changing stream parsing", () => {
     const target = handlers();
     dispatchChatStreamEvent({ type: "tool_start", data: { tool: "list_files", arguments: {} } }, target);

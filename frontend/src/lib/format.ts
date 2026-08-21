@@ -50,7 +50,11 @@ const TOOL_ARG_FORMATTERS: Record<string, ToolArgFormatter> = {
   remember: (args) => `记住 "${String(args.content || args.text || "").slice(0, 20)}…"`,
   memory_search: (_args, path) => `记忆检索 ${path}`,
   memory_get: (_args, path) => `记忆检索 ${path}`,
-  read_skill: (_args, path) => `加载技能 ${path}`,
+  read_skill: (args) => args.action === "read"
+    ? `加载 Skill ${String(args.name || "")}`.trim()
+    : args.query
+      ? `查找 Skill “${String(args.query)}”`
+      : "查看 Skill 目录",
   get_storage_info: () => "查看存储用量",
   get_system_status: () => "查看系统状态",
   view_audit_log: () => "查看审计日志",

@@ -6,9 +6,9 @@ Agent-first 的私人网盘：文件管理、检索、配置和自动化都可�
 
 ## 能力
 
-- Agent 通过统一的 `backend_api` / `frontend_api` discover/call envelope 操作后端和当前浏览器能力，并通过 `read_skill` 按需加载 owner Skill。
+- Agent 通过统一的 `backend_api` / `frontend_api` discover/call envelope 操作后端和当前浏览器能力；每轮自动注入 owner Agent 文档和启用 Skill 目录，再通过 `read_skill` 按需加载匹配 Skill 正文。
 - 支持 OpenAI 兼容、OpenAI Responses 和 Anthropic provider；支持独立的 embedding 与 vision 配置。
-- Chat 使用 JSON object SSE，支持 reasoning、工具轨迹、确认、确定性 replay 和会话摘要。
+- Chat 使用 JSON object SSE，支持 reasoning、可展开上下文注入、工具轨迹、确认、确定性 replay 和会话摘要；切换会话不会中止仍在生成或执行工具的会话。
 - 文件页支持名称/路径搜索、Jina + pgvector 语义搜索、文本预览/全文查看、回收站和 revision 状态。
 - 上传服务端复算 MD5；文件写入、复制、覆盖、去重和回收站使用原子发布与路径安全边界。
 - PostgreSQL 保存认证、会话、设备、Skill、文件 metadata、任务、schedule、outbox、全文和向量状态；实际文件仍在 owner-scoped 本地文件系统。

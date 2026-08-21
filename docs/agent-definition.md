@@ -43,7 +43,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 
 `backend_api` 使用 `action=discover|call` 信封。HTTP operation 标识为 `METHOD /api/v1/path`，内部 operation 标识为 `INTERNAL name`。discover 以 `discovery_offset` 和 `discovery_limit` 分页，默认返回 6 项、单页最多 20 项；每页同时返回完整匹配数、实际窗口、`has_more` 和 `next_offset`。模型必须在分页完成后才能把聚合结果称为完整匹配集。模型不能直接选择 Java 方法、React handler、文件系统绝对路径或未登记能力。
 
-`read_skill` 使用 `action=discover|read`。discover 只返回启用 Skill 摘要，read 读取精确名称的完整 Markdown 指令；内置 `agent-drive-api` 从当前 operation catalog 动态生成，`skill-authoring` 说明自定义 Skill 生命周期，自定义 Skill 存于 PostgreSQL 并按 owner 隔离。Skill 不增加工具、权限或凭据，只减少稳定工作流的重复说明。
+每次请求先自动注入当前 owner 的完整启用 Skill 摘要目录。用户点名某 Skill 或任务明显匹配其说明时，模型必须用目录中的 exact name 调用 `read_skill action=read`；discover 只用于搜索或刷新摘要。read 返回完整 Markdown 指令；内置 `agent-drive-api` 从当前 operation catalog 动态生成，`skill-authoring` 说明自定义 Skill 生命周期。Skill 不增加工具、权限或凭据。
 
 ## 4. 执行循环
 
@@ -61,13 +61,13 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 
 ## 5. 事件与记忆
 
-Chat SSE 事件为 `text`、`reasoning`、`tool_start`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。reasoning 只有 provider 实际返回时才展示，前端默认折叠，且不注入下一轮 history。
+Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。context 对应模型可见的规范系统提示、owner Agent 文档和 Skill 目录，按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
 
 持久状态分为：
 
 | 层 | 内容 | 当前存储 |
 |----|------|----------|
-| 会话 | 消息、摘要、reasoning、tool trace、last trace | PostgreSQL `chat_sessions` / `chat_messages` |
+| 会话 | 消息、上下文注入、摘要、reasoning、tool trace、last trace | PostgreSQL `chat_sessions` / `chat_messages` |
 | 偏好 | 语言、整理风格、命名规则 | PostgreSQL `agent_preferences` |
 | Skill | owner 自定义说明、Markdown 指令、启停和版本 | PostgreSQL `agent_skills` + 应用内置 provider |
 | 文件知识 | 文档、chunk、source revision、embedding fingerprint | owner 文件系统 + PostgreSQL/pgvector |

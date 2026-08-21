@@ -37,6 +37,19 @@ public final class ChatSseEvents {
     }
 
     /**
+     * 创建可由前端折叠展示的上下文注入事件。
+     * @param context 已校验的上下文快照
+     * @return 包含来源、类型和完整正文的 {@code context} 事件
+     */
+    public static ChatSseEvent context(ChatContext context) {
+        return new ChatSseEvent("context", Map.of(
+                "source", context.source(),
+                "kind", context.kind(),
+                "content", context.content()
+        ));
+    }
+
+    /**
      * 创建默认步骤号为 0 的工具开始事件。
      *
      * @param tool 工具名称。

@@ -102,6 +102,107 @@ describe("ChatPanel 主流程", () => {
     expect(screen.queryByText("A 会话历史")).not.toBeInTheDocument();
   });
 
+  it("切换会话不会中止原会话流，返回后从持久历史收敛", async () => {
+    const completion = deferred<Record<string, unknown>>();
+    let emit!: (event: string, data: Record<string, unknown>) => void;
+    let signal!: AbortSignal;
+    let finished = false;
+    chatStream.mockImplementation((_message, _history, _sid, _confirmations, onEvent, activeSignal) => {
+      emit = onEvent;
+      signal = activeSignal;
+      return completion.promise;
+    });
+    getSession.mockImplementation(async (sid: string) => ({
+      messages: sid === "session-a" && finished
+        ? [{ role: "assistant", content: "后台回复完成" }]
+        : sid === "session-b"
+          ? [{ role: "assistant", content: "B 会话" }]
+          : [],
+    }));
+
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-a"); });
+    await waitFor(() => expect(getSession).toHaveBeenCalledWith("session-a"));
+    await typeAndSend("长任务");
+
+    await act(async () => { useAppStore.getState().setSessionId("session-b"); });
+    expect(await screen.findByText("B 会话")).toBeInTheDocument();
+    expect(signal.aborted).toBe(false);
+    await act(async () => { emit("text", { text: "后台回复完成" }); });
+    expect(screen.queryByText("后台回复完成")).not.toBeInTheDocument();
+
+    await act(async () => { useAppStore.getState().setSessionId("session-a"); });
+    finished = true;
+    await act(async () => { completion.resolve({ session_id: "session-a" }); });
+    expect(await screen.findByText("后台回复完成")).toBeInTheDocument();
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("不同会话可以各自保持一个活动流", async () => {
+    const first = deferred<Record<string, unknown>>();
+    const second = deferred<Record<string, unknown>>();
+    const signals: AbortSignal[] = [];
+    chatStream.mockImplementation((_message, _history, sid, _confirmations, _onEvent, signal) => {
+      signals.push(signal);
+      return sid === "session-a" ? first.promise : second.promise;
+    });
+
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-a"); });
+    await typeAndSend("A 任务");
+    await act(async () => { useAppStore.getState().setSessionId("session-b"); });
+    await typeAndSend("B 任务");
+
+    expect(chatStream).toHaveBeenCalledTimes(2);
+    expect(signals).toHaveLength(2);
+    expect(signals.every((item) => !item.aborted)).toBe(true);
+    await act(async () => {
+      first.resolve({ session_id: "session-a" });
+      second.resolve({ session_id: "session-b" });
+    });
+  });
+
+  it("从会话历史恢复可展开的上下文注入", async () => {
+    getSession.mockResolvedValue({
+      messages: [{
+        role: "context",
+        content: "Follow workspace rules",
+        context_source: "AGENT.md",
+        context_kind: "agent-instructions",
+      }],
+    } as never);
+
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-context"); });
+
+    const disclosure = await screen.findByTestId("context-injection");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(disclosure).toHaveTextContent("上下文注入");
+    expect(disclosure).toHaveTextContent("AGENT.md");
+    fireEvent.click(disclosure.querySelector("summary")!);
+    expect(disclosure).toHaveAttribute("open");
+  });
+
+  it("从会话详情恢复后台生成的待确认操作", async () => {
+    getSession.mockResolvedValue({
+      meta: {
+        pending_confirmation: {
+          tool: "backend_api",
+          arguments: { operation: "DELETE /api/v1/sessions/{sessionId}" },
+          nonce: "nonce",
+          ts: 1,
+          signature: "signature",
+        },
+      },
+      messages: [],
+    } as never);
+
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-pending"); });
+
+    expect(await screen.findByText("高风险操作确认")).toBeInTheDocument();
+  });
+
   it("聊天输入区保持紧凑并提供稳定的聚焦反馈", async () => {
     render(<ChatPanel />);
     await act(async () => {});

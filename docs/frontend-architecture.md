@@ -48,15 +48,15 @@ frontend/src/
 
 `useChatStream` 负责编排请求生命周期，纯逻辑按职责拆分。流式忙碌状态只由这个 hook 持有，ChatPanel 不再维护第二份 `busy` 状态，避免发送按钮、停止按钮和流结束回调出现状态分叉：
 
-- `chat-stream-events.ts`：SSE 事件形状和事件映射；
-- `chat-stream-state.ts`：消息、reasoning、工具轮次和终态状态转换；
+- `chat-stream-events.ts`：context/text/reasoning/tool 等 SSE 事件校验和映射；
+- `chat-stream-state.ts`：上下文注入顺序、消息、reasoning、工具轮次和终态状态转换；
 - `chat-stream-frame.ts`：80ms 批量刷新、工具轮次边界和最终冲刷。
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
 - ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。
 
-解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。停止、切换会话或卸载时递增 stream generation、Abort 在途请求并清理 timer，旧流不能回写。流异常收尾必须先同步 `flush` 并 `cancel` 当前帧，再清理空助手占位和追加错误消息；已经上屏或待冲刷的正文、reasoning 与工具步骤不能被错误气泡或迟到 timer 覆盖。reasoning 只在后端独立事件存在时展示，使用原生 `<details>` 默认收叠，不注入下一轮 history。
+解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。活动流以 session key 保存在 hook 的 Map 中；切换会话标记 detached 但保持网络读取，text/reasoning 帧用当前 session 检查隔离 UI 写入，context/tool 事件只写所属会话视图，返回原会话或结束后从持久历史收敛。当前会话 stop 与组件卸载才 Abort。流异常收尾仍先同步 flush/cancel，再清理空助手占位和追加错误消息。
 
-ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即清空旧会话的临时内容，但迟到的历史响应只能被丢弃；模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的规则，并以发起探测时的表单快照调用接口，避免用户修改地址或 key 后旧结果污染当前选择器。LLM/视觉的协议或 base URL 变化、embedding 的 provider/base URL/model 变化时必须清空对应 API key 草稿；任一配置保存成功或从服务端重载后也要销毁表单中的明文 key。
+ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即显示目标历史，但不会终止原会话；后台完成时刷新会话列表，回到原会话时重拉已持久化的 assistant/context/tool 记录。模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的请求代次规则和密钥草稿销毁规则。
 
 ## 4. 文件页请求生命周期
 

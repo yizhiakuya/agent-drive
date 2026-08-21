@@ -16,6 +16,8 @@ export { chatTextDelta } from "./chat-stream-events";
 interface UseChatStreamOptions {
   /** 当前消息历史透视图（send 发起时采样，用于构造 history） */
   messages: Message[];
+  /** 当前正在查看的会话 id。 */
+  sessionId: string | null;
   /** 当前会话 id（读/写走 ref，保证异步流回调里拿到最新值） */
   sessionIdRef: React.MutableRefObject<string | null>;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
@@ -24,6 +26,8 @@ interface UseChatStreamOptions {
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
   setSessionId: (id: string | null) => void;
   bumpSessions: () => void;
+  /** 后台流结束且当前已返回原会话时，重新读取持久化消息。 */
+  onReconcile?: (sessionId: string) => void;
   onFinish?: () => void;
 }
 
@@ -32,22 +36,34 @@ interface UseChatStreamReturn {
   send: (message?: string, confirmations?: Record<string, unknown>[], thinkingLevel?: ThinkingLevel, model?: string) => Promise<void>;
   /** 中止当前进行中的流，并追加「已停止」提示。 */
   stop: () => void;
-  /** 静默中止（会话切换/卸载），不追加提示。 */
-  abortStream: () => void;
-  /** 当前是否有流式请求在进行中。 */
+  /** 当前正在查看的会话是否有流式请求在进行中。 */
   busy: boolean;
 }
 
+const NEW_SESSION_KEY = "__new_session__";
+
+interface ActiveChatStream {
+  key: string;
+  controller: AbortController;
+  frame: ChatStreamFrame;
+  detached: boolean;
+}
+
+function streamKey(sessionId: string | null): string {
+  return sessionId ?? NEW_SESSION_KEY;
+}
+
 /**
- * 流式对话发送 hook：封装 chatStream 调用、80ms 节流帧、事件→消息映射、
- * 会话建立/列表标题刷新/计划流、AbortController 生命周期与错误兜底。
+ * 流式对话发送 hook：按 session 隔离 chatStream、80ms 节流帧、事件→消息映射、
+ * 会话建立/列表刷新/计划流、AbortController 生命周期与错误兜底。
  *
- * 所有 UI 状态（messages/input/plan/contextUsage/sessionId 等）仍由 ChatPanel 持有；
- * 本 hook 通过 options 传入的 setter 与 ref 读写这些状态，行为与原内联实现完全等价。
+ * 消息和当前视图状态仍由 ChatPanel 持有；活动连接保存在 session-keyed Map，
+ * 因此切换只隔离视图写入，显式 stop 或组件卸载才中止网络请求。
  */
 export function useChatStream(options: UseChatStreamOptions): UseChatStreamReturn {
   const {
     messages,
+    sessionId,
     sessionIdRef,
     setMessages,
     setPending,
@@ -55,17 +71,22 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     setContextUsage,
     setSessionId,
     bumpSessions,
+    onReconcile,
     onFinish,
   } = options;
 
-  const [busy, _setBusyState] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const frameRef = useRef<ChatStreamFrame | null>(null);
-  const streamGenerationRef = useRef(0);
+  const streamsRef = useRef(new Map<string, ActiveChatStream>());
+  const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const busy = runningKeys.has(streamKey(sessionId));
 
-  const applyBusy = useCallback((value: boolean) => {
-    _setBusyState(value);
+  const refreshRunningKeys = useCallback(() => {
+    setRunningKeys(new Set(streamsRef.current.keys()));
   }, []);
+
+  const isVisible = useCallback((run: ActiveChatStream) => (
+    streamsRef.current.get(run.key) === run
+    && streamKey(sessionIdRef.current) === run.key
+  ), [sessionIdRef]);
 
   async function send(
     message?: string,
@@ -73,25 +94,25 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     thinkingLevel: ThinkingLevel = "auto",
     model = "",
   ) {
-    // 每次发送绑定一个 generation；停止、切会话或卸载都会递增它，旧流即使晚到也不能回写新会话。
     const msg = message ?? "";
-    if (!msg || busy) return;
+    const sendSid = sessionIdRef.current;
+    const key = streamKey(sendSid);
+    if (!msg || streamsRef.current.has(key)) return;
     const history = buildChatHistory(messages);
     setMessages((m) => [...m, { type: "user", content: msg }]);
-    applyBusy(true);
     setPending(null);
     setPlan([]);
     setContextUsage(null);
     const controller = new AbortController();
-    abortRef.current = controller;
-    const sendSid = sessionIdRef.current;
-    const generation = ++streamGenerationRef.current;
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
     const frame = createChatStreamFrame({
-      isCurrent: () => generation === streamGenerationRef.current,
+      isCurrent: () => streamsRef.current.get(key)?.controller === controller
+        && streamKey(sessionIdRef.current) === key,
       setMessages,
     });
-    frameRef.current = frame;
+    const run: ActiveChatStream = { key, controller, frame, detached: false };
+    streamsRef.current.set(key, run);
+    refreshRunningKeys();
     // 将协议事件集中交给 dispatcher，保证文本/思考/工具步骤共享同一个帧和消息状态机。
     const eventHandlers = {
       frame,
@@ -105,84 +126,99 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
 
     try {
       const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
-        if (generation !== streamGenerationRef.current) return;
+        if (streamsRef.current.get(key) !== run) return;
         const streamEvent = parseChatStreamEvent(event, data);
         if (!streamEvent) return;
-        dispatchChatStreamEvent(streamEvent, eventHandlers);
+        const visible = isVisible(run);
+        if (!visible) run.detached = true;
+        if (streamEvent.type === "text" || streamEvent.type === "reasoning") {
+          dispatchChatStreamEvent(streamEvent, eventHandlers);
+        } else if (streamEvent.type === "frontend_action") {
+          eventHandlers.onFrontendAction(streamEvent.data);
+        } else if (visible) {
+          dispatchChatStreamEvent(streamEvent, eventHandlers);
+        } else if (streamEvent.type === "tool_start") {
+          frame.beginToolStep();
+        }
       }, controller.signal, thinkingLevel, getFrontendCapabilities(), model);
 
-      if (generation !== streamGenerationRef.current) return;
+      if (streamsRef.current.get(key) !== run) return;
+      const visible = isVisible(run);
       // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
-      if (!frame.flush()) {
+      if (!frame.flush() && visible) {
         // 无文本事件（仅工具调用）：清掉空助手占位气泡，只留工具步骤
         setMessages(removeEmptyAssistantMessages);
       }
-      if (sendSid !== sessionIdRef.current) return;
-      const rPlan = (r?.plan ?? []) as PlanStep[];
-      if (rPlan.length) setPlan(rPlan);
-      if (r?.context_usage) setContextUsage(r.context_usage as { used: number; total: number; percent: number });
-      if (r?.session_id) {
-        const sid = r.session_id as string;
-        sessionIdRef.current = sid;
-        setSessionId(sid);
+      const resolvedSid = typeof r?.session_id === "string" ? r.session_id : null;
+      if (resolvedSid) {
+        if (sendSid === null && visible) {
+          sessionIdRef.current = resolvedSid;
+          setSessionId(resolvedSid);
+        }
         bumpSessions();
       }
-      if (r?.truncated) {
-        setMessages((m) => [...m, { type: "system", content: "任务达到最大步数，可能未完成，回复「继续」可接着做。" }]);
+      if (visible) {
+        const rPlan = (r?.plan ?? []) as PlanStep[];
+        if (rPlan.length) setPlan(rPlan);
+        if (r?.context_usage) setContextUsage(r.context_usage as ContextUsage);
+        if (r?.truncated) {
+          setMessages((m) => [...m, { type: "system", content: "任务达到最大步数，可能未完成，回复「继续」可接着做。" }]);
+        }
+        if (r?.pending_confirmation) setPending(r.pending_confirmation as PendingConfirmation);
+        if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
+        if (onFinish) setTimeout(onFinish, 50);
       }
-      if (r?.pending_confirmation) setPending(r.pending_confirmation as PendingConfirmation);
-      setTimeout(() => {
-        if (generation === streamGenerationRef.current) onFinish?.();
-      }, 50);
     } catch (e) {
-      if ((e as Error).name === "AbortError" || generation !== streamGenerationRef.current) return;
+      if ((e as Error).name === "AbortError" || streamsRef.current.get(key) !== run) return;
       // 先把待提交的正文/reasoning 同步落地并取消定时帧，再追加错误；否则迟到的
       // 80ms commit 会覆盖错误，直接替换末项也会吞掉已经完成的工具步骤。
       frame.flush();
       frame.cancel();
-      setMessages((m) => [
-        ...removeEmptyAssistantMessages(m),
-        { type: "assistant", content: `出错了：${(e as Error).message}` },
-      ]);
+      if (isVisible(run)) {
+        setMessages((m) => [
+          ...removeEmptyAssistantMessages(m),
+          { type: "assistant", content: `出错了：${(e as Error).message}` },
+        ]);
+      }
     } finally {
-      if (frameRef.current === frame) frameRef.current = null;
-      if (generation === streamGenerationRef.current) applyBusy(false);
+      if (streamsRef.current.get(key) === run) {
+        streamsRef.current.delete(key);
+        refreshRunningKeys();
+      }
     }
   }
 
+  useEffect(() => {
+    const activeKey = streamKey(sessionId);
+    for (const run of streamsRef.current.values()) {
+      if (run.key !== activeKey) run.detached = true;
+    }
+  }, [sessionId]);
+
   useEffect(() => () => {
-    streamGenerationRef.current += 1;
-    frameRef.current?.cancel();
-    frameRef.current = null;
-    abortRef.current?.abort();
-    abortRef.current = null;
+    const active = Array.from(streamsRef.current.values());
+    streamsRef.current.clear();
+    for (const run of active) {
+      run.frame.cancel();
+      run.controller.abort();
+    }
   }, []);
 
-  const cancelActiveStream = useCallback(() => {
-    streamGenerationRef.current += 1;
-    frameRef.current?.cancel();
-    frameRef.current = null;
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    applyBusy(false);
-  }, [applyBusy]);
-
-  /** 静默中止：会话切换/卸载时用，不追加「已停止」提示。 */
-  const abortStream = useCallback(() => {
-    cancelActiveStream();
-  }, [cancelActiveStream]);
-
   const stop = useCallback(() => {
-    cancelActiveStream();
+    const key = streamKey(sessionIdRef.current);
+    const run = streamsRef.current.get(key);
+    if (!run) return;
+    streamsRef.current.delete(key);
+    run.frame.cancel();
+    run.controller.abort();
+    refreshRunningKeys();
     setMessages((m) => {
       // 清掉空助手占位气泡后追加停止提示（工具步骤保留）
       const copy = m.filter((x) => !(x.type === "assistant" && !x.content && !x.reasoning));
       copy.push({ type: "system", content: "已停止本次任务。" });
       return copy;
     });
-  }, [cancelActiveStream, setMessages]);
+  }, [refreshRunningKeys, sessionIdRef, setMessages]);
 
-  return { send, stop, abortStream, busy };
+  return { send, stop, busy };
 }

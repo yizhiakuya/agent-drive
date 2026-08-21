@@ -34,6 +34,7 @@
                title,
                summary,
                last_routed,
+               pending_confirmation::text AS pending_confirmation_json,
                EXTRACT(EPOCH FROM created_at) AS created_at,
                EXTRACT(EPOCH FROM updated_at) AS updated_at,
                (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
@@ -47,6 +48,8 @@
                content,
                reasoning,
                tool_name,
+               context_source,
+               context_kind,
                arguments::text AS arguments_json,
                parsed::text AS parsed_json,
                EXTRACT(EPOCH FROM created_at) AS ts

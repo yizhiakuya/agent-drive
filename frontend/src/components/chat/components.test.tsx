@@ -35,7 +35,8 @@ describe("fmtToolArgs 工具参数人类可读", () => {
     expect(fmtToolArgs("write_file", { path: "notes/x.md" })).toBe("写入 notes/x.md");
     expect(fmtToolArgs("list_files", {})).toBe("列出根目录");
     expect(fmtToolArgs("semantic_search", { query: "预算" })).toBe('语义搜索 "预算"');
-    expect(fmtToolArgs("read_skill", { path: "weekly-report" })).toBe("加载技能 weekly-report");
+    expect(fmtToolArgs("read_skill", { action: "read", name: "weekly-report" })).toBe("加载 Skill weekly-report");
+    expect(fmtToolArgs("read_skill", { action: "discover", query: "周报" })).toBe("查找 Skill “周报”");
   });
   it("未知工具回退 JSON", () => {
     expect(fmtToolArgs("unknown_tool", { x: 1 })).toBe('{"x":1}');
@@ -89,6 +90,15 @@ describe("ToolStep 工具步骤", () => {
     fireEvent.click(screen.getByText("get_system_status"));
     expect(screen.getByText(/"configured": false/)).toBeInTheDocument();
     expect(screen.getByText(/"model": ""/)).toBeInTheDocument();
+  });
+  it("read_skill 直接显示加载的 Skill 名称", () => {
+    render(<ToolStep step={{
+      tool: "read_skill",
+      arguments: { action: "read", name: "weekly-report" },
+      status: "done",
+      output: "{}",
+    }} />);
+    expect(screen.getByText("Skill · weekly-report")).toBeInTheDocument();
   });
 
   it("list_files 结果渲染为表格", () => {

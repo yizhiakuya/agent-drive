@@ -88,6 +88,10 @@ class MybatisChatRuntimeStateStoreIntegrationTest {
             store.savePending(sessionId, pending);
             assertThat(store.findPending(sessionId, "backend_api", pendingArguments(pending)))
                     .containsEntry("nonce", "integration-nonce");
+            assertThat(conversationSessions.findOwnedDetails(
+                    UUID.fromString(userId), UUID.fromString(sessionId)))
+                    .extracting(meta -> meta.get("pending_confirmation"))
+                    .isInstanceOf(Map.class);
             assertThat(store.consumeNonce(sessionId, "integration-nonce")).isTrue();
             assertThat(store.consumeNonce(sessionId, "integration-nonce")).isFalse();
             store.clearPending(sessionId);
@@ -102,16 +106,23 @@ class MybatisChatRuntimeStateStoreIntegrationTest {
                     "Bearer abcdefgh1234",
                     Map.of("token", "device-secret", "ok", true)
             );
+            assertThat(store.appendContextIfChanged(
+                    sessionId, "skill-catalog", "skill-catalog", "catalog sk-context-secret")).isTrue();
+            assertThat(store.appendContextIfChanged(
+                    sessionId, "skill-catalog", "skill-catalog", "catalog sk-context-secret")).isFalse();
+            assertThat(store.appendContextIfChanged(
+                    sessionId, "skill-catalog", "skill-catalog", "updated catalog")).isTrue();
             store.updateLastTrace(sessionId, List.of(
                     Map.of("token", "trace-secret", "message", "sk-abcdefgh1234")
             ));
 
             List<Map<String, Object>> messages = jdbc.queryForList(
-                    "SELECT role, content, reasoning, arguments::text AS arguments, parsed::text AS parsed "
+                    "SELECT role, content, reasoning, context_source, context_kind, "
+                            + "arguments::text AS arguments, parsed::text AS parsed "
                             + "FROM chat_messages WHERE session_id = ?::uuid ORDER BY id",
                     sessionId
             );
-            assertThat(messages).hasSize(3);
+            assertThat(messages).hasSize(5);
             assertThat(messages.get(0).get("content")).isEqualTo("hello [REDACTED]");
             assertThat(messages.get(1).get("reasoning")).isEqualTo("reasoning [REDACTED]");
             assertThat(messages.get(2).get("content")).isEqualTo("Bearer [REDACTED]");
@@ -121,15 +132,27 @@ class MybatisChatRuntimeStateStoreIntegrationTest {
             assertThat(String.valueOf(messages.get(2).get("parsed")))
                     .contains("***")
                     .doesNotContain("device-secret");
+            assertThat(messages.get(3))
+                    .containsEntry("role", "context")
+                    .containsEntry("content", "catalog [REDACTED]")
+                    .containsEntry("context_source", "skill-catalog")
+                    .containsEntry("context_kind", "skill-catalog");
+            assertThat(messages.get(4)).containsEntry("content", "updated catalog");
 
             assertThat(conversationSessions.listOwned(UUID.fromString(userId)))
                     .anySatisfy(meta -> assertThat(meta).containsEntry("id", sessionId));
             assertThat(conversationSessions.findOwnedDetails(UUID.fromString(userId), UUID.fromString(sessionId)))
                     .containsEntry("id", sessionId);
             assertThat(conversationSessions.messagesOwned(UUID.fromString(userId), UUID.fromString(sessionId)))
-                    .hasSize(3)
+                    .hasSize(5)
                     .first()
                     .satisfies(message -> assertThat(((Map<?, ?>) message).get("role")).isEqualTo("user"));
+            assertThat(conversationSessions.messagesOwned(
+                    UUID.fromString(userId), UUID.fromString(sessionId)))
+                    .anySatisfy(message -> assertThat(message)
+                            .containsEntry("role", "context")
+                            .containsEntry("context_source", "skill-catalog")
+                            .containsEntry("context_kind", "skill-catalog"));
 
             String lastTrace = jdbc.queryForObject(
                     "SELECT last_trace::text FROM chat_sessions WHERE id = ?::uuid",

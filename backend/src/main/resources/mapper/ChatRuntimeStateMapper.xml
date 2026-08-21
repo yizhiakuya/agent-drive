@@ -38,6 +38,34 @@
         )
     </insert>
 
+    <insert id="insertContextIfChanged">
+        WITH context_lock AS (
+            SELECT pg_advisory_xact_lock(hashtextextended(
+                #{sessionId, jdbcType=VARCHAR} || ':' || #{source, jdbcType=VARCHAR}, 0))
+        )
+        INSERT INTO chat_messages(session_id, role, content, context_source, context_kind)
+        SELECT CAST(#{sessionId, jdbcType=VARCHAR} AS uuid),
+               'context',
+               #{content, jdbcType=LONGVARCHAR},
+               #{source, jdbcType=VARCHAR},
+               #{kind, jdbcType=VARCHAR}
+        FROM context_lock
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM (
+                SELECT content, context_kind
+                FROM chat_messages
+                WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+                  AND role = 'context'
+                  AND context_source = #{source, jdbcType=VARCHAR}
+                ORDER BY id DESC
+                LIMIT 1
+            ) latest
+            WHERE latest.content IS NOT DISTINCT FROM #{content, jdbcType=LONGVARCHAR}
+              AND latest.context_kind = #{kind, jdbcType=VARCHAR}
+        )
+    </insert>
+
     <update id="updateLastTrace">
         UPDATE chat_sessions
         SET last_trace = CAST(#{trace, jdbcType=LONGVARCHAR} AS jsonb), updated_at = now()

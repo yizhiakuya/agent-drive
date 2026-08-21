@@ -29,6 +29,12 @@ public interface ChatRuntimeStateMapper {
                       @Param("arguments") String arguments,
                       @Param("parsed") String parsed);
 
+    /** 当同来源最新快照不同时插入上下文。 @param sessionId 会话 UUID。 @param source 来源名称。 @param kind 上下文类型。 @param content 完整文本。 @return 插入行数。 */
+    int insertContextIfChanged(@Param("sessionId") String sessionId,
+                               @Param("source") String source,
+                               @Param("kind") String kind,
+                               @Param("content") String content);
+
     /** 覆盖会话 last_trace。 @param sessionId 会话 UUID。 @param trace 已脱敏的 trace JSON。 @return 更新行数。 */
     int updateLastTrace(@Param("sessionId") String sessionId, @Param("trace") String trace);
 

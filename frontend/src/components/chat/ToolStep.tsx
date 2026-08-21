@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { ChevronRight, CircleAlert, CircleCheck, Code2, File, FolderOpen, LoaderCircle } from "lucide-react";
+import { BookOpen, ChevronRight, CircleAlert, CircleCheck, Code2, File, FolderOpen, LoaderCircle } from "lucide-react";
 import { fmtSize, fmtToolArgs, STEP_STATUS } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 
@@ -20,6 +20,11 @@ export function ToolStep({ step }: { step: ToolStepData }) {
   const parsed = step.parsed as Record<string, unknown> | undefined;
   const isListFiles = Array.isArray(step.parsed) && step.tool === "list_files";
   const isError = parsed && parsed.ok === false;
+  const isSkill = step.tool === "read_skill";
+  const skillName = step.arguments?.action === "read" && typeof step.arguments.name === "string"
+    ? step.arguments.name
+    : null;
+  const toolLabel = isSkill ? (skillName ? `Skill · ${skillName}` : "Skill 目录") : step.tool;
 
   const statusBadge =
     step.status === "error" ? (
@@ -38,8 +43,10 @@ export function ToolStep({ step }: { step: ToolStepData }) {
         aria-expanded={open}
         className="h-auto w-full justify-start gap-2 rounded-none border-0 bg-card/50 px-3 py-2.5 font-medium hover:bg-card"
       >
-        <Code2 className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
-        <span className="font-mono text-xs font-semibold text-text">{step.tool}</span>
+        {isSkill
+          ? <BookOpen className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
+          : <Code2 className="size-3.5 shrink-0 text-muted" aria-hidden="true" />}
+        <span className="font-mono text-xs font-semibold text-text">{toolLabel}</span>
         <code className="min-w-0 flex-1 truncate text-left text-[11px] font-normal text-muted">{argsBrief}</code>
         {statusBadge}
         <ChevronRight className={`size-3.5 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />

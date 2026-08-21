@@ -47,6 +47,17 @@ class ChatContractTest {
     }
 
     @Test
+    void contextEventKeepsSourceKindAndFullContent() throws Exception {
+        String encoded = encoder.encode(ChatSseEvents.context(
+                new ChatContext("skill-catalog", "skill-catalog", "catalog body", true)));
+
+        assertThat(encoded).contains("event: context");
+        assertThat(encoded).contains("\"source\":\"skill-catalog\"");
+        assertThat(encoded).contains("\"kind\":\"skill-catalog\"");
+        assertThat(encoded).contains("\"content\":\"catalog body\"");
+    }
+
+    @Test
     void nullEventDataIsRejected() {
         assertThatThrownBy(() -> new ChatSseEvent("text", null))
                 .isInstanceOf(NullPointerException.class);

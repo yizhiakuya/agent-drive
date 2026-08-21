@@ -43,7 +43,7 @@ API 和 Worker 是同一个模块化单体的两种进程模式：API 负责 HTT
 PostgreSQL 保存所有结构化运行状态，包括：
 
 - `users`、`sessions`、`devices`、`pairing_codes`；
-- `chat_sessions`、`chat_messages`、`chat_tool_replays`；
+- `chat_sessions`、`chat_messages`（含 context source/kind）、`chat_tool_replays`；
 - `files`、`file_revisions`、`trash_entries`、`upload_dedup`；
 - `tasks`、`task_events`、`task_schedules`、`task_workers`、`outbox_events`；
 - `agent_skills`（owner 自定义 Skill、启停状态和版本）；
@@ -55,8 +55,8 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 - 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
-- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。流内异常保持 HTTP 200 并发送脱敏 error 事件；前端收到传输异常时先冲刷并取消当前 80ms 帧，再保留已生成正文/工具轨迹并追加错误提示。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
-- 模型只看到稳定的 `backend_api`、`frontend_api`、`read_skill` 及 plan 辅助工具。业务能力必须先 discover，再用精确的 `METHOD /api/v1/path` 或 `INTERNAL name` 调用；backend discover 使用 offset/limit 分页并返回 total/has_more/next_offset，单页最多 20 项。`read_skill` 只读当前 owner 已启用 registry，Skill 指令不能新增工具或权限。模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
+- Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 context、text、reasoning、tool_start、tool_trace、frontend_action、done、error。context 携带 source/kind/content，并与历史 API 的 context 消息使用同一展示结构；流内异常保持 HTTP 200 并发送脱敏 error 事件。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
+- 模型只看到稳定的 `backend_api`、`frontend_api`、`read_skill` 及 plan 辅助工具。每次请求重新装配规范系统提示、owner 的 `Agent/AGENT.md`、`USER.md`、`MEMORY.md` 和完整启用 Skill 摘要目录；同来源正文未变化时不重复写 transcript。目录明确要求名称/说明匹配时先按 exact name 读取 Skill；正文只通过 `read_skill` 按需进入工具结果。业务能力仍须使用精确登记 operation，Skill 不能新增工具或权限。模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
 - 非 red 工具按 `session_id + tool + arguments` 使用持久 replay；red 写操作使用签名确认和一次性 nonce。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
 - provider 的 `thinking_level` 为 `auto/low/medium/high`，不发送 temperature。`model` 只覆盖当前请求，动态 resolver 始终从 owner 已保存配置取得 Provider 地址和 API key。reasoning 只在 provider 返回时通过独立 SSE 事件展示和持久化，不进入下一轮 history。
 
@@ -87,7 +87,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置、Skill 和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
-文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 作为流式 `busy` 的唯一状态源，负责 Abort、流代次和 80ms 帧节流。ChatPanel 的会话历史、聊天模型目录，以及 SettingsPage 的 LLM/视觉模型目录请求都必须在响应提交前校验请求代次和当前配置边界，避免切换会话或接口后迟到响应污染界面。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
+文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 按 session key 保存活动 controller/frame/busy，切换会话只隔离 UI 写入而不中止原流，不同会话可并行；显式停止或组件卸载才 Abort。ChatPanel 的会话历史、聊天模型目录，以及 SettingsPage 的 LLM/视觉模型目录请求都必须在响应提交前校验请求代次和当前配置边界。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 
 Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；本地文件消失/权限拒绝永久跳过，其他本地 I/O 冻结水位，线程中断保留中断位并终止本批。同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
 

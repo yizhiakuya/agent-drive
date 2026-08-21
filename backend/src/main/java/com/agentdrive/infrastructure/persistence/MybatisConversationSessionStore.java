@@ -156,7 +156,10 @@ public final class MybatisConversationSessionStore implements ConversationSessio
      * @return 可供上层修改的有序 Map 副本。
      */
     private Map<String, Object> normalizeMeta(Map<String, Object> row) {
-        return new LinkedHashMap<>(row);
+        Map<String, Object> result = new LinkedHashMap<>(row);
+        Object pending = result.remove("pending_confirmation_json");
+        if (pending != null) result.put("pending_confirmation", parseJson(pending));
+        return result;
     }
 
     /**
@@ -170,6 +173,8 @@ public final class MybatisConversationSessionStore implements ConversationSessio
         result.put("content", row.get("content"));
         if (row.get("reasoning") != null) result.put("reasoning", row.get("reasoning"));
         if (row.get("tool_name") != null) result.put("tool", row.get("tool_name"));
+        if (row.get("context_source") != null) result.put("context_source", row.get("context_source"));
+        if (row.get("context_kind") != null) result.put("context_kind", row.get("context_kind"));
         if (row.get("arguments_json") != null) result.put("arguments", parseJson(row.get("arguments_json")));
         if (row.get("parsed_json") != null) result.put("parsed", parseJson(row.get("parsed_json")));
         result.put("ts", row.get("ts"));

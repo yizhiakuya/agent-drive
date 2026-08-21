@@ -7,8 +7,10 @@ import com.agentdrive.agent.AgentTool;
 import com.agentdrive.agent.FrontendActionTool;
 import com.agentdrive.agent.OperationCatalog;
 import com.agentdrive.agent.ProviderRuntimeResolver;
+import com.agentdrive.files.FileStorageService;
 import com.agentdrive.infrastructure.AppProperties;
 import com.agentdrive.infrastructure.PersistentChatRuntimeStateStore;
+import com.agentdrive.skills.SkillRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -68,6 +70,21 @@ public class ChatRuntimeConfiguration {
     }
 
     /**
+     * 创建系统提示、Agent 文档和 Skill 目录上下文 provider。
+     * @param skillRegistry 当前 owner 的 Skill registry
+     * @param files owner 文件服务
+     * @param properties 应用系统提示配置
+     * @return 每次模型请求重新装配的上下文 provider
+     */
+    @Bean
+    ChatContextProvider chatContextProvider(SkillRegistry skillRegistry,
+                                            FileStorageService files,
+                                            AppProperties properties) {
+        return new DefaultChatContextProvider(
+                skillRegistry, files, AgentSystemPrompt.normalize(properties.systemPrompt()));
+    }
+
+    /**
      * 创建按 owner 解析 Provider、持久化工具重放和会话轨迹的聊天 runtime。
      *
      * @param providerResolver 按认证用户加载 Provider 模型和请求工厂。
@@ -75,6 +92,7 @@ public class ChatRuntimeConfiguration {
      * @param objectMapper 聊天和工具 JSON 映射器。
      * @param confirmationService red 操作确认服务。
      * @param stateStore 同时实现工具重放和 transcript 持久化的状态存储。
+     * @param contextProvider owner-scoped 上下文装配器。
      * @param properties 提供系统提示和最大 Agent 步数。
      * @return 生产用 {@link ChatRuntime}。
      */
@@ -84,6 +102,7 @@ public class ChatRuntimeConfiguration {
                             ObjectMapper objectMapper,
                             ConfirmationService confirmationService,
                             PersistentChatRuntimeStateStore stateStore,
+                            ChatContextProvider contextProvider,
                             AppProperties properties) {
         return new LangChainAgentRuntime(
                 providerResolver,
@@ -92,6 +111,7 @@ public class ChatRuntimeConfiguration {
                 confirmationService,
                 stateStore,
                 stateStore,
+                contextProvider,
                 properties.systemPrompt(),
                 properties.maxChatSteps()
         );

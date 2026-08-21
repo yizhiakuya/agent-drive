@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { emitFilesChanged } from "@/lib/events";
-import { appendToolStep, completeToolStep, planFromToolTrace } from "./chat-stream-state";
+import { appendContextMessage, appendToolStep, completeToolStep, planFromToolTrace } from "./chat-stream-state";
 import type { PlanStep } from "./PlanCard";
 import type { Message } from "./chat-types";
 import type { ChatStreamEvent } from "./chat-stream-events";
@@ -34,6 +34,14 @@ export function dispatchChatStreamEvent(
       break;
     case "reasoning":
       frame.appendReasoning(event.delta);
+      break;
+    case "context":
+      setMessages((messages) => appendContextMessage(messages, {
+        type: "context",
+        source: event.context.source,
+        contextKind: event.context.kind,
+        content: event.context.content,
+      }));
       break;
     case "frontend_action":
       onFrontendAction(event.data);

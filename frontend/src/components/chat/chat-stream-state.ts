@@ -34,6 +34,13 @@ export function appendToolStep(messages: Message[], data: Record<string, unknown
   ];
 }
 
+export function appendContextMessage(messages: Message[], context: Message): Message[] {
+  if (isEmptyAssistantMessage(messages.at(-1))) {
+    return [...messages.slice(0, -1), context, messages.at(-1)!];
+  }
+  return [...messages, context];
+}
+
 export function completeToolStep(messages: Message[], trace: ToolTrace): Message[] {
   const copy = [...messages];
   const failed = isFailedResult(trace.parsed);
@@ -58,8 +65,8 @@ export function planFromToolTrace(trace: ToolTrace): PlanStep[] | null {
   return trace.parsed.plan as PlanStep[];
 }
 
-function isEmptyAssistantMessage(message: Message): boolean {
-  return message.type === "assistant" && !message.content && !message.reasoning;
+function isEmptyAssistantMessage(message: Message | undefined): boolean {
+  return message?.type === "assistant" && !message.content && !message.reasoning;
 }
 
 function isHistoryMessage(message: Message): message is Message & { type: "user" | "assistant" } {

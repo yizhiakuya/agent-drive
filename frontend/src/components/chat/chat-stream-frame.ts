@@ -64,12 +64,10 @@ export function createChatStreamFrame({
       reasoning = "";
     },
     flush() {
-      const hadTimer = timer !== null;
-      if (hadTimer) {
-        clearTimer();
-        commit();
-      }
-      return hadTimer;
+      const hasBufferedContent = Boolean(reply || reasoning);
+      clearTimer();
+      if (hasBufferedContent) commit();
+      return hasBufferedContent;
     },
     cancel() {
       clearTimer();

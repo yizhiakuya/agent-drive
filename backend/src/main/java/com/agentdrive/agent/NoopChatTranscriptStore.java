@@ -15,6 +15,12 @@ public final class NoopChatTranscriptStore implements ChatTranscriptStore {
     public void appendUser(String sessionId, String content) {
     }
 
+    /** 把每次上下文都视为新快照，但不写入任何存储。 */
+    @Override
+    public boolean appendContextIfChanged(String sessionId, String source, String kind, String content) {
+        return true;
+    }
+
     /** 丢弃助手正文和 reasoning，不写入任何存储。 */
     @Override
     public void appendAssistant(String sessionId, String content, String reasoning) {

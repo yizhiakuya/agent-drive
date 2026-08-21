@@ -18,7 +18,7 @@ import java.util.UUID;
 
 /**
  * 将 Agent 运行时状态持久化到 PostgreSQL/MyBatis。
- * <p>负责工具重放、待确认调用、消息、last trace 和 nonce 消费；写入消息及 trace 前统一经过
+ * <p>负责工具重放、待确认调用、消息、来源化 context、last trace 和 nonce 消费；写入消息及 trace 前统一经过
  * {@link SensitiveDataRedactor}，而待确认参数保持原文以支持签名校验和确定性重放。</p>
  */
 public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateStore {
@@ -145,6 +145,24 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
     @Override
     public void appendUser(String sessionId, String content) {
         insertMessage(sessionId, "user", redactor.text(content), null, null, null, null);
+    }
+
+    /**
+     * 脱敏后仅在同来源快照变化时追加上下文消息。
+     * @param sessionId 会话 UUID 文本
+     * @param source 上下文来源
+     * @param kind 上下文类型
+     * @param content 模型读取的完整文本
+     * @return 实际插入时为 true
+     */
+    @Override
+    public boolean appendContextIfChanged(String sessionId, String source, String kind, String content) {
+        if (parseUuid(sessionId) == null || source == null || source.isBlank()
+                || kind == null || kind.isBlank() || content == null || content.isBlank()) {
+            return false;
+        }
+        return mapper.insertContextIfChanged(
+                sessionId, redactor.text(source), redactor.text(kind), redactor.text(content)) > 0;
     }
 
     /**
