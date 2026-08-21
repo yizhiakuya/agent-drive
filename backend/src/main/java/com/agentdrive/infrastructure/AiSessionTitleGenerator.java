@@ -28,7 +28,8 @@ import java.util.stream.Collectors;
  * 15 秒内收集文本，忽略 reasoning，最后去掉 Markdown/标签/标题前缀并限制为 20 code point。</p>
  */
 public final class AiSessionTitleGenerator implements SessionTitleGenerator {
-    private static final Duration TIMEOUT = Duration.ofSeconds(15);
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(AiSessionTitleGenerator.class);
+    private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private static final int MAX_INPUT_CODE_POINTS = 6000;
     private static final int MAX_TITLE_CODE_POINTS = 20;
     private static final String SYSTEM_PROMPT = """
@@ -63,7 +64,7 @@ public final class AiSessionTitleGenerator implements SessionTitleGenerator {
         if (transcript.isBlank()) {
             return "";
         }
-
+        LOGGER.info("AI title generation start userId={} transcriptLen={} preview={}", userId, transcript.length(), transcript.substring(0, Math.min(80, transcript.length())));
         ConfiguredChatModel configured = providerRuntimeResolver.resolve(userId);
         List<ChatMessage> input = List.of(
                 SystemMessage.from(SYSTEM_PROMPT),
@@ -123,6 +124,7 @@ public final class AiSessionTitleGenerator implements SessionTitleGenerator {
 
         try {
             if (!finished.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                LOGGER.warn("AI title generation timed out after {}s userId={} partialLen={}", TIMEOUT.toSeconds(), userId, partialText.length());
                 throw new IllegalStateException("AI session title generation timed out");
             }
         } catch (InterruptedException error) {
@@ -130,6 +132,7 @@ public final class AiSessionTitleGenerator implements SessionTitleGenerator {
             throw new IllegalStateException("AI session title generation interrupted", error);
         }
         if (failure.get() != null) {
+            LOGGER.warn("AI title generation failed userId={} error={}", userId, failure.get().toString(), failure.get());
             throw new IllegalStateException("AI session title generation failed", failure.get());
         }
 
@@ -138,7 +141,9 @@ public final class AiSessionTitleGenerator implements SessionTitleGenerator {
             AiMessage aiMessage = completeResponse.get() == null ? null : completeResponse.get().aiMessage();
             responseText = aiMessage == null ? "" : aiMessage.text();
         }
-        return normalizeTitle(responseText);
+        String normalized = normalizeTitle(responseText);
+        LOGGER.info("AI title generation done userId={} rawLen={} normalized={}", userId, responseText.length(), normalized);
+        return normalized;
     }
 
     /**

@@ -14,6 +14,7 @@ import java.util.UUID;
  * 使用摘要前 20 个 code point，再尽力调用可选的 AI 生成器。</p>
  */
 public final class ConversationSessionService {
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(ConversationSessionService.class);
     private static final Set<String> PLACEHOLDER_TITLES = Set.of(
             "A session", "New session", "Untitled session", "无标题会话", "（无标题会话）", "(无标题会话)"
     );
@@ -149,12 +150,12 @@ public final class ConversationSessionService {
         }
         String storedTitle = stringValue(details.meta().get("title"));
         boolean needsGeneratedTitle = isPlaceholderTitle(storedTitle);
-        String title = needsGeneratedTitle ? limitCodePoints(summary, 20) : storedTitle;
+        String title = needsGeneratedTitle ? deterministicTitle(details.messages(), summary) : storedTitle;
         if (needsGeneratedTitle && titleGenerator != null) {
             try {
                 title = normalizeGeneratedTitle(titleGenerator.generate(userId, details.messages()), title);
-            } catch (RuntimeException ignored) {
-                // Title generation is best effort; the deterministic title remains usable.
+            } catch (RuntimeException ex) {
+                LOGGER.warn("AI title generation failed for session {} owner {}: {}", sessionId, userId, ex.toString(), ex);
             }
         }
         if (!store.updateSummary(userId, sessionId, summary, title)) {
@@ -186,6 +187,19 @@ public final class ConversationSessionService {
                 .replaceFirst("^(?i:标题|title)\\s*[:：]\\s*", "")
                 .trim();
         return title.isBlank() ? fallback : limitCodePoints(title, 20);
+    }
+
+    private static String deterministicTitle(List<Map<String, Object>> messages, String summary) {
+        return messages.stream()
+                .filter(message -> "user".equals(message.get("role")))
+                .map(ConversationSessionService::messageContent)
+                .filter(content -> !content.isBlank())
+                .map(ConversationSessionService::collapseWhitespace)
+                .map(content -> content.replaceAll("<[^>]{1,80}>", "").trim())
+                .filter(content -> !content.isBlank())
+                .findFirst()
+                .map(content -> limitCodePoints(content, 20))
+                .orElse(limitCodePoints(summary, 20));
     }
 
     /** 读取消息正文，并将工具型 assistant 的 null 正文转换为空字符串。 */
