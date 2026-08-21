@@ -4,6 +4,7 @@ import { configureLLM } from "@/lib/api/config";
 import { useAppStore } from "@/lib/store";
 import { PROTOCOLS, protocolOf } from "@/lib/llm-options";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { ArrowRight, Bot, Check, HardDrive } from "lucide-react";
@@ -34,12 +35,17 @@ export default function Onboarding() {
     }
   }
 
-  const field = (label: string, value: string, onChange: (v: string) => void, placeholder: string, type = "text") => (
-    <label className="block mb-4">
-      <span className="block text-xs text-muted mb-1.5">{label}</span>
-      <Input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
-             className="w-full text-sm" />
-    </label>
+  const field = (id: string, label: string, value: string, onChange: (v: string) => void, placeholder: string, type = "text") => (
+    <div className="mb-4">
+      <label htmlFor={id} className="mb-1.5 block text-xs text-muted">{label}</label>
+      {type === "password" ? (
+        <SecretInput id={id} value={value} placeholder={placeholder}
+                     onChange={(e) => onChange(e.target.value)} className="w-full text-sm" />
+      ) : (
+        <Input id={id} type={type} value={value} placeholder={placeholder}
+               onChange={(e) => onChange(e.target.value)} className="w-full text-sm" />
+      )}
+    </div>
   );
 
   return (
@@ -63,9 +69,9 @@ export default function Onboarding() {
           ))}
         </div>
 
-        {field("接口地址", baseUrl, setBaseUrl, protocolOf(type)?.defaultBaseUrl || "https://...")}
-        {field("模型名", model, setModel, protocolOf(type)?.placeholderModel || "模型名")}
-        {field("API Key", apiKey, setApiKey, "sk-...", "password")}
+        {field("onboarding-base-url", "接口地址", baseUrl, setBaseUrl, protocolOf(type)?.defaultBaseUrl || "https://...")}
+        {field("onboarding-model", "模型名", model, setModel, protocolOf(type)?.placeholderModel || "模型名")}
+        {field("onboarding-api-key", "API Key", apiKey, setApiKey, "sk-...", "password")}
 
         {msg && (
           <Alert variant={msg.ok ? "default" : "destructive"}

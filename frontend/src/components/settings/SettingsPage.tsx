@@ -1,5 +1,5 @@
 "use client";
-import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { getConfig, getVisionConfig, saveEmbeddings, saveVision, configureLLM, listModels, listVisionModels } from "@/lib/api/config";
 import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
@@ -13,6 +13,7 @@ import { useAppStore } from "@/lib/store";
 import { EV, emitTasksChanged, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SecretInput } from "@/components/ui/secret-input";
 import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, ComboboxEmpty } from "@/components/ui/combobox";
 import { Alert } from "@/components/ui/alert";
 import { Bot, BrainCircuit, Eye, LogOut, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
@@ -26,13 +27,20 @@ function SettingsField({ label, value, onChange, placeholder, type = "text", ste
   step?: string;
   hint?: string;
 }) {
+  const inputId = useId();
+
   return (
-    <label className="mb-3 flex flex-col gap-1.5">
-      <span className="text-xs text-muted">{label}</span>
-      <Input type={type} value={value} placeholder={placeholder} step={step}
-             onChange={(event) => onChange(event.target.value)} className="text-sm" />
+    <div className="mb-3 flex flex-col gap-1.5">
+      <label htmlFor={inputId} className="text-xs text-muted">{label}</label>
+      {type === "password" ? (
+        <SecretInput id={inputId} value={value} placeholder={placeholder}
+                     onChange={(event) => onChange(event.target.value)} className="text-sm" />
+      ) : (
+        <Input id={inputId} type={type} value={value} placeholder={placeholder} step={step}
+               onChange={(event) => onChange(event.target.value)} className="text-sm" />
+      )}
       {hint && <span className="text-[10px] leading-snug text-muted">{hint}</span>}
-    </label>
+    </div>
   );
 }
 

@@ -124,7 +124,7 @@ public final class VisionConfigController {
     }
 
     /**
-     * 视觉配置请求体；API key 留空时只在地址、provider 和模型未改变时沿用旧值。
+     * 视觉配置请求体；API key 留空时只在地址和 provider 未改变时沿用旧值。
      * @param provider 当前支持 openai_compat。
      * @param baseUrl OpenAI 兼容 API 地址。
      * @param apiKey 待保存的 API key。

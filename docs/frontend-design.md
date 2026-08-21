@@ -16,6 +16,7 @@
 |------|------|------|
 | 按钮 | `ui/button` | 主操作 default；次要 outline；轻量/图标 ghost；危险操作（删除/清空/登出）destructive；文字链接 link。大小 default/sm |
 | 输入框 | `ui/input` | 全站唯一输入实现；需要内嵌图标/按钮用 `ui/input-group` |
+| 密钥输入 | `ui/secret-input` | 模型 API Key 默认隐藏；小眼睛只切换当前草稿的可见性，草稿清空后恢复隐藏，不展示服务端掩码背后的已存值 |
 | 下拉 | `ui/select` | 多选一场景；**单值场景禁用**（见反模式 1）；选中/键盘高亮使用 `accent-soft + text-text`，不要直接用深色品牌 `accent` 做背景。可搜索选择使用 `ui/combobox`，其高亮项遵循同一对比度规则 |
 | 组合框 | `ui/combobox` | 可过滤选择 + 自由文本并存场景（模型名）。Base UI 底座：Root 受控 `value/onValueChange`，`items=[{value,label}]` 或 ComboboxCollection/Item，`ComboboxInput/Content/List/Empty/Trigger/Clear` |
 | 卡片 | `ui/card` | `Card/CardHeader/CardTitle/CardDescription/CardContent/CardFooter`，bg-panel |

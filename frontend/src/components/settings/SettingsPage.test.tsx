@@ -167,7 +167,7 @@ describe("SettingsPage", () => {
     const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
     const embeddings = within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!);
     const vision = within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!);
-    const llmKey = llm.getByLabelText(/API Key/);
+    const llmKey = llm.getByLabelText("API Key");
     fireEvent.change(llmKey, { target: { value: "sk-llm-draft" } });
     expect(llmKey).toHaveValue("sk-llm-draft");
     fireEvent.change(llm.getByLabelText("接口地址"), {
@@ -194,6 +194,29 @@ describe("SettingsPage", () => {
     expect(visionKey).toHaveValue("");
   });
 
+  it("所有模型 API Key 输入都可以查看和重新隐藏当前草稿", async () => {
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("https://example.com/v1")).toBeInTheDocument());
+
+    const sections = [
+      within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!),
+      within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!),
+      within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!),
+    ];
+
+    sections.forEach((section, index) => {
+      const input = section.getByLabelText("API Key");
+      fireEvent.change(input, { target: { value: `draft-${index}` } });
+      expect(input).toHaveAttribute("type", "password");
+
+      fireEvent.click(section.getByRole("button", { name: "显示本次输入的 API Key" }));
+      expect(input).toHaveAttribute("type", "text");
+
+      fireEvent.click(section.getByRole("button", { name: "隐藏本次输入的 API Key" }));
+      expect(input).toHaveAttribute("type", "password");
+    });
+  });
+
   it("重载无配置响应时也销毁所有明文密钥", async () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByDisplayValue("https://example.com/v1")).toBeInTheDocument());
@@ -201,7 +224,7 @@ describe("SettingsPage", () => {
     const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
     const embeddings = within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!);
     const vision = within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!);
-    const llmKey = llm.getByLabelText(/API Key/);
+    const llmKey = llm.getByLabelText("API Key");
     const embeddingKey = embeddings.getByLabelText("API Key");
     const visionKey = vision.getByLabelText("API Key");
     fireEvent.change(llmKey, { target: { value: "sk-llm-draft" } });
@@ -234,7 +257,7 @@ describe("SettingsPage", () => {
     const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
     const embeddings = within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!);
     const vision = within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!);
-    const llmKey = llm.getByLabelText(/API Key/);
+    const llmKey = llm.getByLabelText("API Key");
     fireEvent.change(llmKey, { target: { value: "sk-llm-secret" } });
     expect(llmKey).toHaveValue("sk-llm-secret");
     fireEvent.click(llm.getByRole("button", { name: "保存并测试连接" }));

@@ -14,8 +14,8 @@ import java.util.UUID;
 /**
  * 处理视觉模型配置的规范化、连接测试、加密保存和脱敏状态展示。
  *
- * <p>视觉模型当前使用 OpenAI Chat Completions 兼容协议；API key 留空时只有 provider、地址和
- * 模型完全一致才复用旧 key，防止把凭据误发到新地址。</p>
+ * <p>视觉模型当前使用 OpenAI Chat Completions 兼容协议；API key 留空时只有 provider 和地址
+ * 与已存配置一致才复用旧 key。模型可在同一凭据边界内切换，旧 key 不会发往新地址。</p>
  */
 @Service
 @Profile({"java-files", "java-auth", "java-chat"})
@@ -57,7 +57,7 @@ public final class VisionConfigurationService {
      * 规范化、测试并保存视觉模型配置。
      * @param provider 当前只支持 openai_compat。
      * @param baseUrl OpenAI 兼容接口地址。
-     * @param apiKey 明文 key，仅在本次调用期间使用。
+     * @param apiKey 明文 key，仅在本次调用期间使用；留空时可按 provider 和地址复用已存 key。
      * @param model 视觉模型 ID。
      * @return 保存结果和连接测试结果，不包含明文 key。
      */
@@ -70,7 +70,6 @@ public final class VisionConfigurationService {
         if (key.isBlank() && current.isPresent()
                 && normalizedProvider.equals(current.get().provider())
                 && sameUrl(normalizedUrl, current.get().baseUrl())
-                && normalizedModel.equals(current.get().model())
                 && current.get().encryptedApiKey() != null) {
             key = keyCipher.decrypt(current.get().encryptedApiKey());
         }
