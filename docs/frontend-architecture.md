@@ -56,7 +56,7 @@ frontend/src/
 
 解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。活动流以 session key 保存在 hook 的 Map 中；切换会话标记 detached 但保持网络读取，text/reasoning 帧用当前 session 检查隔离 UI 写入，context/tool 事件只写所属会话视图，返回原会话或结束后从持久历史收敛。当前会话 stop 与组件卸载才 Abort。流异常收尾仍先同步 flush/cancel，再清理空助手占位和追加错误消息。
 
-ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即显示目标历史，但不会终止原会话；后台完成时刷新会话列表，回到原会话时重拉已持久化的 assistant/context/tool 记录。模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的请求代次规则和密钥草稿销毁规则。
+ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即显示目标历史，但不会终止原会话；后台完成时刷新会话列表，回到原会话时重拉已持久化的 assistant/context/tool 记录。模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的请求代次规则和密钥草稿销毁规则；已存 Key 只在点击眼睛后按需读取，配置边界变化会使在途回显失效，防止迟到明文进入新地址表单。
 
 ## 4. 文件页请求生命周期
 

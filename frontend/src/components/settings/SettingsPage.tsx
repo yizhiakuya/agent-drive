@@ -1,6 +1,17 @@
 "use client";
 import { type ChangeEvent, useCallback, useEffect, useId, useRef, useState } from "react";
-import { getConfig, getVisionConfig, saveEmbeddings, saveVision, configureLLM, listModels, listVisionModels } from "@/lib/api/config";
+import {
+  configureLLM,
+  getConfig,
+  getVisionConfig,
+  listModels,
+  listVisionModels,
+  revealEmbeddingApiKey,
+  revealLlmApiKey,
+  revealVisionApiKey,
+  saveEmbeddings,
+  saveVision,
+} from "@/lib/api/config";
 import { PROTOCOLS, protocolOf, EMBEDDING_PROVIDERS } from "@/lib/llm-options";
 import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
@@ -18,7 +29,12 @@ import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, C
 import { Alert } from "@/components/ui/alert";
 import { Bot, BrainCircuit, Eye, LogOut, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
 
-function SettingsField({ label, value, onChange, placeholder, type = "text", step, hint }: {
+function sameBaseUrl(left: string, right: string) {
+  return left.trim().replace(/\/+$/, "") === right.trim().replace(/\/+$/, "");
+}
+
+function SettingsField({ label, value, onChange, placeholder, type = "text", step, hint,
+  storedSecretAvailable, revealStoredSecret }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -26,6 +42,8 @@ function SettingsField({ label, value, onChange, placeholder, type = "text", ste
   type?: string;
   step?: string;
   hint?: string;
+  storedSecretAvailable?: boolean;
+  revealStoredSecret?: () => Promise<boolean>;
 }) {
   const inputId = useId();
 
@@ -34,7 +52,9 @@ function SettingsField({ label, value, onChange, placeholder, type = "text", ste
       <label htmlFor={inputId} className="text-xs text-muted">{label}</label>
       {type === "password" ? (
         <SecretInput id={inputId} value={value} placeholder={placeholder}
-                     onChange={(event) => onChange(event.target.value)} className="text-sm" />
+                     onChange={(event) => onChange(event.target.value)} className="text-sm"
+                     storedSecretAvailable={storedSecretAvailable}
+                     revealStoredSecret={revealStoredSecret} />
       ) : (
         <Input id={inputId} type={type} value={value} placeholder={placeholder} step={step}
                onChange={(event) => onChange(event.target.value)} className="text-sm" />
@@ -66,6 +86,9 @@ export default function SettingsPage() {
   const loadRequestRef = useRef(0);
   const modelRequestRef = useRef(0);
   const visionModelRequestRef = useRef(0);
+  const llmKeyRevealRef = useRef(0);
+  const embeddingKeyRevealRef = useRef(0);
+  const visionKeyRevealRef = useRef(0);
 
   async function logout() {
     const native = Capacitor.isNativePlatform();
@@ -111,6 +134,9 @@ export default function SettingsPage() {
    */
   const load = useCallback(async () => {
     const request = ++loadRequestRef.current;
+    llmKeyRevealRef.current += 1;
+    embeddingKeyRevealRef.current += 1;
+    visionKeyRevealRef.current += 1;
     try {
       const [d, vision] = await Promise.all([getConfig(), getVisionConfig()]);
       if (request !== loadRequestRef.current) return;
@@ -143,6 +169,9 @@ export default function SettingsPage() {
     loadRequestRef.current += 1;
     modelRequestRef.current += 1;
     visionModelRequestRef.current += 1;
+    llmKeyRevealRef.current += 1;
+    embeddingKeyRevealRef.current += 1;
+    visionKeyRevealRef.current += 1;
   }, []);
   useEffect(() => {
     const h = () => { void load(); }; // 全局刷新
@@ -189,6 +218,7 @@ export default function SettingsPage() {
   }, []);
 
   function changeProtocol(type: string) {
+    llmKeyRevealRef.current += 1;
     const proto = protocolOf(type);
     setLlmForm((f) => {
       const prev = protocolOf(f.type);
@@ -306,6 +336,7 @@ export default function SettingsPage() {
   }
 
   const handleLlmBaseUrlChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    llmKeyRevealRef.current += 1;
     const baseUrl = event.target.value;
     setLlmForm((f) => ({
       ...f,
@@ -316,11 +347,13 @@ export default function SettingsPage() {
   }, [invalidateModelLookup]);
 
   const handleLlmApiKeyChange = useCallback((value: string) => {
+    llmKeyRevealRef.current += 1;
     setLlmForm((f) => ({ ...f, api_key: value }));
     invalidateModelLookup();
   }, [invalidateModelLookup]);
 
   const handleVisionBaseUrlChange = useCallback((value: string) => {
+    visionKeyRevealRef.current += 1;
     setVisionForm((f) => ({
       ...f,
       base_url: value,
@@ -330,11 +363,13 @@ export default function SettingsPage() {
   }, [invalidateVisionModelLookup]);
 
   const handleVisionApiKeyChange = useCallback((value: string) => {
+    visionKeyRevealRef.current += 1;
     setVisionForm((f) => ({ ...f, api_key: value }));
     invalidateVisionModelLookup();
   }, [invalidateVisionModelLookup]);
 
   const handleEmbeddingBaseUrlChange = useCallback((value: string) => {
+    embeddingKeyRevealRef.current += 1;
     setEmbForm((f) => ({
       ...f,
       base_url: value,
@@ -343,12 +378,77 @@ export default function SettingsPage() {
   }, []);
 
   const handleEmbeddingModelChange = useCallback((value: string) => {
+    embeddingKeyRevealRef.current += 1;
     setEmbForm((f) => ({
       ...f,
       model: value,
       api_key: value === f.model ? f.api_key : "",
     }));
   }, []);
+
+  const handleEmbeddingApiKeyChange = useCallback((value: string) => {
+    embeddingKeyRevealRef.current += 1;
+    setEmbForm((form) => ({ ...form, api_key: value }));
+  }, []);
+
+  const revealSavedLlmApiKey = useCallback(async () => {
+    const request = ++llmKeyRevealRef.current;
+    setLlmMsg(null);
+    try {
+      const apiKey = await revealLlmApiKey();
+      if (request !== llmKeyRevealRef.current) return false;
+      setLlmForm((form) => ({ ...form, api_key: apiKey }));
+      return true;
+    } catch (error) {
+      if (request === llmKeyRevealRef.current) {
+        setLlmMsg({ kind: "error", text: `读取已保存的 API Key 失败：${String(error)}` });
+      }
+      return false;
+    }
+  }, []);
+
+  const revealSavedEmbeddingApiKey = useCallback(async () => {
+    const request = ++embeddingKeyRevealRef.current;
+    setEmbMsg(null);
+    try {
+      const apiKey = await revealEmbeddingApiKey();
+      if (request !== embeddingKeyRevealRef.current) return false;
+      setEmbForm((form) => ({ ...form, api_key: apiKey }));
+      return true;
+    } catch (error) {
+      if (request === embeddingKeyRevealRef.current) {
+        setEmbMsg({ kind: "error", text: `读取已保存的 API Key 失败：${String(error)}` });
+      }
+      return false;
+    }
+  }, []);
+
+  const revealSavedVisionApiKey = useCallback(async () => {
+    const request = ++visionKeyRevealRef.current;
+    setVisionMsg(null);
+    try {
+      const apiKey = await revealVisionApiKey();
+      if (request !== visionKeyRevealRef.current) return false;
+      setVisionForm((form) => ({ ...form, api_key: apiKey }));
+      return true;
+    } catch (error) {
+      if (request === visionKeyRevealRef.current) {
+        setVisionMsg({ kind: "error", text: `读取已保存的 API Key 失败：${String(error)}` });
+      }
+      return false;
+    }
+  }, []);
+
+  const llmStoredSecretAvailable = Boolean(cfg?.llm?.api_key_masked
+    && cfg.llm.type === llmForm.type
+    && sameBaseUrl(cfg.llm.base_url, llmForm.base_url));
+  const embeddingStoredSecretAvailable = Boolean(cfg?.embeddings?.api_key_masked
+    && cfg.embeddings.provider === embForm.provider
+    && cfg.embeddings.model === embForm.model
+    && sameBaseUrl(cfg.embeddings.base_url, embForm.base_url));
+  const visionStoredSecretAvailable = Boolean(visionCfg?.configured && visionCfg.api_key_masked
+    && visionCfg.provider === visionForm.provider
+    && sameBaseUrl(visionCfg.base_url, visionForm.base_url));
 
   return (
     <section className="flex-1 overflow-auto bg-bg px-4 py-5 sm:px-6">
@@ -437,7 +537,9 @@ export default function SettingsPage() {
         </div>
         <SettingsField label="API Key" value={llmForm.api_key} onChange={handleLlmApiKeyChange}
                        placeholder={cfg?.llm?.api_key_masked ? `当前: ${cfg.llm.api_key_masked}（留空不变）` : "sk-..."}
-                       type="password" hint="API Key 留空时沿用已保存的 Key" />
+                       type="password" hint="API Key 留空时沿用已保存的 Key"
+                       storedSecretAvailable={llmStoredSecretAvailable}
+                       revealStoredSecret={revealSavedLlmApiKey} />
         {llmMsg && !(llmMsg.kind === "ok" && llmMsg.text.startsWith("已获取")) && (
           <Alert variant={llmMsg.kind === "ok" ? "default" : "destructive"}
                  className={`mb-3 text-xs ${llmMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{llmMsg.text}</Alert>
@@ -459,9 +561,10 @@ export default function SettingsPage() {
                        onChange={handleEmbeddingModelChange}
                        placeholder={EMBEDDING_PROVIDERS[0].placeholderModel} />
         <SettingsField label="API Key" value={embForm.api_key}
-                       onChange={(value) => setEmbForm((f) => ({ ...f, api_key: value }))}
+                       onChange={handleEmbeddingApiKeyChange}
                        placeholder={cfg?.embeddings?.api_key_masked ? `当前: ${cfg.embeddings.api_key_masked}（留空不变）` : "jina_..."}
-                       type="password" />
+                       type="password" storedSecretAvailable={embeddingStoredSecretAvailable}
+                       revealStoredSecret={revealSavedEmbeddingApiKey} />
         {embMsg && (
           <Alert variant={embMsg.kind === "ok" ? "default" : "destructive"}
                  className={`mb-3 text-xs ${embMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{embMsg.text}</Alert>
@@ -518,7 +621,8 @@ export default function SettingsPage() {
         </div>
         <SettingsField label="API Key" value={visionForm.api_key} onChange={handleVisionApiKeyChange}
                        placeholder={visionCfg?.api_key_masked ? `当前: ${visionCfg.api_key_masked}（留空不变）` : "API Key"}
-                       type="password" />
+                       type="password" storedSecretAvailable={visionStoredSecretAvailable}
+                       revealStoredSecret={revealSavedVisionApiKey} />
         {visionMsg && (
           !(visionMsg.kind === "ok" && visionMsg.text.startsWith("已获取")) &&
           <Alert variant={visionMsg.kind === "ok" ? "default" : "destructive"}

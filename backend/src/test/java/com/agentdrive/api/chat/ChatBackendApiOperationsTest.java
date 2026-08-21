@@ -41,6 +41,15 @@ class ChatBackendApiOperationsTest {
     }
 
     @Test
+    void doesNotExposeApiKeyRevealEndpointsToTheAgentCatalog() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+
+        assertThat(catalog.find("POST /api/v1/config/api-key/reveal")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/config/embeddings/api-key/reveal")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/config/vision/api-key/reveal")).isEmpty();
+    }
+
+    @Test
     void routesRegisteredOperationToItsOwnerScopedHandler() {
         UUID owner = UUID.randomUUID();
         BackendApiOperationHandler handler = new BackendApiOperationHandler() {

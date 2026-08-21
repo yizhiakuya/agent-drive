@@ -54,6 +54,24 @@ public final class VisionConfigController {
     }
 
     /**
+     * 响应 {@code POST /api/v1/config/vision/api-key/reveal}，回显当前 owner 已保存的视觉 API key。
+     *
+     * <p>该端点只接受 Web 会话凭据，响应禁止缓存，也不登记到 Agent operation 目录。</p>
+     *
+     * @param exchange 用于解析 owner、凭据类型并设置敏感响应头的请求上下文。
+     * @return 仅包含完整 {@code api_key} 的一次性响应。
+     */
+    @PostMapping("/api-key/reveal")
+    public Mono<Map<String, String>> revealApiKey(ServerWebExchange exchange) {
+        ApiKeyRevealSupport.markNoStore(exchange);
+        return principalResolver.resolve(exchange).flatMap(principal -> {
+            ApiKeyRevealSupport.requireSession(principal);
+            return blocking(() -> Map.of("api_key", configs.revealApiKey(principal.userId())
+                    .orElseThrow(ApiKeyRevealSupport::missingSavedKey)));
+        });
+    }
+
+    /**
      * 响应 {@code POST /api/v1/config/vision/models}，探测当前视觉 provider 的模型目录。
      * @param payload provider、地址和可选 API key。
      * @param exchange 用于解析配置 owner 的请求上下文。

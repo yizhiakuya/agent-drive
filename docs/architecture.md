@@ -28,7 +28,7 @@ API 和 Worker 是同一个模块化单体的两种进程模式：API 负责 HTT
 | `api` | WebFlux controller、SSE、上传下载、静态资源和 SPA fallback | 处理协议/鉴权入口，不直接拼 SQL 或决定领域规则 |
 | `agent` | LangChain4j runtime、tool catalog、确认、replay、reasoning | owner、凭据和权限由运行时注入，不暴露给模型 |
 | `auth` | 用户、Cookie/Bearer session、设备令牌、配对码、限速 | 认证数据异常失败关闭 |
-| `config` | LLM、embedding、vision 配置和模型探测 | API key 加密存储，只返回掩码 |
+| `config` | LLM、embedding、vision 配置、模型探测和会话认证的按需 Key 回显 | API key 加密存储；普通响应只给掩码，回显响应禁止缓存且不进入 Agent 工具目录 |
 | `files` / `storage` | 文件用例、metadata、revision、回收站、路径安全、原子发布 | 公共路径是 owner 内相对 POSIX 路径 |
 | `devices` | 设备登记、撤销、心跳和同步状态 | 所有查询按 owner 限定 |
 | `tasks` | 状态机、租约、事件、schedule、outbox 和 Worker handler | PostgreSQL 是任务唯一真相源 |

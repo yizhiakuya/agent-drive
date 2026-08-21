@@ -52,7 +52,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 模型不能提供任意 URL、Cookie、Bearer、Authorization、请求头、Python 入口、Java 类名、JavaScript 或 `eval`。
 - 当前 Request 的 Cookie/Bearer 只在进程内传给 backend dispatcher；Worker 通过 PostgreSQL 任务租约和 owner-scoped payload 执行，不接收模型提供的凭据。
 - GET 和只读 probe 自动执行；写操作按 operation 风险处理，red 操作需要签名确认、nonce TTL 和一次性消费。非 red 操作按 session/tool/arguments 做确定性 replay。
-- provider API key 只在后端规定的配置边界相同且表单留空时复用：LLM 和 vision 比较 provider/base URL，embedding 还要求 model 相同；只改视觉模型可沿用同一地址的已存 key。密钥落库使用 AES-GCM，响应、日志、会话、工具轨迹和 `last_trace` 只保留掩码/脱敏值。设置页在协议/base URL 边界变化时清空对应 key，embedding 模型变化时同样清空；保存成功或重新加载脱敏配置后销毁前端状态中的明文 key。输入框的小眼睛只显示本次尚未保存的草稿，不能读取或展开服务端已存密钥。
+- provider API key 只在后端规定的配置边界相同且表单留空时复用：LLM 和 vision 比较 provider/base URL，embedding 还要求 model 相同；只改视觉模型可沿用同一地址的已存 key。密钥落库使用 AES-GCM，普通响应、日志、会话、工具轨迹和 `last_trace` 只保留掩码/脱敏值。设置页眼睛可通过专用 `POST .../api-key/reveal` 回显已存 key；端点仅接受 Web `SESSION`、拒绝设备 Bearer、强制 `Cache-Control: no-store`，且不在 Agent operation 目录中。设置页在协议/base URL 边界变化时清空对应 key，embedding 模型变化时同样清空；回显请求使用代次校验，保存成功或重新加载脱敏配置后销毁前端状态中的明文 key。
 - API key、Cookie、Bearer、设备 token、query credential、完整消息和文件内容不进入普通日志。聊天日志记录 request ID、provider/model、工具 operation、状态和耗时；异常 message/cause 与 SSE error 先脱敏。
 
 ## 5. Android 令牌与权限

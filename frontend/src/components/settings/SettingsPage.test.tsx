@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   clearDeviceToken: vi.fn(),
   listModels: vi.fn(),
   listVisionModels: vi.fn(),
+  revealLlmApiKey: vi.fn(),
+  revealEmbeddingApiKey: vi.fn(),
+  revealVisionApiKey: vi.fn(),
   configureLLM: vi.fn(),
   saveEmbeddings: vi.fn(),
   saveVision: vi.fn(),
@@ -25,6 +28,9 @@ vi.mock("@/lib/api/config", () => ({
   configureLLM: mocks.configureLLM,
   listModels: mocks.listModels,
   listVisionModels: mocks.listVisionModels,
+  revealLlmApiKey: mocks.revealLlmApiKey,
+  revealEmbeddingApiKey: mocks.revealEmbeddingApiKey,
+  revealVisionApiKey: mocks.revealVisionApiKey,
 }));
 
 vi.mock("@capacitor/core", () => ({
@@ -93,6 +99,9 @@ describe("SettingsPage", () => {
     mocks.getVisionConfig.mockResolvedValue(visionConfig());
     mocks.listModels.mockResolvedValue({ ok: true, models: ["new-model"] });
     mocks.listVisionModels.mockResolvedValue({ ok: true, models: ["new-vision-model"] });
+    mocks.revealLlmApiKey.mockResolvedValue("sk-saved-llm");
+    mocks.revealEmbeddingApiKey.mockResolvedValue("jina_saved_embedding");
+    mocks.revealVisionApiKey.mockResolvedValue("sk-saved-vision");
     mocks.configureLLM.mockResolvedValue({ ok: true });
     mocks.saveEmbeddings.mockResolvedValue({ ok: true, test: { ok: true, dimensions: 1024 } });
     mocks.saveVision.mockResolvedValue({ ok: true });
@@ -212,9 +221,74 @@ describe("SettingsPage", () => {
       fireEvent.click(section.getByRole("button", { name: "显示本次输入的 API Key" }));
       expect(input).toHaveAttribute("type", "text");
 
-      fireEvent.click(section.getByRole("button", { name: "隐藏本次输入的 API Key" }));
+      fireEvent.click(section.getByRole("button", { name: "隐藏 API Key" }));
       expect(input).toHaveAttribute("type", "password");
     });
+  });
+
+  it("点击眼睛后回显三类已保存的 API Key", async () => {
+    mocks.getVisionConfig.mockResolvedValue({
+      ...visionConfig(),
+      configured: true,
+      model: "vision-model",
+      api_key_masked: "sk-v-***",
+    });
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("vision-model")).toBeInTheDocument());
+
+    const cases = [
+      {
+        section: within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!),
+        reveal: mocks.revealLlmApiKey,
+        value: "sk-saved-llm",
+      },
+      {
+        section: within(screen.getByRole("heading", { name: /向量化/ }).closest("section")!),
+        reveal: mocks.revealEmbeddingApiKey,
+        value: "jina_saved_embedding",
+      },
+      {
+        section: within(screen.getByRole("heading", { name: /视觉模型/ }).closest("section")!),
+        reveal: mocks.revealVisionApiKey,
+        value: "sk-saved-vision",
+      },
+    ];
+
+    for (const item of cases) {
+      const input = item.section.getByLabelText("API Key");
+      const revealButton = item.section.getByRole("button", { name: "显示已保存的 API Key" });
+      expect(revealButton).toBeEnabled();
+      fireEvent.click(revealButton);
+
+      await waitFor(() => expect(item.reveal).toHaveBeenCalledOnce());
+      await waitFor(() => expect(input).toHaveValue(item.value));
+      expect(input).toHaveAttribute("type", "text");
+
+      fireEvent.click(item.section.getByRole("button", { name: "隐藏 API Key" }));
+      expect(input).toHaveAttribute("type", "password");
+    }
+  });
+
+  it("配置边界变化后丢弃迟到的已保存 Key 回显", async () => {
+    const pending = deferred<string>();
+    mocks.revealLlmApiKey.mockImplementationOnce(() => pending.promise);
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByDisplayValue("https://example.com/v1")).toBeInTheDocument());
+
+    const llm = within(screen.getByRole("heading", { name: "LLM 模型" }).closest("section")!);
+    const input = llm.getByLabelText("API Key");
+    fireEvent.click(llm.getByRole("button", { name: "显示已保存的 API Key" }));
+    await waitFor(() => expect(mocks.revealLlmApiKey).toHaveBeenCalledOnce());
+
+    fireEvent.change(llm.getByLabelText("接口地址"), {
+      target: { value: "https://new.example/v1" },
+    });
+    pending.resolve("stale-saved-secret");
+    await act(async () => { await pending.promise; });
+
+    expect(input).toHaveValue("");
+    expect(input).toHaveAttribute("type", "password");
+    expect(llm.getByRole("button", { name: "显示本次输入的 API Key" })).toBeDisabled();
   });
 
   it("重载无配置响应时也销毁所有明文密钥", async () => {

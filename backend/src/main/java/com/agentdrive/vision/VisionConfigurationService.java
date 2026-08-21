@@ -54,6 +54,20 @@ public final class VisionConfigurationService {
     }
 
     /**
+     * 解密 owner 已保存的视觉模型 API key，供会话认证的设置页回显端点使用。
+     *
+     * @param userId 配置所属 owner UUID。
+     * @return 已保存的非空明文 key；未配置时为空。
+     */
+    public Optional<String> revealApiKey(UUID userId) {
+        return configs.find(userId)
+                .map(VisionConfigStore.VisionConfig::encryptedApiKey)
+                .filter(value -> value != null && value.length > 0)
+                .map(keyCipher::decrypt)
+                .filter(value -> !value.isBlank());
+    }
+
+    /**
      * 规范化、测试并保存视觉模型配置。
      * @param provider 当前只支持 openai_compat。
      * @param baseUrl OpenAI 兼容接口地址。

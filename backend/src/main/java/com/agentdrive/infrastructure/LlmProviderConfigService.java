@@ -5,7 +5,8 @@ import java.util.UUID;
 
 /**
  * 暴露 owner-scoped LLM provider 配置的应用服务端口。
- * <p>查询返回给设置页的视图不会包含 API key 明文；内部运行时需要密文时通过单独方法取得。</p>
+ * <p>普通设置视图不会包含 API key 明文；内部运行时和专用的会话认证回显端点需要密文时
+ * 通过单独方法取得。</p>
  */
 public interface LlmProviderConfigService {
     /**
@@ -18,7 +19,7 @@ public interface LlmProviderConfigService {
     /**
      * 读取内部模型运行时所需的 API key 密文。
      * @param userId 配置所属 owner 的 UUID。
-     * @return 非空密文字节；没有配置 key 时为空。调用方不能把结果返回给客户端。
+     * @return 非空密文字节；没有配置 key 时为空。除专用的会话认证回显端点外，调用方不能把解密结果返回给客户端。
      */
     Optional<byte[]> encryptedApiKeyForOwner(UUID userId);
 

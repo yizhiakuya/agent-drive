@@ -4,7 +4,8 @@ package com.agentdrive.vision;
  * 视觉配置使用的密钥保护端口。
  *
  * <p>视觉模块只知道如何请求密钥保护，不依赖具体的 AES、JCE 或环境变量实现；实现类必须
- * 保证明文只在进程内短暂存在，不能把 key 写入日志或任务结果。</p>
+ * 保证明文只在进程内短暂存在，不能把 key 写入日志或任务结果；唯一客户端回显边界是
+ * 设置页专用的会话认证、禁止缓存端点。</p>
  */
 public interface VisionSecretCipher {
     /**

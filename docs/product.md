@@ -71,7 +71,7 @@ Agent Drive 是面向个人用户的 Agent-first 私人网盘。用户可以直�
 | 内容索引 | 文本抽取、全文、embedding、图片描述、revision 校验 | 由独立 Worker 异步处理；embedding/vision 为可选配置 |
 | 任务中心 | 顶层任务统计、筛选、阶段/文件/批次进度、执行输入/结果/失败详情、取消/重试、单条删除和终态批量清理、索引重建 | PostgreSQL 是唯一任务状态源；运行中详情通过任务事件持续刷新；活动任务和活动子任务不会被清理 |
 | 自动化 | 计划任务、自动化执行、每日报告和用户偏好 | 执行结果依赖 Worker 与对应 handler |
-| 设置 | LLM、embedding、vision、模型探测、二维码配对、设备列表、退出登录 | 已存 API key 只显示掩码，当前输入草稿可临时查看，服务端加密存储 |
+| 设置 | LLM、embedding、vision、模型探测、二维码配对、设备列表、退出登录 | 已存 API key 默认显示掩码，可点击眼睛临时回显；服务端加密存储 |
 | Skills | 内置 Skill、自定义 Skill 搜索/新建/编辑/启停/删除、Agent 按需读取 | 指令只编排登记工具；内置 Skill 只读，自定义 Skill 按 owner 隔离 |
 | Android App | 扫码连接、加密令牌、相册同步、去重、断点续传、同步状态 | Capacitor 7；当前没有 iOS 客户端 |
 

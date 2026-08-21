@@ -1,6 +1,5 @@
 package com.agentdrive.api.config;
 
-import com.agentdrive.auth.AuthenticatedPrincipal;
 import com.agentdrive.agent.LlmProviderConfig;
 import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.EmbeddingConfigStore;
@@ -39,9 +38,10 @@ import java.util.concurrent.Callable;
  * 提供 LLM Provider、模型探测和 Jina embedding 配置 API。
  *
  * <p>所有端点按 owner 读取或写入配置。LLM API key 和 embedding API key 只以
- * {@link LlmApiKeyCipher} 加密结果持久化，响应只返回掩码；当请求 key 留空时，
- * 仅在 provider 与 base URL 都和已存配置一致时复用旧 key。配置保存会先探测 Provider，
- * embedding 保存成功后还会探测连接并入队索引重建，实际重建由 Worker 执行。
+ * {@link LlmApiKeyCipher} 加密结果持久化，普通配置响应只返回掩码；专用回显端点仅接受
+ * Web 会话并禁止缓存。当请求 key 留空时，仅在 provider 与 base URL 都和已存配置一致时
+ * 复用旧 key。配置保存会先探测 Provider，embedding 保存成功后还会探测连接并入队索引重建，
+ * 实际重建由 Worker 执行。
  */
 @RestController
 @Profile({"java-auth", "java-chat"})
@@ -132,6 +132,23 @@ public final class ProviderConfigController {
     }
 
     /**
+     * 响应 {@code POST /api/v1/config/api-key/reveal}，回显当前 owner 已保存的 LLM API key。
+     *
+     * <p>该端点只接受 Web 会话凭据，响应禁止缓存，也不登记到 Agent operation 目录。</p>
+     *
+     * @param exchange 用于解析 owner、凭据类型并设置敏感响应头的请求上下文。
+     * @return 仅包含完整 {@code api_key} 的一次性响应。
+     */
+    @PostMapping("/api-key/reveal")
+    public Mono<Map<String, String>> revealLlmApiKey(ServerWebExchange exchange) {
+        ApiKeyRevealSupport.markNoStore(exchange);
+        return principalResolver.resolve(exchange).flatMap(principal -> {
+            ApiKeyRevealSupport.requireSession(principal);
+            return blocking(() -> Map.of("api_key", savedLlmApiKey(principal.userId())));
+        });
+    }
+
+    /**
      * 响应 {@code PUT /api/v1/config/embeddings}，保存并测试 Jina embedding 配置。
      *
      * @param payload 包含 provider、base URL、API key 和模型的请求体；provider 目前只接受 jina。
@@ -143,6 +160,21 @@ public final class ProviderConfigController {
                                                 ServerWebExchange exchange) {
         return principalResolver.resolve(exchange)
                 .flatMap(principal -> blocking(() -> saveEmbeddings(principal.userId(), payload)));
+    }
+
+    /**
+     * 响应 {@code POST /api/v1/config/embeddings/api-key/reveal}，回显当前 owner 已保存的 embedding key。
+     *
+     * @param exchange 用于解析 owner、凭据类型并设置敏感响应头的请求上下文。
+     * @return 仅包含完整 {@code api_key} 的一次性响应。
+     */
+    @PostMapping("/embeddings/api-key/reveal")
+    public Mono<Map<String, String>> revealEmbeddingApiKey(ServerWebExchange exchange) {
+        ApiKeyRevealSupport.markNoStore(exchange);
+        return principalResolver.resolve(exchange).flatMap(principal -> {
+            ApiKeyRevealSupport.requireSession(principal);
+            return blocking(() -> Map.of("api_key", savedEmbeddingApiKey(principal.userId())));
+        });
     }
 
     /**
@@ -280,6 +312,38 @@ public final class ProviderConfigController {
             );
         }).orElse(null));
         return result;
+    }
+
+    /**
+     * 解密当前 owner 已保存的 LLM API key，供专用回显端点使用。
+     *
+     * @param userId 配置所属用户 UUID。
+     * @return 非空明文 key。
+     * @throws org.springframework.web.server.ResponseStatusException 未保存 key 时产生 404。
+     */
+    private String savedLlmApiKey(UUID userId) {
+        return configs.encryptedApiKeyForOwner(userId)
+                .filter(value -> value.length > 0)
+                .map(keyCipher::decrypt)
+                .filter(value -> !value.isBlank())
+                .orElseThrow(ApiKeyRevealSupport::missingSavedKey);
+    }
+
+    /**
+     * 解密当前 owner 已保存的 embedding API key，供专用回显端点使用。
+     *
+     * @param userId 配置所属用户 UUID。
+     * @return 非空明文 key。
+     * @throws org.springframework.web.server.ResponseStatusException 未保存 key 时产生 404。
+     */
+    private String savedEmbeddingApiKey(UUID userId) {
+        if (embeddingConfigs == null) throw ApiKeyRevealSupport.missingSavedKey();
+        return embeddingConfigs.find(userId)
+                .map(EmbeddingConfigStore.EmbeddingConfig::encryptedApiKey)
+                .filter(value -> value != null && value.length > 0)
+                .map(keyCipher::decrypt)
+                .filter(value -> !value.isBlank())
+                .orElseThrow(ApiKeyRevealSupport::missingSavedKey);
     }
 
     /**

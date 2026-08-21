@@ -28,7 +28,7 @@ describe("Onboarding", () => {
     fireEvent.click(screen.getByRole("button", { name: "显示本次输入的 API Key" }))
     expect(input).toHaveAttribute("type", "text")
 
-    fireEvent.click(screen.getByRole("button", { name: "隐藏本次输入的 API Key" }))
+    fireEvent.click(screen.getByRole("button", { name: "隐藏 API Key" }))
     expect(input).toHaveAttribute("type", "password")
   })
 })

@@ -9,6 +9,7 @@ import com.agentdrive.tasks.TaskStore;
 import com.agentdrive.infrastructure.LlmProviderConfigService;
 import com.agentdrive.infrastructure.LlmProviderConfigView;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
@@ -39,6 +40,53 @@ class ProviderConfigControllerContractTest {
 
         assertThat(body).contains("\"configured\":true", "\"api_key_masked\":\"sk-pro…\"");
         assertThat(body).doesNotContain("sk-provider-secret");
+    }
+
+    @Test
+    void revealsSavedLlmKeyOnlyForSessionWithoutCaching() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        WebTestClient client = client(owner,
+                new FakeConfigService(owner, cipher.encrypt("sk-provider-secret")), cipher);
+
+        client.post()
+                .uri("/api/v1/config/api-key/reveal")
+                .cookie("agentdrive_session", "session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "no-store")
+                .expectHeader().valueEquals(HttpHeaders.PRAGMA, "no-cache")
+                .expectBody()
+                .jsonPath("$.api_key").isEqualTo("sk-provider-secret");
+    }
+
+    @Test
+    void rejectsDeviceTokenForLlmKeyReveal() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        WebTestClient client = client(owner,
+                new FakeConfigService(owner, cipher.encrypt("sk-provider-secret")), cipher);
+
+        client.post()
+                .uri("/api/v1/config/api-key/reveal")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer device-token")
+                .exchange()
+                .expectStatus().isForbidden()
+                .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "no-store");
+    }
+
+    @Test
+    void returnsNotFoundWhenLlmKeyHasNotBeenSaved() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        WebTestClient client = client(owner, new FakeConfigService(owner, null), cipher);
+
+        client.post()
+                .uri("/api/v1/config/api-key/reveal")
+                .cookie("agentdrive_session", "session-token")
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "no-store");
     }
 
     @Test
@@ -82,6 +130,26 @@ class ProviderConfigControllerContractTest {
     }
 
     @Test
+    void revealsSavedEmbeddingKeyOnlyOnDedicatedUncachedEndpoint() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        EmbeddingConfigStore embeddings = mock(EmbeddingConfigStore.class);
+        when(embeddings.find(owner)).thenReturn(Optional.of(new EmbeddingConfigStore.EmbeddingConfig(
+                "jina", "https://api.jina.ai/v1", "jina-embeddings-v3", cipher.encrypt("jina-secret"))));
+        WebTestClient client = embeddingClient(owner, new FakeConfigService(owner, null), cipher, embeddings);
+
+        client.post()
+                .uri("/api/v1/config/embeddings/api-key/reveal")
+                .cookie("agentdrive_session", "session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "no-store")
+                .expectHeader().valueEquals(HttpHeaders.PRAGMA, "no-cache")
+                .expectBody()
+                .jsonPath("$.api_key").isEqualTo("jina-secret");
+    }
+
+    @Test
     void rejectsUnsupportedEmbeddingProviderWithBadRequest() {
         UUID owner = UUID.randomUUID();
         LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
@@ -109,9 +177,7 @@ class ProviderConfigControllerContractTest {
     }
 
     private static WebTestClient client(UUID owner, LlmProviderConfigService configs, LlmApiKeyCipher cipher) {
-        CredentialAuthenticator authenticator = credential -> "session-token".equals(credential)
-                ? Optional.of(new AuthenticatedPrincipal(owner, AuthenticatedPrincipal.CredentialKind.SESSION))
-                : Optional.empty();
+        CredentialAuthenticator authenticator = authenticator(owner);
         ProviderConfigController controller = new ProviderConfigController(
                 configs,
                 cipher,
@@ -125,9 +191,7 @@ class ProviderConfigControllerContractTest {
 
     private static WebTestClient embeddingClient(UUID owner, LlmProviderConfigService configs,
                                                   LlmApiKeyCipher cipher, EmbeddingConfigStore embeddings) {
-        CredentialAuthenticator authenticator = credential -> "session-token".equals(credential)
-                ? Optional.of(new AuthenticatedPrincipal(owner, AuthenticatedPrincipal.CredentialKind.SESSION))
-                : Optional.empty();
+        CredentialAuthenticator authenticator = authenticator(owner);
         ProviderConfigController controller = new ProviderConfigController(
                 configs,
                 cipher,
@@ -139,6 +203,16 @@ class ProviderConfigControllerContractTest {
         return WebTestClient.bindToController(controller)
                 .controllerAdvice(new ProviderConfigExceptionHandler())
                 .build();
+    }
+
+    private static CredentialAuthenticator authenticator(UUID owner) {
+        return credential -> switch (credential) {
+            case "session-token" -> Optional.of(new AuthenticatedPrincipal(
+                    owner, AuthenticatedPrincipal.CredentialKind.SESSION));
+            case "device-token" -> Optional.of(new AuthenticatedPrincipal(
+                    owner, AuthenticatedPrincipal.CredentialKind.DEVICE));
+            default -> Optional.empty();
+        };
     }
 
     private static final class FakeConfigService implements LlmProviderConfigService {

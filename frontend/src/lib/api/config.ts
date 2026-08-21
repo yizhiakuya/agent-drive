@@ -10,6 +10,20 @@ export const getConfig = () => api<{
   preferences?: Record<string, string>;
 }>("/config");
 export const configureLLM = (cfg: LLMConfigPayload) => api("/config", { method: "POST", body: JSON.stringify(cfg) });
+
+async function revealApiKey(path: string): Promise<string> {
+  const response = await api<{ api_key: unknown }>(path, { method: "POST", cache: "no-store" });
+  if (typeof response.api_key !== "string" || response.api_key.length === 0) {
+    throw new Error("服务端未返回已保存的 API Key");
+  }
+  return response.api_key;
+}
+
+/** 由 Web 会话按需读取已保存的 LLM API key；响应不会进入 GET 缓存。 */
+export const revealLlmApiKey = () => revealApiKey("/config/api-key/reveal");
+
+/** 由 Web 会话按需读取已保存的 embedding API key；响应不会进入 GET 缓存。 */
+export const revealEmbeddingApiKey = () => revealApiKey("/config/embeddings/api-key/reveal");
 export const listModels = (body: { type: string; base_url: string; api_key: string }) =>
   api<{ ok: boolean; models?: string[]; error?: string }>("/config/models", {
     method: "POST",
@@ -31,6 +45,9 @@ export interface VisionConfigView {
  * @returns provider、地址、模型和脱敏 key 前缀。
  */
 export const getVisionConfig = () => api<VisionConfigView>("/config/vision");
+
+/** 由 Web 会话按需读取已保存的视觉模型 API key；响应不会进入 GET 缓存。 */
+export const revealVisionApiKey = () => revealApiKey("/config/vision/api-key/reveal");
 
 /**
  * 保存并测试 OpenAI 兼容视觉模型配置。

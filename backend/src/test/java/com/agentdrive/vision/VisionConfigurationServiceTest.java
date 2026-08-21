@@ -18,6 +18,22 @@ import static org.mockito.Mockito.when;
 
 class VisionConfigurationServiceTest {
     @Test
+    void revealsSavedKeyForAuthenticatedSettingsEndpoint() {
+        UUID owner = UUID.randomUUID();
+        byte[] encrypted = {1, 2, 3};
+        VisionConfigStore configs = mock(VisionConfigStore.class);
+        VisionSecretCipher keyCipher = mock(VisionSecretCipher.class);
+        when(configs.find(owner)).thenReturn(Optional.of(new VisionConfigStore.VisionConfig(
+                "openai_compat", "https://vision.example/v1", "vision-model", encrypted)));
+        when(keyCipher.decrypt(encrypted)).thenReturn("vision-secret");
+
+        Optional<String> result = new VisionConfigurationService(
+                configs, keyCipher, mock(VisionModelClient.class)).revealApiKey(owner);
+
+        assertThat(result).contains("vision-secret");
+    }
+
+    @Test
     void reusesSavedKeyWhenOnlyModelChanges() {
         UUID owner = UUID.randomUUID();
         byte[] encrypted = {1, 2, 3};
