@@ -6,8 +6,14 @@ import { useAppStore } from "@/lib/store";
 import ChatPanel from "./ChatPanel";
 
 const chatStream = vi.fn();
+const chatRunActive = vi.fn(async () => ({ active: false }));
+const chatReconnect = vi.fn(async () => {});
+const cancelChatRun = vi.fn(async () => ({ cancelled: true }));
 vi.mock("@/lib/api/chat", () => ({
   chatStream: (...args: unknown[]) => chatStream(...args),
+  chatRunActive: (...args: unknown[]) => { void args; return chatRunActive(); },
+  chatReconnect: (...args: unknown[]) => { void args; return chatReconnect(); },
+  cancelChatRun: (...args: unknown[]) => { void args; return cancelChatRun(); },
 }));
 
 const getConfig = vi.fn(async () => ({

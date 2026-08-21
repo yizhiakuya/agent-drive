@@ -154,4 +154,18 @@ export const enqueueVisionIndex = (files: string[], force = false) =>
     body: JSON.stringify({ files, force }),
   });
 
+export interface ChatRunPayload {
+  session_id: string;
+  message: string;
+  thinking_level?: string;
+  model?: string;
+}
+
+/** 将一轮聊天提交到服务端 durable Worker；浏览器断开不会影响任务。 */
+export const enqueueChatRun = (payload: ChatRunPayload) =>
+  api<{ queued: boolean; task: TaskRecord }>("/chat/run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
 export const taskEventsUrl = () => apiPath("/tasks/events");

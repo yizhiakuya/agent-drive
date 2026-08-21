@@ -129,7 +129,7 @@ export default function ChatPanel() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const sidRef = useRef<string | null>(sessionId);
+  const sidRef = useRef<string | null>(null);
   const sessionLoadRequestRef = useRef(0);
 
   useEffect(() => () => {
@@ -279,8 +279,11 @@ export default function ChatPanel() {
 
   useEffect(() => {
     if (sessionId !== sidRef.current) {
+      const preserveOptimisticRun = sidRef.current === null
+        && messages.some((message) => message.type === "user");
       sidRef.current = sessionId;
       setPending(null);
+      if (sessionId && preserveOptimisticRun) return;
       if (sessionId) {
         setMessages([]);
         setPlan([]);
@@ -292,7 +295,7 @@ export default function ChatPanel() {
         setContextUsage(null);
       }
     }
-  }, [sessionId]);
+  }, [sessionId, messages]);
 
   function onScroll() {
     const el = listRef.current;

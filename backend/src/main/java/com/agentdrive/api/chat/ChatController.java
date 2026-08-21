@@ -2,6 +2,7 @@ package com.agentdrive.api.chat;
 
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.auth.ConversationSessionService;
+import com.agentdrive.tasks.TaskStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,7 +12,10 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -41,10 +46,13 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class ChatController {
     private static final Logger LOGGER = LoggerFactory.getLogger(ChatController.class);
     private static final String REQUEST_ID_HEADER = "X-Request-ID";
+    private static final String SESSION_ID_HEADER = "X-Session-ID";
     private final ChatRuntime runtime;
     private final ChatSseEncoder encoder;
     private final ConversationSessionService sessionService;
     private final WebRequestPrincipalResolver principalResolver;
+    private final TaskStore tasks;
+    private final ChatRunRegistry runRegistry;
 
     /**
      * 创建不注入会话服务的兼容控制器。
@@ -53,11 +61,24 @@ public final class ChatController {
      * @param objectMapper 编码 SSE data JSON 的映射器。
      */
     public ChatController(ChatRuntime runtime, ObjectMapper objectMapper) {
-        this(runtime, objectMapper, null, null);
+        this(runtime, objectMapper, null, null, null, null);
     }
 
     /**
-     * 创建聊天控制器并保存聊天、会话和认证依赖。
+     * 创建不注入任务存储的兼容控制器，供已有非后台聊天测试使用。
+     * @param runtime 执行聊天的 runtime
+     * @param objectMapper SSE JSON 映射器
+     * @param sessionService owner-scoped 会话服务
+     * @param principalResolver 请求认证解析器
+     */
+    public ChatController(ChatRuntime runtime, ObjectMapper objectMapper,
+                          ConversationSessionService sessionService,
+                          WebRequestPrincipalResolver principalResolver) {
+        this(runtime, objectMapper, sessionService, principalResolver, null, null);
+    }
+
+    /**
+     * 创建聊天控制器并保存聊天、会话、认证和 durable task 依赖。
      *
      * @param runtime 执行 Agent 的聊天 runtime。
      * @param objectMapper 将事件 data 序列化为 JSON 的映射器。
@@ -68,11 +89,15 @@ public final class ChatController {
     public ChatController(ChatRuntime runtime,
                           ObjectMapper objectMapper,
                           ConversationSessionService sessionService,
-                          WebRequestPrincipalResolver principalResolver) {
+                          WebRequestPrincipalResolver principalResolver,
+                          TaskStore tasks,
+                          ChatRunRegistry runRegistry) {
         this.runtime = runtime;
         this.encoder = new ChatSseEncoder(objectMapper);
         this.sessionService = sessionService;
         this.principalResolver = principalResolver;
+        this.tasks = tasks;
+        this.runRegistry = runRegistry;
     }
 
     /**
@@ -86,6 +111,99 @@ public final class ChatController {
     public Mono<ChatResponse> complete(@Valid @RequestBody ChatRequest request,
                                        ServerWebExchange exchange) {
         return prepare(request, exchange).flatMap(runtime::complete);
+    }
+
+    /**
+     * 响应 {@code POST /api/v1/chat/run}，创建一个与 HTTP 生命周期无关的后台 Agent 任务。
+     *
+     * @param request 聊天消息和受控选项；后台不接受确认或浏览器能力
+     * @param exchange 用于认证 owner 和确认会话归属
+     * @return queued 标志和 owner-scoped 任务快照
+     */
+    @PostMapping("/chat/run")
+    public Mono<Map<String, Object>> run(@Valid @RequestBody ChatRequest request,
+                                         ServerWebExchange exchange) {
+        if (tasks == null) {
+            return Mono.error(new IllegalStateException("task store unavailable"));
+        }
+        return prepare(request, exchange).flatMap(normalized -> {
+            if (normalized.confirmations() != null && !normalized.confirmations().isEmpty()) {
+                return Mono.error(new IllegalArgumentException("background chat does not accept confirmations"));
+            }
+            Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("session_id", normalized.sessionId());
+            payload.put("message", normalized.message());
+            payload.put("thinking_level", normalized.thinkingLevel());
+            if (normalized.model() != null && !normalized.model().isBlank()) {
+                payload.put("model", normalized.model());
+            }
+            String dedupe = "chat.run:" + normalized.sessionId() + ":" +
+                    Integer.toHexString(normalized.message().hashCode());
+            UUID userId = normalized.authenticatedUserId();
+            if (userId == null) {
+                return Mono.error(new IllegalStateException("authenticated user is required"));
+            }
+            return blocking(() -> {
+                TaskStore.EnqueueResult result = tasks.enqueue(
+                        userId, "chat.run", "automation", payload,
+                        dedupe, "api", null, 0, 1);
+                return Map.of("queued", result.created(), "task", result.task());
+            });
+        });
+    }
+
+    private <T> Mono<T> blocking(java.util.concurrent.Callable<T> operation) {
+        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 重连当前 owner 会话的内存 Agent relay；页面刷新后可继续接收未完成的事件。
+     * @param sessionId owner-scoped session ID
+     * @param exchange 当前认证请求
+     * @return replay relay，若没有活跃运行则为空流
+     */
+    @GetMapping(value = "/chat/{sessionId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<Map<String, Object>>> reconnect(@PathVariable String sessionId,
+                                                                  ServerWebExchange exchange) {
+        if (runRegistry == null || sessionService == null || principalResolver == null) return Flux.empty();
+        return principalResolver.resolve(exchange).flatMapMany(principal ->
+                blocking(() -> {
+                    sessionService.getOwned(principal.userId(), sessionId);
+                    return true;
+                }).flatMapMany(ignored -> runRegistry.reconnect(sessionId)
+                        .map(event -> ServerSentEvent.<Map<String, Object>>builder(event.data())
+                                .event(event.event()).build())));
+    }
+
+    /**
+     * 查询当前 owner 会话是否有活跃 Agent。
+     */
+    @GetMapping("/chat/{sessionId}/active")
+    public Mono<Map<String, Object>> active(@PathVariable String sessionId, ServerWebExchange exchange) {
+        if (runRegistry == null || sessionService == null || principalResolver == null) {
+            return Mono.just(Map.of("active", false));
+        }
+        return principalResolver.resolve(exchange).flatMap(principal ->
+                blocking(() -> {
+                    sessionService.getOwned(principal.userId(), sessionId);
+                    return Map.of("active", runRegistry.active(sessionId));
+                }));
+    }
+
+    /**
+     * 主动停止当前 owner 会话的运行；浏览器刷新本身不会调用此接口。
+     */
+    @PostMapping("/chat/{sessionId}/cancel")
+    public Mono<Map<String, Object>> cancel(@PathVariable String sessionId,
+                                             ServerWebExchange exchange) {
+        if (runRegistry == null || sessionService == null || principalResolver == null) {
+            return Mono.just(Map.of("cancelled", false));
+        }
+        return principalResolver.resolve(exchange).flatMap(principal ->
+                blocking(() -> {
+                    sessionService.getOwned(principal.userId(), sessionId);
+                    return Map.of("cancelled", runRegistry.cancel(sessionId));
+                }));
     }
 
     /**
@@ -103,6 +221,7 @@ public final class ChatController {
         String requestId = correlationId(exchange);
         response.getHeaders().set(REQUEST_ID_HEADER, requestId);
         return prepare(request, exchange).map(normalized -> normalized.withRequestId(requestId)).flatMap(normalized -> {
+            if (normalized.sessionId() != null) response.getHeaders().set(SESSION_ID_HEADER, normalized.sessionId());
             HttpHeaders headers = response.getHeaders();
             headers.setContentType(MediaType.TEXT_EVENT_STREAM);
             headers.setCacheControl(CacheControl.noCache().getHeaderValue());
@@ -113,7 +232,8 @@ public final class ChatController {
             AtomicBoolean terminalLogged = new AtomicBoolean();
             LOGGER.info("chat_stream_start request_id={} session_id={} owner={} route=chat.stream",
                     requestId, safeId(normalized.sessionId()), owner(normalized));
-            Flux<DataBuffer> buffers = Flux.defer(() -> runtime.stream(normalized))
+            Flux<DataBuffer> buffers = Flux.defer(() ->
+                            runRegistry == null ? runtime.stream(normalized) : runRegistry.start(normalized, runtime))
                     .doOnNext(event -> {
                         if ("done".equals(event.event())) {
                             terminal.set("done");

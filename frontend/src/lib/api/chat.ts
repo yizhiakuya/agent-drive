@@ -33,6 +33,26 @@ export const chat = (
   }),
 });
 
+export const cancelChatRun = (sessionId: string) =>
+  api<{ cancelled: boolean }>(`/chat/${encodeURIComponent(sessionId)}/cancel`, { method: "POST" });
+
+export const chatRunActive = (sessionId: string) =>
+  api<{ active: boolean }>(`/chat/${encodeURIComponent(sessionId)}/active`, { cache: "no-store" });
+
+/** 订阅服务端保留的当前会话 relay；没有活跃运行时会自然结束。 */
+export async function chatReconnect(
+  sessionId: string,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await authenticatedFetch(`/chat/${encodeURIComponent(sessionId)}/stream`, { signal });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, apiErrorMessage(body, res.statusText || `HTTP ${res.status}`));
+  }
+  await readSseResponse(res, onEvent);
+}
+
 export async function chatStream(
   message: string,
   history: { role: string; content: string }[],
@@ -43,6 +63,7 @@ export async function chatStream(
   thinkingLevel = "auto",
   frontendCapabilities: FrontendCapability[] = [],
   model = "",
+  onSessionId?: (sessionId: string) => void,
 ): Promise<Record<string, unknown> | null> {
   const res = await authenticatedFetch("/chat/stream", {
     method: "POST",
@@ -62,8 +83,16 @@ export async function chatStream(
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, apiErrorMessage(body, res.statusText || `HTTP ${res.status}`));
   }
-  if (!res.body) throw new Error(`HTTP ${res.status}: empty response body`);
+  const headerSessionId = res.headers.get("X-Session-ID");
+  if (headerSessionId?.trim()) onSessionId?.(headerSessionId.trim());
+  return readSseResponse(res, onEvent);
+}
 
+async function readSseResponse(
+  res: Response,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+): Promise<Record<string, unknown> | null> {
+  if (!res.body) throw new Error(`HTTP ${res.status}: empty response body`);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -74,7 +103,7 @@ export async function chatStream(
     let event = "message";
     const dataLines: string[] = [];
     for (const line of block.split("\n")) {
-      if (line.startsWith(":")) continue; // SSE comment/heartbeat
+      if (line.startsWith(":")) continue;
       if (line === "event" || line.startsWith("event:")) {
         const value = line === "event" ? "" : line.slice(6);
         event = value.trim();
@@ -122,7 +151,6 @@ export async function chatStream(
   const appendDecoded = (decoded: string, final = false) => {
     let text = pendingCR ? "\r" + decoded : decoded;
     pendingCR = false;
-    // chunk 尾部 CR 可能是下一个 chunk 中 CRLF 的前半段，延迟一个 chunk 再归一化。
     if (!final && text.endsWith("\r")) {
       pendingCR = true;
       text = text.slice(0, -1);

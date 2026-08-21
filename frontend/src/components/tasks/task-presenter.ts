@@ -8,6 +8,7 @@ export const TASK_LABELS: Record<string, string> = {
   "index.cleanup": "清理失效索引",
   "maintenance.daily": "系统维护",
   "automation.run": "自动化规则",
+  "chat.run": "后台聊天",
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -47,6 +48,7 @@ export const LANE_LABELS: Record<string, string> = {
   index: "索引队列",
   orchestration: "编排队列",
   maintenance: "维护队列",
+  automation: "自动化队列",
 };
 
 export function taskLabel(task: Pick<TaskRecord, "type"> | string) {

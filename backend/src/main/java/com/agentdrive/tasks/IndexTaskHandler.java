@@ -35,6 +35,7 @@ public class IndexTaskHandler {
     private final VisionDescriptionService vision;
     private final FileStorageService files;
     private final TaskStore taskStore;
+    private final ChatTaskExecutor chat;
 
     /**
      * 创建不带 embedding 和 automation 扩展的任务处理器，主要用于测试或仅启用全文索引的运行模式。
@@ -44,7 +45,7 @@ public class IndexTaskHandler {
      * @param objectMapper 解析数据库中 JSON payload 的 Jackson mapper。
      */
     public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper) {
-        this(workers, indexing, objectMapper, null, (AutomationTaskExecutor) null, (VisionDescriptionService) null);
+        this(workers, indexing, objectMapper, null, (AutomationTaskExecutor) null, (VisionDescriptionService) null, null, null, null);
     }
 
     /**
@@ -57,7 +58,7 @@ public class IndexTaskHandler {
      */
     public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper,
                             EmbeddingService embeddings) {
-        this(workers, indexing, objectMapper, embeddings, (AutomationTaskExecutor) null, (VisionDescriptionService) null);
+        this(workers, indexing, objectMapper, embeddings, (AutomationTaskExecutor) null, (VisionDescriptionService) null, null, null, null);
     }
 
     /**
@@ -72,7 +73,7 @@ public class IndexTaskHandler {
      */
     public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper,
                             EmbeddingService embeddings, AutomationTaskExecutor automation) {
-        this(workers, indexing, objectMapper, embeddings, automation, null);
+        this(workers, indexing, objectMapper, embeddings, automation, null, null, null, null);
     }
 
     /**
@@ -87,7 +88,16 @@ public class IndexTaskHandler {
     public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper,
                             EmbeddingService embeddings, AutomationTaskExecutor automation,
                             VisionDescriptionService vision) {
-        this(workers, indexing, objectMapper, embeddings, automation, vision, null, null);
+        this(workers, indexing, objectMapper, embeddings, automation, vision, null, null, null);
+    }
+
+    /**
+     * 保留旧的维护构造器，未启用后台聊天时使用空执行器。
+     */
+    public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper,
+                            EmbeddingService embeddings, AutomationTaskExecutor automation,
+                            VisionDescriptionService vision, FileStorageService files, TaskStore taskStore) {
+        this(workers, indexing, objectMapper, embeddings, automation, vision, files, taskStore, null);
     }
 
     /**
@@ -101,10 +111,12 @@ public class IndexTaskHandler {
      * @param vision 执行图片结构化识别的服务，可为空。
      * @param files 执行回收站保留期清理的 owner 文件服务。
      * @param taskStore 执行终态任务历史清理的 owner 任务存储。
+     * @param chat 执行 chat.run 的可选后台聊天执行器。
      */
     public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper,
                             EmbeddingService embeddings, AutomationTaskExecutor automation,
-                            VisionDescriptionService vision, FileStorageService files, TaskStore taskStore) {
+                            VisionDescriptionService vision, FileStorageService files, TaskStore taskStore,
+                            ChatTaskExecutor chat) {
         this.workers = workers;
         this.indexing = indexing;
         this.objectMapper = objectMapper;
@@ -113,6 +125,7 @@ public class IndexTaskHandler {
         this.vision = vision;
         this.files = files;
         this.taskStore = taskStore;
+        this.chat = chat;
     }
 
     /**
@@ -129,9 +142,9 @@ public class IndexTaskHandler {
     public IndexTaskHandler(TaskWorkerStore workers, IndexingService indexing, ObjectMapper objectMapper,
                             EmbeddingService embeddings, ObjectProvider<AutomationTaskExecutor> automation,
                             ObjectProvider<VisionDescriptionService> vision, FileStorageService files,
-                            TaskStore taskStore) {
+                            TaskStore taskStore, ObjectProvider<ChatTaskExecutor> chat) {
         this(workers, indexing, objectMapper, embeddings, automation.getIfAvailable(), vision.getIfAvailable(),
-                files, taskStore);
+                files, taskStore, chat.getIfAvailable());
     }
 
     /**
@@ -194,6 +207,10 @@ public class IndexTaskHandler {
                 case "automation.run" -> {
                     if (automation == null) throw new IllegalStateException("automation handler unavailable");
                     yield automation.execute(userId, payload);
+                }
+                case "chat.run" -> {
+                    if (chat == null) throw new IllegalStateException("chat handler unavailable");
+                    yield chat.execute(userId, payload, progress);
                 }
                 default -> throw new IllegalArgumentException("unsupported task type: " + type);
             };
@@ -406,6 +423,13 @@ public class IndexTaskHandler {
         @Override
         public void reportNow(int current, int total, String message) {
             write(current, total, message, true);
+        }
+
+        @Override
+        public void heartbeat() {
+            if (!workers.heartbeat(workerId, taskId, TASK_LEASE_SECONDS)) {
+                throw new TaskExecutionStoppedException("task lease lost or cancellation requested");
+            }
         }
 
         private void write(int current, int total, String message, boolean immediate) {

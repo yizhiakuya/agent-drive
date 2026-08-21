@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { chatStream } from "@/lib/api/chat";
+import { chatReconnect, chatRunActive, chatStream, cancelChatRun } from "@/lib/api/chat";
 import { getFrontendCapabilities, normalizeFrontendAction } from "@/lib/frontend-actions";
 import { useAppStore } from "@/lib/store";
 import type { PlanStep } from "./PlanCard";
@@ -53,6 +53,25 @@ function streamKey(sessionId: string | null): string {
   return sessionId ?? NEW_SESSION_KEY;
 }
 
+function moveRunToSession(
+  run: ActiveChatStream,
+  sessionId: string,
+  streams: Map<string, ActiveChatStream>,
+) {
+  const nextKey = streamKey(sessionId);
+  if (run.key === nextKey) return;
+  if (streams.get(run.key) !== run) return;
+  const existing = streams.get(nextKey);
+  if (existing && existing !== run) {
+    existing.frame.cancel();
+    existing.controller.abort();
+    streams.delete(nextKey);
+  }
+  streams.delete(run.key);
+  run.key = nextKey;
+  streams.set(nextKey, run);
+}
+
 function currentErrorSessionId(error: unknown): string | null {
   if (typeof error !== "object" || error === null) return null;
   const sessionId = (error as { sessionId?: unknown }).sessionId;
@@ -82,8 +101,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   } = options;
 
   const streamsRef = useRef(new Map<string, ActiveChatStream>());
+  const onReconcileRef = useRef(onReconcile);
   const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
   const busy = runningKeys.has(streamKey(sessionId));
+
+  useEffect(() => {
+    onReconcileRef.current = onReconcile;
+  }, [onReconcile]);
 
   const refreshRunningKeys = useCallback(() => {
     setRunningKeys(new Set(streamsRef.current.keys()));
@@ -112,12 +136,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
 
     const controller = new AbortController();
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
+    const run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false };
     const frame = createChatStreamFrame({
-      isCurrent: () => streamsRef.current.get(key)?.controller === controller
-        && streamKey(sessionIdRef.current) === key,
+      isCurrent: () => streamsRef.current.get(run.key)?.controller === controller
+        && streamKey(sessionIdRef.current) === run.key,
       setMessages,
     });
-    const run: ActiveChatStream = { key, controller, frame, detached: false };
+    run.frame = frame;
     streamsRef.current.set(key, run);
     refreshRunningKeys();
     // 将协议事件集中交给 dispatcher，保证文本/思考/工具步骤共享同一个帧和消息状态机。
@@ -133,7 +158,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
 
     try {
       const r = await chatStream(msg, history, sendSid, confirmations, (event, data) => {
-        if (streamsRef.current.get(key) !== run) return;
+        if (streamsRef.current.get(run.key) !== run) return;
         const streamEvent = parseChatStreamEvent(event, data);
         if (!streamEvent) return;
         const visible = isVisible(run);
@@ -147,9 +172,14 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         } else if (streamEvent.type === "tool_start") {
           frame.beginToolStep();
         }
-      }, controller.signal, thinkingLevel, getFrontendCapabilities(), model);
+      }, controller.signal, thinkingLevel, getFrontendCapabilities(), model, (resolvedSid) => {
+        moveRunToSession(run, resolvedSid, streamsRef.current);
+        sessionIdRef.current = resolvedSid;
+        setSessionId(resolvedSid);
+        refreshRunningKeys();
+      });
 
-      if (streamsRef.current.get(key) !== run) return;
+      if (streamsRef.current.get(run.key) !== run) return;
       const visible = isVisible(run);
       // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
       if (!frame.flush() && visible) {
@@ -176,7 +206,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (onFinish) setTimeout(onFinish, 50);
       }
     } catch (error) {
-      if ((error as Error).name === "AbortError" || streamsRef.current.get(key) !== run) return;
+      if ((error as Error).name === "AbortError" || streamsRef.current.get(run.key) !== run) return;
       const visible = isVisible(run);
       const resolvedSid = currentErrorSessionId(error);
       if (resolvedSid) {
@@ -199,12 +229,53 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
       }
     } finally {
-      if (streamsRef.current.get(key) === run) {
-        streamsRef.current.delete(key);
+      if (streamsRef.current.get(run.key) === run) {
+        streamsRef.current.delete(run.key);
         refreshRunningKeys();
       }
     }
   }
+
+  useEffect(() => {
+    if (!sessionId || streamsRef.current.has(sessionId)) return;
+    const streams = streamsRef.current;
+    let disposed = false;
+    let run: ActiveChatStream | null = null;
+    const controller = new AbortController();
+    const key = sessionId;
+    void chatRunActive(key)
+      .then(({ active }) => {
+        if (!active || disposed || streams.has(key)) return;
+        run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false };
+        const frame = createChatStreamFrame({
+          isCurrent: () => streamsRef.current.get(key)?.controller === controller
+            && streamKey(sessionIdRef.current) === key,
+          setMessages,
+        });
+        run.frame = frame;
+        streams.set(key, run);
+        refreshRunningKeys();
+        return chatReconnect(key, () => {}, controller.signal);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!run || streams.get(key) !== run) return;
+        streams.delete(key);
+        run.frame.cancel();
+        refreshRunningKeys();
+        onReconcileRef.current?.(key);
+        bumpSessions();
+      });
+    return () => {
+      disposed = true;
+      controller.abort();
+      if (run && streams.get(key) === run) {
+        streams.delete(key);
+        run.frame.cancel();
+        refreshRunningKeys();
+      }
+    };
+  }, [sessionId, setMessages, sessionIdRef, refreshRunningKeys, bumpSessions]);
 
   useEffect(() => {
     const activeKey = streamKey(sessionId);
@@ -213,13 +284,16 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     }
   }, [sessionId]);
 
-  useEffect(() => () => {
-    const active = Array.from(streamsRef.current.values());
-    streamsRef.current.clear();
-    for (const run of active) {
-      run.frame.cancel();
-      run.controller.abort();
-    }
+  useEffect(() => {
+    const streams = streamsRef.current;
+    return () => {
+      const active = Array.from(streams.values());
+      streams.clear();
+      for (const run of active) {
+        run.frame.cancel();
+        run.controller.abort();
+      }
+    };
   }, []);
 
   const stop = useCallback(() => {
@@ -229,6 +303,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     streamsRef.current.delete(key);
     run.frame.cancel();
     run.controller.abort();
+    if (sessionIdRef.current) void cancelChatRun(sessionIdRef.current).catch(() => {});
     refreshRunningKeys();
     setMessages((m) => {
       // 清掉空助手占位气泡后追加停止提示（工具步骤保留）
