@@ -337,6 +337,9 @@ describe("ChatPanel 主流程", () => {
     fireEvent.click(modelTrigger!);
     await waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole("option", { name: "fast-model" })).toBeInTheDocument());
+    const modelPopup = document.querySelector('[data-slot="combobox-content"]');
+    expect(modelPopup).toHaveAttribute("data-side", "top");
+    expect(modelPopup).toHaveClass("min-w-[min(16rem,calc(100vw-2rem))]");
     fireEvent.click(screen.getByRole("option", { name: "fast-model" }));
 
     await typeAndSend("用快速模型回答");

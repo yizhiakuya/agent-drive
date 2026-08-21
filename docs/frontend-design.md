@@ -31,6 +31,7 @@
 - 页面优先使用 `border-b/border-y` 分区、列表和表格；确需成组时使用 `bg-panel border rounded-md p-4`（Card 组件），避免卡片套卡片；设置/认证页容器使用 `max-w-4xl` 或内容需要的稳定宽度。
 - 表单：label `text-xs text-muted` + 控件 `text-sm`，字段纵向 `gap-2`，区块内 `mb-3`。
 - 标题：卡片 `CardTitle text-sm font-bold`；页面 h2 `text-lg font-bold`。
+- 聊天输入区位于视口底部，聊天模型 Combobox 的候选层固定向上展开；列表沿用组件的可用高度上限并内部滚动，不能压缩成底部窄条或遮挡输入框。
 
 ## 4. 反馈与状态语义
 

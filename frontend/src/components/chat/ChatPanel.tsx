@@ -464,7 +464,7 @@ export default function ChatPanel() {
                         if (!modelsLoaded && !modelsLoading) void loadModels();
                       }}
                     />
-                    <ComboboxContent>
+                    <ComboboxContent side="top" className="min-w-[min(16rem,calc(100vw-2rem))]">
                       <ComboboxList>
                         {(item) => <ComboboxItem value={String(item.value)}>{String(item.label)}</ComboboxItem>}
                       </ComboboxList>
