@@ -74,6 +74,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **免传预检**：Android 先 `GET /files/dedupe?md5=...`；只允许 `verified=true` 且文件 revision 仍匹配的服务端实算条目命中。预检 GET 无副作用；真正上传始终复算 MD5，勿重新信任客户端 hash。发布成功后的去重索引登记是优化项：失败只记 warning、不得把已上传文件伪报为失败（否则客户端重试会经 noclobber 落成重复照片）
 - **MediaStore DATE_ADDED 是秒级**：`lastSyncAt` 只推进到「整秒全部成功」的秒；同秒有失败/未取完挂 `pendingSecond+pendingMaxId`（_ID 连续水位）续传。首次失败后水位冻结，之后成功项靠秒传重试；第 201 行仅作截断哨兵、不上传；完整检查点一次 commit。勿改回严格 `> 检查点` + 单张推进
 - **上传去重**：生产去重索引是 PostgreSQL 的 owner-scoped `upload_dedup(user_id, content_md5, path, file_revision, verified)`；命中必须同时校验 owner、metadata、物理普通文件和 revision，失效行在读取时自愈删除。文件写入、移动、复制、删除和覆盖都要让旧 revision 的 dedupe/全文/向量失效，不能恢复 JSON sidecar 索引或绕过数据库事务。
+- **Spring 事务代理**：带实现方法级 `@Transactional` 的持久化适配器必须保持可代理；当前类代理模式下实现类不能声明为 `final`，新增事务 repository 需用类代理回归测试覆盖应用启动约束。
 - **持久任务库**：Java PostgreSQL V7-V11（owner-scoped tasks/schedules/outbox、Worker 在线心跳、失败隔离 + 0600 credentials）是唯一生产任务状态源；生产 API 使用 `--app.mode=api` 且不内嵌 Worker，由独立 `agent-drive-java-worker.service` 执行；Worker 每 2 秒刷新 `task_workers`，API 只把最近 10 秒有心跳的进程计为在线；legacy SQLite 只作受控迁移/回滚输入
 - **Worker 在线状态**：任务租约的 `tasks.heartbeat_at` 用于防止长任务过期；进程在线状态独立记录在 `task_workers`，Worker 启动后每 2 秒刷新，正常关闭时删除登记，异常退出则由 API 的 10 秒窗口自动过期。
 - **Worker 失败隔离**：每个 tick 的 schedule、outbox、task 三阶段必须独立捕获运行时异常，前一阶段失败不得跳过后续阶段。schedule 写入先严格校验 `cron/interval/daily`、正整数 interval、`HH:mm` daily 和 ZoneId，5 字段 cron 规范为 Spring 6 字段并按计划时区计算真实下一次命中；裁剪 `task_type/lane`、把空白 lane 规范为 `default`，再计算首次 `next_run_at`。派发必须在任务入队前计算下一次时间，并把 schedule 的 `priority/max_attempts` 写入任务。历史非法计划写 `last_error` 并禁用，不能反复占据到期队首。

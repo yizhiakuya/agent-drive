@@ -11,7 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /** 将 MyBatis Skill 行转换为 owner-scoped Skill repository。 */
-public final class MybatisSkillRepository implements SkillRepository {
+public class MybatisSkillRepository implements SkillRepository {
     private final SkillMapper mapper;
 
     /**

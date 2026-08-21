@@ -36,7 +36,7 @@ API 和 Worker 是同一个模块化单体的两种进程模式：API 负责 HTT
 | `index` | Tika/Tesseract 抽取、全文、chunk、embedding、vision | 只在 Worker 执行，不进入上传请求路径 |
 | `infrastructure` | MyBatis、Flyway、PostgreSQL、HTTP client、加密和启动适配器 | 为上层提供实现，不反向承载业务决策 |
 
-跨模块写操作通过 application service、PostgreSQL 事务和 owner-scoped outbox 连接。Spring Modulith 用于验证模块依赖，部署形态仍是单体 API + 单体 Worker。
+跨模块写操作通过 application service、PostgreSQL 事务和 owner-scoped outbox 连接。带方法级 `@Transactional` 的持久化适配器保持可代理，当前 Spring 类代理模式要求实现类非 `final`。Spring Modulith 用于验证模块依赖，部署形态仍是单体 API + 单体 Worker。
 
 ## 3. 状态所有权
 
