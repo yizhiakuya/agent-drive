@@ -38,10 +38,11 @@ class DefaultChatContextProviderTest {
         List<ChatContext> contexts = provider.contexts(owner);
 
         assertThat(contexts).extracting(ChatContext::source)
-                .containsExactly("agent-drive-system-prompt", "AGENT.md", "MEMORY.md", "skill-catalog");
+                .containsExactly("agent-drive-system-prompt", "AGENT.md", "USER.md", "MEMORY.md", "skill-catalog");
         assertThat(contexts.get(0).userMessage()).isFalse();
         assertThat(contexts.get(1).content()).contains("[REDACTED]").doesNotContain("sk-secret-value");
-        assertThat(contexts.get(3).content())
+        assertThat(contexts.get(3).content()).contains("Prefer concise replies.");
+        assertThat(contexts.get(4).content())
                 .contains("agent-drive-api", "&lt;registered&gt;", "&amp; tools", "read_skill")
                 .doesNotContain("Use <registered>");
     }

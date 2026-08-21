@@ -29,6 +29,12 @@ public interface TaskProgressReporter {
     }
 
     /**
+     * 仅续租当前任务，不产生新的进度文案；长时间外部调用可周期调用它。
+     */
+    default void heartbeat() {
+    }
+
+    /**
      * 获取不产生持久化副作用的回调，供同步调用方保持兼容。
      *
      * @return 空进度回调。
