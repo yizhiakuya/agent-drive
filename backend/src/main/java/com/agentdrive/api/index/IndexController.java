@@ -96,8 +96,9 @@ public final class IndexController {
     private List<String> requiredPaths(IndexRequest request) {
         if (request == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "paths are required");
         if (request.paths() != null && !request.paths().isEmpty()) return request.paths();
+        if (request.files() != null && !request.files().isEmpty()) return request.files();
         if (request.path() != null && !request.path().isBlank()) return List.of(request.path());
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "path or paths is required");
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "path, paths, or files is required");
     }
 
     private <T> Mono<T> authenticated(ServerWebExchange exchange,
@@ -114,7 +115,16 @@ public final class IndexController {
 
     public record IndexRequest(@JsonProperty("path") String path,
                                @JsonProperty("paths") List<String> paths,
+                               @JsonProperty("files") List<String> files,
                                @JsonProperty("force") boolean force) {
+        public IndexRequest {
+            paths = paths == null ? List.of() : List.copyOf(paths);
+            files = files == null ? List.of() : List.copyOf(files);
+        }
+
+        public IndexRequest(String path, List<String> paths, boolean force) {
+            this(path, paths, List.of(), force);
+        }
     }
 
     public record PrefixRequest(@JsonProperty("prefix") String prefix) {

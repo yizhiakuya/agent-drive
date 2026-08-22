@@ -4,7 +4,7 @@ import { listFiles, uploadFile, getFileInfo, type FileInfo, type FileItem, fileD
 import FilePreview from "./FilePreview";
 import { indexStatusLabel } from "./FileDetails";
 import { fmtSize } from "@/lib/format";
-import { EV, emitToast, emitTasksChanged } from "@/lib/events";
+import { EV, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import PanelResizeHandle from "@/components/workspace/PanelResizeHandle";
@@ -67,9 +67,8 @@ export default function FilePanel({ collapsed, width = WORKSPACE_PANEL_LIMITS.fi
     const file = e.target.files?.[0];
     if (file) {
       try {
-        const result = await uploadFile(file, path);
-        if (result.indexed?.task_id) emitTasksChanged();
-        emitToast({ kind: "ok", text: `已上传 ${file.name}，内容将在后台处理` });
+        await uploadFile(file, path);
+        emitToast({ kind: "ok", text: `已上传 ${file.name}` });
         load(path);
       } catch (err) {
         emitToast({ kind: "error", text: `上传失败: ${err}` });

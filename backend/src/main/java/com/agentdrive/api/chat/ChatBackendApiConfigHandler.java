@@ -9,7 +9,7 @@ import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.LlmProviderConfigService;
 import com.agentdrive.infrastructure.LlmProviderConfigView;
 import com.agentdrive.vision.VisionDescriptionService;
-import com.agentdrive.tasks.IndexTaskPaths;
+import com.agentdrive.index.IndexPaths;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -139,7 +139,7 @@ final class ChatBackendApiConfigHandler implements BackendApiOperationHandler {
             return Map.of("ok", false, "error", "files_must_contain_1_to_16_paths");
         }
         try {
-            return vision.describeFiles(userId, IndexTaskPaths.normalize(files));
+            return vision.describeFiles(userId, IndexPaths.normalize(files));
         } catch (IllegalArgumentException error) {
             return Map.of("ok", false, "error", "invalid_files", "detail", error.getMessage());
         }

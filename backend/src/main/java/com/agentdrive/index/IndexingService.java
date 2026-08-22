@@ -1,7 +1,6 @@
 package com.agentdrive.index;
 
 import com.agentdrive.files.FileStorageService;
-import com.agentdrive.progress.TaskProgressReporter;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
@@ -122,31 +121,15 @@ public class IndexingService {
      * @return 包含成功数、跳过数和实际使用前缀的汇总结果。
      */
     public Map<String, Object> rebuild(UUID userId, String prefix) {
-        return rebuild(userId, prefix, TaskProgressReporter.noop());
-    }
-
-    /**
-     * 遍历文件并报告全文索引阶段的逐文件进度。
-     * 进度回调由 Worker 决定是否节流；没有 Worker 的同步调用继续使用空回调。
-     *
-     * @param userId 文件归属用户的 UUID。
-     * @param prefix 可选的用户相对路径前缀；为 {@code null} 时处理用户全部文件。
-     * @param progress 当前任务进度回调，可为空。
-     * @return 包含成功数、跳过数、处理总数和实际使用前缀的汇总结果。
-     */
-    public Map<String, Object> rebuild(UUID userId, String prefix, TaskProgressReporter progress) {
-        TaskProgressReporter reporter = progress == null ? TaskProgressReporter.noop() : progress;
         int indexed = 0;
         int skipped = 0;
         List<String> textPaths = new ArrayList<>();
         List<String> visionPaths = new ArrayList<>();
         List<Map<String, Object>> files = index.files(userId, prefix);
         int total = files.size();
-        reporter.report(0, total, total == 0 ? "全文索引：没有需要处理的文件" : "全文索引：准备处理 " + total + " 个文件");
         int processed = 0;
         for (Map<String, Object> file : files) {
             String path = String.valueOf(file.get("path"));
-            reporter.report(processed, total, "全文索引：正在处理 " + path);
             Map<String, Object> result = indexFile(userId, path);
             if (Boolean.TRUE.equals(result.get("indexed"))) {
                 indexed++;
@@ -157,7 +140,6 @@ public class IndexingService {
                 skipped++;
             }
             processed++;
-            reporter.report(processed, total, "全文索引：已处理 " + processed + "/" + total);
         }
         return Map.of("indexed", indexed, "skipped", skipped, "processed_files", processed,
                 "total_files", total, "prefix", prefix == null ? "" : prefix,

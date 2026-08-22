@@ -5,7 +5,6 @@ import com.agentdrive.auth.CredentialAuthenticator;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.EmbeddingConfigStore;
-import com.agentdrive.tasks.TaskStore;
 import com.agentdrive.infrastructure.LlmProviderConfigService;
 import com.agentdrive.infrastructure.LlmProviderConfigView;
 import org.junit.jupiter.api.Test;
@@ -178,7 +177,7 @@ class ProviderConfigControllerContractTest {
                 .thenReturn(Map.of("ok", false, "status", 401, "error", "embedding provider returned HTTP 401"));
         ProviderConfigController controller = new ProviderConfigController(
                 new FakeConfigService(owner, null), cipher, new WebRequestPrincipalResolver(authenticator(owner)),
-                new com.fasterxml.jackson.databind.ObjectMapper(), embeddings, mock(TaskStore.class), probe);
+                new com.fasterxml.jackson.databind.ObjectMapper(), embeddings, new Object(), probe);
         WebTestClient client = WebTestClient.bindToController(controller)
                 .controllerAdvice(new ProviderConfigExceptionHandler()).build();
 
@@ -230,7 +229,7 @@ class ProviderConfigControllerContractTest {
                 new WebRequestPrincipalResolver(authenticator),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 embeddings,
-                mock(TaskStore.class)
+                new Object()
         );
         return WebTestClient.bindToController(controller)
                 .controllerAdvice(new ProviderConfigExceptionHandler())

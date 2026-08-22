@@ -82,11 +82,6 @@ public interface EmbeddingService {
      * @param progress 当前任务进度回调，可为空。
      * @return 向量化结果及处理统计。
      */
-    default Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force,
-                                      TaskProgressReporter progress) {
-        return embed(userId, paths, limit, force);
-    }
-
     /**
      * 为语义搜索问题生成查询向量。
      * Provider 请求必须使用 {@code retrieval.query} 任务类型，并返回与文档 embedding
@@ -140,7 +135,50 @@ public interface EmbeddingService {
          */
         @Override
         public Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force) {
-            return embed(userId, paths, limit, force, TaskProgressReporter.noop());
+            Optional<EmbeddingRuntimeConfig.Config> configured = configs.find(userId);
+            if (configured.isEmpty()) return Map.of("vectorized", false, "reason", "embedding_not_configured");
+            EmbeddingRuntimeConfig.Config config = configured.get();
+            String apiKey = config.apiKey();
+            if (apiKey.isBlank()) return Map.of("vectorized", false, "reason", "embedding_not_configured");
+            String fingerprint = fingerprint(config);
+            List<String> selectedPaths = paths == null ? List.of() : List.copyOf(paths);
+            String selectionFingerprint = fingerprint;
+            int batchSize = Math.max(1, Math.min(limit, MAX_BATCH_SIZE));
+            int embedded = 0;
+            int batches = 0;
+            UUID afterChunkId = null;
+            try {
+                while (true) {
+                    List<Map<String, Object>> chunks = force
+                            ? index.chunks(userId, selectionFingerprint, selectedPaths, true, afterChunkId, batchSize)
+                            : selectedPaths.isEmpty()
+                                ? index.chunks(userId, selectionFingerprint, batchSize)
+                                : index.chunks(userId, selectionFingerprint, selectedPaths, batchSize);
+                    if (chunks.isEmpty()) return Map.of("vectorized", true, "embedded", embedded, "batches", batches,
+                            "selected_files", selectedPaths.size(), "fingerprint", fingerprint);
+                    Map<String, Object> batch = embedBatch(userId, config, apiKey, chunks, fingerprint);
+                    if (!Boolean.TRUE.equals(batch.get("vectorized"))) {
+                        Map<String, Object> result = new LinkedHashMap<>(batch);
+                        result.put("embedded", embedded + number(batch.get("embedded")));
+                        result.put("batches", batches);
+                        result.put("selected_files", selectedPaths.size());
+                        return result;
+                    }
+                    int batchEmbedded = number(batch.get("embedded"));
+                    if (batchEmbedded != chunks.size()) return failure("embedding_persist_mismatch", embedded + batchEmbedded,
+                            batches + 1, selectedPaths.size(), fingerprint);
+                    embedded += batchEmbedded;
+                    batches++;
+                    if (force) afterChunkId = UUID.fromString(String.valueOf(chunks.get(chunks.size() - 1).get("id")));
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return failure("embedding_interrupted", embedded, batches, selectedPaths.size(), fingerprint);
+            } catch (Exception error) {
+                Map<String, Object> result = failure("embedding_failed", embedded, batches, selectedPaths.size(), fingerprint);
+                result.put("error", safeMessage(error));
+                return result;
+            }
         }
 
         /**
@@ -154,10 +192,9 @@ public interface EmbeddingService {
          * @param progress 当前任务进度回调，可为空。
          * @return provider 调用和索引写回的累计结果。
          */
-        @Override
-        public Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force,
-                                         TaskProgressReporter progress) {
-            TaskProgressReporter reporter = progress == null ? TaskProgressReporter.noop() : progress;
+        public Map<String, Object> embedWithProgressRemoved(UUID userId, List<String> paths, int limit, boolean force,
+                                         Object progress) {
+            TaskProgressReporter reporter = TaskProgressReporter.noop();
             Optional<EmbeddingRuntimeConfig.Config> configured = configs.find(userId);
             if (configured.isEmpty()) {
                 reporter.report(0, 0, "向量化未执行：未配置向量服务");

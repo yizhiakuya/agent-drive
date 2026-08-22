@@ -6,13 +6,9 @@ import com.agentdrive.auth.AuthService;
 import com.agentdrive.auth.ConversationSessionService;
 import com.agentdrive.auth.SessionTitleGenerator;
 import com.agentdrive.agent.ProviderRuntimeResolver;
-import com.agentdrive.tasks.TaskStore;
 import com.agentdrive.index.IndexStore;
 import com.agentdrive.index.EmbeddingRuntimeConfig;
 import com.agentdrive.index.SemanticSearchService;
-import com.agentdrive.tasks.ScheduleStore;
-import com.agentdrive.tasks.TaskWorkerStore;
-import com.agentdrive.outbox.OutboxStore;
 import com.agentdrive.devices.DeviceStore;
 import com.agentdrive.auth.PasswordHasher;
 import com.agentdrive.files.FileStorageService;
@@ -22,10 +18,6 @@ import com.agentdrive.infrastructure.persistence.MybatisChatRuntimeStateStore;
 import com.agentdrive.infrastructure.persistence.MybatisConversationSessionStore;
 import com.agentdrive.infrastructure.persistence.MybatisDeviceStore;
 import com.agentdrive.infrastructure.persistence.MybatisLlmProviderConfigStore;
-import com.agentdrive.infrastructure.persistence.MybatisTaskStore;
-import com.agentdrive.infrastructure.persistence.MybatisTaskWorkerStore;
-import com.agentdrive.infrastructure.persistence.MybatisOutboxStore;
-import com.agentdrive.infrastructure.persistence.MybatisScheduleStore;
 import com.agentdrive.infrastructure.persistence.MybatisSkillRepository;
 import com.agentdrive.infrastructure.persistence.MybatisIndexStore;
 import com.agentdrive.infrastructure.persistence.MybatisEmbeddingConfigStore;
@@ -40,10 +32,6 @@ import com.agentdrive.infrastructure.persistence.mapper.DeviceMapper;
 import com.agentdrive.infrastructure.persistence.mapper.CredentialMapper;
 import com.agentdrive.infrastructure.persistence.mapper.LlmProviderConfigMapper;
 import com.agentdrive.infrastructure.persistence.mapper.FileMapper;
-import com.agentdrive.infrastructure.persistence.mapper.TaskMapper;
-import com.agentdrive.infrastructure.persistence.mapper.TaskWorkerMapper;
-import com.agentdrive.infrastructure.persistence.mapper.OutboxMapper;
-import com.agentdrive.infrastructure.persistence.mapper.ScheduleMapper;
 import com.agentdrive.infrastructure.persistence.mapper.SkillMapper;
 import com.agentdrive.infrastructure.persistence.mapper.IndexMapper;
 import com.agentdrive.infrastructure.persistence.mapper.EmbeddingConfigMapper;
@@ -141,52 +129,6 @@ public class ApplicationConfiguration {
     @Bean
     MybatisDeviceStore mybatisDeviceStore(DeviceMapper mapper, ObjectMapper objectMapper) {
         return new MybatisDeviceStore(mapper, objectMapper);
-    }
-
-    /**
-     * 装配 owner-scoped 任务存储。
-     * @param mapper 读写任务、状态事件和父子任务汇总的 Mapper。
-     * @param objectMapper 编解码任务 payload、result 和事件数据的映射器。
-     * @return 带任务数量限制、去重事件和事务边界的任务存储。
-     */
-    @Bean
-    MybatisTaskStore mybatisTaskStore(TaskMapper mapper, ObjectMapper objectMapper,
-                                      IndexStore index, EmbeddingRuntimeConfig embeddingConfigs) {
-        return new MybatisTaskStore(mapper, objectMapper, index, embeddingConfigs);
-    }
-
-    /**
-     * 装配 Worker 领取和完成任务所用的存储。
-     * @param mapper 执行租约领取、心跳、成功/失败落库和过期租约恢复的 Mapper。
-     * @param objectMapper 序列化任务结果 JSON 的映射器。
-     * @return 向 Worker 暴露租约状态转换的存储实现。
-     */
-    @Bean
-    MybatisTaskWorkerStore mybatisTaskWorkerStore(TaskWorkerMapper mapper, ObjectMapper objectMapper) {
-        return new MybatisTaskWorkerStore(mapper, objectMapper);
-    }
-
-    /**
-     * 装配 outbox 事件存储。
-     * @param mapper 插入、查询待发布事件和标记发布状态的 Mapper。
-     * @param objectMapper 编解码事件 payload 的映射器。
-     * @return 带 owner 隔离和事务插入语义的 outbox 存储。
-     */
-    @Bean
-    MybatisOutboxStore mybatisOutboxStore(OutboxMapper mapper, ObjectMapper objectMapper) {
-        return new MybatisOutboxStore(mapper, objectMapper);
-    }
-
-    /**
-     * 装配计划任务存储。
-     * @param mapper 读写计划、到期时间和最近派发任务 ID 的 Mapper。
-     * @param objectMapper 编解码计划 payload 的映射器。
-     * @param tasks 计划到期时用于入队实际任务的任务存储。
-     * @return 负责计算 interval/daily 下一次运行时间并派发任务的计划存储。
-     */
-    @Bean
-    MybatisScheduleStore mybatisScheduleStore(ScheduleMapper mapper, ObjectMapper objectMapper, TaskStore tasks) {
-        return new MybatisScheduleStore(mapper, objectMapper, tasks);
     }
 
     /**
@@ -293,16 +235,15 @@ public class ApplicationConfiguration {
      * 在文件相关 profile 中装配 owner 文件存储。
      * @param mapper 维护文件 metadata、revision、回收站和去重索引的 Mapper。
      * @param properties 提供文件根目录和上传字节上限。
-     * @param outbox 在文件变更提交后记录索引/同步事件的 outbox 存储。
      * @return 执行路径安全检查、原子发布和文件变更通知的文件服务。
      */
     @Bean
     @Profile({"java-files", "java-auth", "java-chat"})
-    FileStorageService fileStorageService(FileMapper mapper, AppProperties properties, OutboxStore outbox,
+    FileStorageService fileStorageService(FileMapper mapper, AppProperties properties,
                                           EmbeddingRuntimeConfig embeddingConfigs,
-                                          SemanticSearchService semanticSearch, TaskStore tasks) {
+                                          SemanticSearchService semanticSearch) {
         return new MybatisFileStorageService(mapper, Path.of(properties.dataDir()), properties.maxUploadBytes(),
-                outbox, embeddingConfigs, semanticSearch, tasks);
+                embeddingConfigs, semanticSearch);
     }
 
     /**

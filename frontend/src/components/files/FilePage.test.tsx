@@ -42,8 +42,8 @@ vi.mock("@/lib/api/files", () => ({
   fileRawUrl: (p: string) => "/raw?path=" + p,
 }));
 
-const enqueueEmbedIndex = vi.fn();
-const enqueueVisionIndex = vi.fn();
+const indexFiles = vi.fn();
+const indexVision = vi.fn();
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -64,9 +64,9 @@ function fileInfo(path: string, snippet: string) {
   };
 }
 
-vi.mock("@/lib/api/tasks", () => ({
-  enqueueEmbedIndex: (...a: unknown[]) => enqueueEmbedIndex(...a),
-  enqueueVisionIndex: (...a: unknown[]) => enqueueVisionIndex(...a),
+vi.mock("@/lib/api/index", () => ({
+  indexFiles: (...a: unknown[]) => indexFiles(...a),
+  indexVision: (...a: unknown[]) => indexVision(...a),
 }));
 
 // 预览面板依赖较重，测试关注文件操作主流程，直接桩掉。
@@ -102,8 +102,8 @@ describe("FilePage 核心操作", () => {
     getFileContent.mockResolvedValue({
       path: "合同.txt", name: "合同.txt", content: "完整合同内容", encoding: "UTF-8", size: 20, truncated: false,
     });
-    enqueueEmbedIndex.mockResolvedValue({ queued: true, task: {} });
-    enqueueVisionIndex.mockResolvedValue({ queued: true, task: {} });
+    indexFiles.mockResolvedValue({ operation: "index.file", status: "succeeded", items: [] });
+    indexVision.mockResolvedValue({ operation: "index.vision", status: "succeeded", items: [] });
     emptyTrash.mockResolvedValue({ removed: 1 });
   });
 
@@ -545,7 +545,7 @@ describe("FilePage 核心操作", () => {
     expect(filters.modifiedBefore).toBeGreaterThan(filters.modifiedAfter ?? 0);
   });
 
-  it("为图片创建视觉索引任务", async () => {
+  it("直接执行图片视觉索引", async () => {
     getFileInfo.mockResolvedValue({
       path: "合同.txt", name: "合同.txt", size: 75, modified: 1750000000,
       preview_kind: "image", snippet: null, indexed: null,
@@ -555,6 +555,6 @@ describe("FilePage 核心操作", () => {
     fireEvent.click(screen.getByText("合同.txt"));
     await waitFor(() => expect(screen.getByRole("button", { name: /视觉索引/ })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /视觉索引/ }));
-    await waitFor(() => expect(enqueueVisionIndex).toHaveBeenCalledWith(["合同.txt"]));
+    await waitFor(() => expect(indexVision).toHaveBeenCalledWith(["合同.txt"]));
   });
 });

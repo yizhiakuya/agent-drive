@@ -9,7 +9,6 @@ import { getConfig, getStatus } from "@/lib/api/config";
 import { getDevices, type DeviceInfo } from "@/lib/api/devices";
 import { listFiles } from "@/lib/api/files";
 import { getReadiness, type ReadinessView } from "@/lib/api/readiness";
-import { listTasks, type TaskOverview } from "@/lib/api/tasks";
 import { fmtSize, fmtTime } from "@/lib/format";
 
 type CheckState = "ok" | "warn" | "error" | "unknown";
@@ -29,7 +28,6 @@ function stateFor(value: boolean | undefined): CheckState {
 }
 
 interface SystemStatusCenterProps {
-  onOpenTasks?: () => void;
   onOpenSettings?: () => void;
   onOpenSync?: () => void;
   onOpenBackup?: () => void;
@@ -39,9 +37,8 @@ interface SystemStatusCenterProps {
 /**
  * 汇总真实服务状态；任何子请求失败都保留其余检查结果，不把局部故障伪装成全空状态。
  */
-export default function SystemStatusCenter({ onOpenTasks, onOpenSettings, onOpenSync, onOpenBackup, onOpenDevices }: SystemStatusCenterProps) {
+export default function SystemStatusCenter({ onOpenSettings, onOpenSync, onOpenBackup, onOpenDevices }: SystemStatusCenterProps) {
   const [ready, setReady] = useState<ReadinessView | null>(null);
-  const [overview, setOverview] = useState<TaskOverview | null>(null);
   const [config, setConfig] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
   const [embeddingConfigured, setEmbeddingConfigured] = useState<boolean | undefined>(undefined);
   const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
@@ -57,18 +54,15 @@ export default function SystemStatusCenter({ onOpenTasks, onOpenSettings, onOpen
     setError("");
     const results = await Promise.allSettled([
       getReadiness(),
-      listTasks("", { limit: 1 }),
       getConfig(),
       getStatus(),
       getDevices(),
       listFiles(""),
     ]);
-    const [readiness, tasks, cfg, status, devices, files] = results;
+    const [readiness, cfg, status, devices, files] = results;
     let failures = 0;
     if (request !== loadRequestRef.current) return;
     if (readiness.status === "fulfilled") setReady(readiness.value);
-    else failures++;
-    if (tasks.status === "fulfilled") setOverview(tasks.value.overview);
     else failures++;
     if (cfg.status === "fulfilled") setConfig(cfg.value);
     else failures++;
@@ -87,17 +81,13 @@ export default function SystemStatusCenter({ onOpenTasks, onOpenSettings, onOpen
 
   useEffect(() => { void load(); }, [load]);
 
-  const readinessWorker = ready?.worker ?? ready?.workers;
-  const workerState = readinessWorker ? stateFor(readinessWorker.ok) : overview ? stateFor(overview.workers.online) : "unknown";
   const dbState = ready ? stateFor(ready.database.ok) : "unknown";
   const providerState = config ? stateFor(config.configured) : "unknown";
   const embeddingState: CheckState = embeddingConfigured === undefined
     ? "unknown"
     : !embeddingConfigured
       ? "warn"
-      : overview?.index.missing_vectors
-        ? "warn"
-        : "ok";
+      : "ok";
   const readinessStorage = ready?.storage;
   const storageFree = readinessStorage?.free_bytes ?? disk?.free;
   const storageTotal = readinessStorage?.total_bytes ?? disk?.total;
@@ -116,22 +106,14 @@ export default function SystemStatusCenter({ onOpenTasks, onOpenSettings, onOpen
   const backupDetail = ready?.backup?.ok && ready.backup.last_backup_at != null
     ? `最近成功 ${fmtTime(Number(ready.backup.last_backup_at))} · 保留 ${ready.backup.retained ?? 0} 份`
     : ready?.backup?.error || "等待检查";
-  const attention = overview ? (overview.counts.failed || 0) + (overview.index.missing_vectors || 0) : 0;
   const databaseDetail = ready?.database.detail || ready?.database.error
     || (dbState === "error" ? "数据库不可用" : dbState === "unknown" ? "等待检查" : "PostgreSQL 可用");
-  const workerDetail = readinessWorker?.detail || readinessWorker?.error
-    || (workerState === "error" ? "Worker 不可用" : overview ? `${overview.workers.count} 个在线进程` : "等待检查");
-  const indexDetail = overview
-    ? overview.index.text_vector_files !== undefined || overview.index.vision_vector_files !== undefined
-      ? `${overview.index.vector_files}/${overview.index.eligible_files} 个文件有效 · 文本 ${overview.index.text_vector_files ?? 0} · 视觉 ${overview.index.vision_vector_files ?? 0}`
-      : `${overview.index.vector_files}/${overview.index.eligible_files} 个文件有效`
-    : "等待检查";
+  const indexDetail = embeddingConfigured === undefined ? "等待检查" : embeddingConfigured ? "Jina embedding 已配置" : "尚未配置 Jina embedding";
 
   const rows = [
     { key: "db", icon: Database, label: "数据库", state: dbState, detail: databaseDetail, onClick: undefined },
-    { key: "worker", icon: ServerCog, label: "任务 Worker", state: workerState, detail: workerDetail, onClick: onOpenTasks },
     { key: "provider", icon: ServerCog, label: "对话 Provider", state: providerState, detail: config?.llm?.model || "未配置", onClick: onOpenSettings },
-    { key: "embedding", icon: Database, label: "语义索引", state: embeddingState, detail: indexDetail, onClick: onOpenTasks },
+    { key: "embedding", icon: Database, label: "语义索引", state: embeddingState, detail: indexDetail, onClick: onOpenSettings },
     { key: "sync", icon: Smartphone, label: "相册同步", state: syncState, detail: devices === null ? "等待检查" : syncFailure?.sync?.last_error || `${enabledSyncDevices.length}/${syncDevices.length || devices.length} 台设备已启用`, onClick: onOpenSync },
     { key: "backup", icon: HardDrive, label: "备份", state: backupState, detail: backupDetail, onClick: onOpenBackup },
     { key: "storage", icon: HardDrive, label: "存储空间", state: storageState, detail: readinessStorage?.error || (storageFree !== undefined && storageTotal !== undefined ? `${fmtSize(storageFree)} 可用 / ${fmtSize(storageTotal)}` : "等待检查"), onClick: onOpenSettings },
@@ -143,7 +125,7 @@ export default function SystemStatusCenter({ onOpenTasks, onOpenSettings, onOpen
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3 sm:px-5">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold"><ServerCog className="size-4 text-muted" /> 系统状态</h3>
-          <p className="mt-0.5 text-xs text-muted">Worker、索引、Provider、设备和存储的当前服务端状态。</p>
+          <p className="mt-0.5 text-xs text-muted">索引、Provider、设备和存储的当前服务端状态。</p>
         </div>
         <Button type="button" variant="ghost" size="icon-sm" onClick={() => void load()} disabled={loading} aria-label="刷新系统状态" title="刷新">
           <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
@@ -164,7 +146,6 @@ export default function SystemStatusCenter({ onOpenTasks, onOpenSettings, onOpen
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2.5 text-xs text-muted sm:px-5">
         <span>检查时间：{fmtTime(checkedAt / 1000)}</span>
-        {attention > 0 && <Button type="button" variant="link" size="sm" className="h-7 px-1 text-danger" onClick={onOpenTasks}>有 {attention} 项需要处理</Button>}
         {!config?.configured && <Button type="button" variant="link" size="sm" className="h-7 px-1" onClick={onOpenSettings}>去配置 Provider</Button>}
       </div>
     </section>

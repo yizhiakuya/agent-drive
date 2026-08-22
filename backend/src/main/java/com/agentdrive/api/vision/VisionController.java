@@ -1,7 +1,7 @@
 package com.agentdrive.api.vision;
 
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
-import com.agentdrive.tasks.IndexTaskPaths;
+import com.agentdrive.index.IndexPaths;
 import com.agentdrive.vision.VisionDescriptionService;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.context.annotation.Profile;
@@ -22,8 +22,7 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 /**
  * 提供图片批量结构化识别接口。
  *
- * <p>该接口只返回描述，不写入索引；需要把描述纳入语义检索时调用异步
- * {@code POST /api/v1/tasks/vision-index}。</p>
+ * <p>该接口只返回描述，不写入索引；需要把描述纳入语义检索时调用索引业务接口。</p>
  */
 @RestController
 @Profile({"java-files", "java-auth", "java-chat"})
@@ -67,7 +66,7 @@ public final class VisionController {
             throw new ResponseStatusException(BAD_REQUEST, "files must contain 1 to 16 paths");
         }
         try {
-            return IndexTaskPaths.normalize(raw);
+            return IndexPaths.normalize(raw);
         } catch (IllegalArgumentException error) {
             throw new ResponseStatusException(BAD_REQUEST, error.getMessage());
         }

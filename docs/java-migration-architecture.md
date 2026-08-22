@@ -1,6 +1,6 @@
 # Java 后端架构与迁移记录
 
-> 状态：Java API/Worker 已接管生产；索引重建、回滚演练、稳定性观察和旧 Python 清理均已完成（2026-08-19）。本文保留迁移决策和切换证据，不是待办路线图。
+> 状态：Java API 已接管生产；任务/Worker 运行链路已移除，索引业务直接执行，旧 Python 清理已完成（2026-08-22）。本文保留迁移决策和切换证据，不是待办路线图。
 
 ## 1. 当前基线
 
@@ -14,7 +14,7 @@ Agent Drive 的唯一后端是 Java 21 Maven 工程：
 | 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V14 |
 | 文件 | Java NIO owner-scoped 本地文件系统 |
 | 抽取 | Apache Tika（图片不走 OCR，图片由视觉模型描述） |
-| 构建 | Maven；API 与 Worker 共用 artifact |
+| 构建 | Maven；单 API artifact |
 
 生产结构化状态只进入 PostgreSQL。实际文件和用户可见 Agent 文档仍在 owner-scoped 文件根；旧 SQLite/JSON 和 Python 资料只作归档恢复输入。
 
@@ -28,19 +28,16 @@ Java API 127.0.0.1:8000 ─── PostgreSQL/pgvector
       │
       └── frontend/out
 
-Java Worker ─────────────── PostgreSQL task leases/outbox
-      └── 文件根、Tika 文档抽取、embedding/vision provider
+Java API ─────────────────── 文件根、Tika 文档抽取、embedding/vision provider
 ```
 
-API 和 Worker 是同一个代码库的两种启动模式：
+当前只启动 API：
 
 ```bash
 mvn spring-boot:run -Dspring-boot.run.profiles=db,java-chat -Dspring-boot.run.arguments="--app.mode=api"
-# 另一个终端启动任务 Worker：
-mvn spring-boot:run -Dspring-boot.run.profiles=db,java-chat -Dspring-boot.run.arguments="--app.mode=worker"
 ```
 
-生产 API 使用 `agent-drive-java.service` 和 `--app.mode=api`；独立 Worker 使用 `agent-drive-java-worker.service` 和 `--app.mode=worker`。默认 profile 不注册 ChatRuntime，`java-chat` 才启用 Java auth、provider、chat、files、devices、sessions、tasks、automation 和持久 runtime。
+生产只使用 `agent-drive-java.service` 和 `--app.mode=api`。默认 profile 不注册 ChatRuntime，`java-chat` 才启用 Java auth、provider、chat、files、devices、sessions 和持久 runtime。
 
 Megumin 的 PostgreSQL 使用独立 `agent-drive-java-postgres`（`pgvector/pgvector:pg16`），宿主只绑定 `127.0.0.1:15433`。数据库凭据和 AES-GCM keys 位于 0600 的 `/etc/agent-drive-java/java.env`，不进入仓库。
 
@@ -54,16 +51,15 @@ com.agentdrive
 ├── config          LLM、embedding、vision 配置和 probe
 ├── files/storage   文件用例、revision、trash、路径安全、原子发布
 ├── devices         设备 metadata、撤销和同步状态
-├── tasks           状态机、租约、事件、schedule、outbox、Worker
 ├── index           Tika 文档、全文、chunk、text/vision embedding
 └── infrastructure  PostgreSQL、MyBatis、Flyway、HTTP、日志和启动适配器
 ```
 
-API 不直接写 SQL、操作物理路径或调用模型 SDK；Agent 不直接访问文件系统。跨模块写操作通过 application service、事务和 owner-scoped outbox 连接。
+API 不直接写 SQL、操作物理路径或调用模型 SDK；Agent 不直接访问文件系统。跨模块写操作通过 application service 和事务连接。
 
 ## 4. 数据与安全边界
 
-PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注入、设备、Skill、文件 metadata/revision/trash/dedupe、任务和事件、schedule、Worker heartbeat、outbox、文档/chunk、embedding metadata、Agent preference 以及加密 provider 配置。
+PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注入、设备、Skill、文件 metadata/revision/trash/dedupe、文档/chunk、embedding metadata、Agent preference 以及加密 provider 配置；历史任务/计划/outbox 表仅供旧数据兼容。
 
 文件 mutation 保持以下不变量：公共路径为 owner 内相对 POSIX 路径；组件级拒绝 traversal 和 symlink；staging 使用 0600；发布使用 fsync、原子 move/link 和 `.storage.lock`；上传由服务端复算 MD5；`noclobber` 不使用先检查再写入的 TOCTOU 流程。上传、移动、复制、回收站删除/恢复在可见发布前隐藏旧目标，并把 storage lock 持有到 Spring 事务完成；回滚恢复旧磁盘状态，提交后清理 backup，提交后的 artifact 清理失败不反转成功结果。
 
@@ -74,19 +70,19 @@ PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注
 - Chat SSE 的每个 `data` 都是 JSON object；事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。
 - `thinking_level` 只允许 `auto/low/medium/high`，不发送 temperature；OpenAI 兼容流式模型必须开启 `returnThinking(true)`，reasoning 不进入下一轮 history。
 - `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。discover 以 offset/limit 稳定分页，返回 total_matches、has_more 和 next_offset，单页最多 20 项；非 red 调用按 session/tool/arguments 持久 replay，ask/auto 模式下 red 操作使用签名确认和一次性 nonce，full 模式按用户授权直接执行。
-- `/api/v1/tasks/embed-index`、`vision-index`、`clear-vectors` 只校验参数并入队任务；抽取、embedding、vision、失效索引清理和向量清空都由 Worker 异步完成。`cleanup-index` 只清理失效记录，不等价于清空向量。
+- `/api/v1/index` 直接执行索引、embedding、vision、失效索引清理和向量清空；错误在当前响应中返回，Agent 不暴露任务创建接口。
 - 文件语义搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，结果按文件去重并返回最佳片段。
-- 文件内容变更先失效旧全文/向量，再经 outbox 入队 `index.file`；坏 outbox 事件进入持久死信，瞬时入队错误保留重试。图片描述写入前校验 source revision；视觉全失败不触发全盘 embedding，显式向量/视觉 provider 失败进入任务 fail/retry。强制向量重算逐批覆盖，不预先删除旧向量。单文件抽取失败标记 skipped，不阻断 rebuild。
+- 文件内容变更先失效旧全文/向量；图片描述写入前校验 source revision；视觉 provider 失败直接返回逐文件错误。强制向量重算逐批覆盖，不预先删除旧向量。单文件抽取失败返回明确错误，不伪报成功。
 
-任务使用 PostgreSQL 状态机、`FOR UPDATE SKIP LOCKED`、lease/heartbeat、owner-scoped `(user_id, dedupe_key)` partial unique index 和尾部 SSE event cursor。running 任务收到取消后，进度/续租/succeed SQL 均拒绝并由 handler 停止后落为 cancelled。schedule 在写入和派发前校验，5/6 字段 cron 按计划时区计算真实下一次命中，派发把 priority/max_attempts 原样传给任务；任务类型和 lane 在写入时裁剪，空白 lane 统一为 `default`，遗留非法计划自动禁用。Worker 的 schedule/outbox/task 阶段互相隔离；每 2 秒更新 `task_workers`，API 以最近 10 秒心跳判断在线；生产 API 不执行内嵌 Worker。
+历史任务、计划和 outbox 表只作为旧数据兼容记录，不再由当前 API 写入或执行。
 
 ## 6. 已完成的迁移与切换
 
 迁移顺序曾按“契约 → Java 骨架 → auth/chat → files → tasks/index → 切换”推进，当前所有阶段均已完成，后续不应再把这些阶段写成待办：
 
-- Java API/Worker 已替换生产服务，健康检查、鉴权、静态资源和 Worker canary 通过。
+- Java API 已替换生产服务，健康检查、鉴权和静态资源通过；旧 Worker unit 已停用。
 - legacy 数据导入完成，文件 MD5 核验通过，owner-scoped PostgreSQL backfill 完成。
-- `index.rebuild` 已完成，普通文档 Tika、图片视觉描述、Jina/pgvector 和任务状态链路已在 Worker 中运行；图片不使用 OCR。
+- `index.rebuild` 已完成，普通文档 Tika、图片视觉描述和 Jina/pgvector 直接由 API 业务执行；图片不使用 OCR。
 - 实际回滚演练通过；现行 `agent-drive-java-backup.timer` 将 Java PostgreSQL dump、owner 文件根和 manifest 归档到 `/opt/agent-drive-java/backups/`，旧资料仍保留在同一归档目录。
 - 旧 Python source/unit 已删除；`legacy-python-data/` 只保留本地一次性 fixture，服务器恢复资料只用于人工恢复。
 

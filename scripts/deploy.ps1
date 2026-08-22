@@ -20,7 +20,6 @@ $DeployId = [Guid]::NewGuid().ToString("N")
 $RemoteArchive = "/tmp/agent-drive-out-$DeployId.tar"
 $RemoteJar = "/tmp/agent-drive-backend-$DeployId.jar"
 $RemoteApiUnit = "/tmp/agent-drive-java-$DeployId.service"
-$RemoteWorkerUnit = "/tmp/agent-drive-java-worker-$DeployId.service"
 $RemoteBackupScript = "/tmp/agent-drive-java-backup-$DeployId.sh"
 $RemoteBackupUnit = "/tmp/agent-drive-java-backup-$DeployId.service"
 $RemoteBackupTimer = "/tmp/agent-drive-java-backup-$DeployId.timer"
@@ -211,18 +210,16 @@ function Deploy-Backend {
     param([Parameter(Mandatory)][string]$Artifact)
 
     $apiUnit = Join-Path $RepoRoot "deploy/agent-drive-java.service"
-    $workerUnit = Join-Path $RepoRoot "deploy/agent-drive-java-worker.service"
     $backupScript = Join-Path $RepoRoot "scripts/backup-java.sh"
     $backupUnit = Join-Path $RepoRoot "deploy/agent-drive-java-backup.service"
     $backupTimer = Join-Path $RepoRoot "deploy/agent-drive-java-backup.timer"
-    if (-not (Test-Path $apiUnit) -or -not (Test-Path $workerUnit) -or
+    if (-not (Test-Path $apiUnit) -or
         -not (Test-Path $backupScript) -or -not (Test-Path $backupUnit) -or -not (Test-Path $backupTimer)) {
         throw "Java systemd unit files are missing under $RepoRoot/deploy"
     }
 
     Invoke-Checked "scp" @($Artifact, "${RemoteHost}:$RemoteJar")
     Invoke-Checked "scp" @($apiUnit, "${RemoteHost}:$RemoteApiUnit")
-    Invoke-Checked "scp" @($workerUnit, "${RemoteHost}:$RemoteWorkerUnit")
     Invoke-Checked "scp" @($backupScript, "${RemoteHost}:$RemoteBackupScript")
     Invoke-Checked "scp" @($backupUnit, "${RemoteHost}:$RemoteBackupUnit")
     Invoke-Checked "scp" @($backupTimer, "${RemoteHost}:$RemoteBackupTimer")
@@ -231,7 +228,6 @@ function Deploy-Backend {
 set -euo pipefail
 artifact='__REMOTE_JAR__'
 api_unit='__REMOTE_API_UNIT__'
-worker_unit='__REMOTE_WORKER_UNIT__'
 backup_script='__REMOTE_BACKUP_SCRIPT__'
 backup_unit='__REMOTE_BACKUP_UNIT__'
 backup_timer='__REMOTE_BACKUP_TIMER__'
@@ -245,7 +241,6 @@ rollback_needed=0
 
 test -f "$artifact"
 test -f "$api_unit"
-test -f "$worker_unit"
 test -f "$backup_script"
 test -f "$backup_unit"
 test -f "$backup_timer"
@@ -254,12 +249,11 @@ mkdir -p "$release_dir"
 rollback() {
   local rc=$?
   if [ "$rc" -ne 0 ] && [ "$rollback_needed" -eq 1 ]; then
-    printf 'deployment failed; attempting API/Worker rollback\n' >&2
+    printf 'deployment failed; attempting API rollback\n' >&2
     if [ -n "$previous_target" ] && [ -f "$previous_target" ]; then
       ln -s "$previous_target" "${current_link}.rollback.$$"
       mv -Tf "${current_link}.rollback.$$" "$current_link"
       systemctl restart agent-drive-java.service || true
-      systemctl restart agent-drive-java-worker.service || true
       printf 'rollback target restored: %s\n' "$previous_target" >&2
     else
       printf 'no previous jar available; services may require manual recovery\n' >&2
@@ -282,19 +276,21 @@ fi
 install -m 0644 "$artifact" "$release"
 test -s "$release"
 install -m 0644 "$api_unit" /etc/systemd/system/agent-drive-java.service
-install -m 0644 "$worker_unit" /etc/systemd/system/agent-drive-java-worker.service
 install -m 0750 "$backup_script" '__REMOTE_REPO__/scripts/backup-java.sh'
 install -m 0644 "$backup_unit" /etc/systemd/system/agent-drive-java-backup.service
 install -m 0644 "$backup_timer" /etc/systemd/system/agent-drive-java-backup.timer
-systemd-analyze verify /etc/systemd/system/agent-drive-java.service /etc/systemd/system/agent-drive-java-worker.service /etc/systemd/system/agent-drive-java-backup.service /etc/systemd/system/agent-drive-java-backup.timer
+systemd-analyze verify /etc/systemd/system/agent-drive-java.service /etc/systemd/system/agent-drive-java-backup.service /etc/systemd/system/agent-drive-java-backup.timer
 systemctl daemon-reload
 systemctl disable --now agent-drive-backup.timer 2>/dev/null || true
 rm -f /etc/systemd/system/agent-drive-backup.service /etc/systemd/system/agent-drive-backup.timer
 systemctl daemon-reload
-systemctl enable agent-drive-java.service agent-drive-java-worker.service agent-drive-java-backup.timer
+systemctl disable --now agent-drive-java-worker.service 2>/dev/null || true
+rm -f /etc/systemd/system/agent-drive-java-worker.service
+systemctl daemon-reload
+systemctl enable agent-drive-java.service agent-drive-java-backup.timer
 systemctl start agent-drive-java-backup.timer
 
-# Publish the release and the API/Worker unit restart as one rollback-protected operation.
+# Publish the release and the API restart as one rollback-protected operation.
 rollback_needed=1
 if [ "$legacy_current" -eq 1 ]; then
   mv "$current_link" "$legacy_target"
@@ -324,22 +320,7 @@ if ! wait_ready; then
   exit 1
 fi
 
-systemctl restart agent-drive-java-worker.service
-worker_ready=0
-for _ in $(seq 1 30); do
-  if systemctl is-active --quiet agent-drive-java-worker.service; then
-    worker_ready=1
-    break
-  fi
-  sleep 1
-done
-if [ "$worker_ready" -ne 1 ]; then
-  journalctl -u agent-drive-java-worker.service -n 80 --no-pager
-  exit 1
-fi
-
-# The process being active is not enough: /ready must observe the database,
-# storage and a fresh Worker heartbeat before this release is considered live.
+# /ready verifies the API's database and storage dependencies.
 readiness=0
 for _ in $(seq 1 30); do
   if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/api/v1/ready >/dev/null; then
@@ -350,7 +331,6 @@ for _ in $(seq 1 30); do
 done
 if [ "$readiness" -ne 1 ]; then
   journalctl -u agent-drive-java.service -n 80 --no-pager
-  journalctl -u agent-drive-java-worker.service -n 80 --no-pager
   exit 1
 fi
 
@@ -361,12 +341,11 @@ find "$release_dir" -maxdepth 1 -type f -name 'agent-drive-backend-*.jar' -print
       [ "$old" = "$release" ] || [ "$old" = "$previous_target" ] || rm -f -- "$old"
     done
 rollback_needed=0
-rm -f "$artifact" "$api_unit" "$worker_unit" "$backup_script" "$backup_unit" "$backup_timer"
-printf 'Java API/Worker services ready; release=%s previous=%s\n' "$release" "${previous_target:-none}"
+rm -f "$artifact" "$api_unit" "$backup_script" "$backup_unit" "$backup_timer"
+printf 'Java API service ready; release=%s previous=%s\n' "$release" "${previous_target:-none}"
 '@
     $remoteScript = $remoteScript.Replace("__REMOTE_JAR__", $RemoteJar)
     $remoteScript = $remoteScript.Replace("__REMOTE_API_UNIT__", $RemoteApiUnit)
-    $remoteScript = $remoteScript.Replace("__REMOTE_WORKER_UNIT__", $RemoteWorkerUnit)
     $remoteScript = $remoteScript.Replace("__REMOTE_BACKUP_SCRIPT__", $RemoteBackupScript)
     $remoteScript = $remoteScript.Replace("__REMOTE_BACKUP_UNIT__", $RemoteBackupUnit)
     $remoteScript = $remoteScript.Replace("__REMOTE_BACKUP_TIMER__", $RemoteBackupTimer)
@@ -377,7 +356,7 @@ printf 'Java API/Worker services ready; release=%s previous=%s\n' "$release" "${
     }
     finally {
         # The remote script removes these files after a successful install. Clean failed uploads too.
-        $cleanup = "rm -f '$RemoteJar' '$RemoteApiUnit' '$RemoteWorkerUnit' '$RemoteBackupScript' '$RemoteBackupUnit' '$RemoteBackupTimer'"
+        $cleanup = "rm -f '$RemoteJar' '$RemoteApiUnit' '$RemoteBackupScript' '$RemoteBackupUnit' '$RemoteBackupTimer'"
         try { Invoke-RemoteBash $cleanup } catch { Write-Warning $_.Exception.Message }
     }
 }

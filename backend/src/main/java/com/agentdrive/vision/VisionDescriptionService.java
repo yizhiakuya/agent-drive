@@ -74,7 +74,35 @@ public final class VisionDescriptionService {
                 items.add(failed);
             }
         }
-        return Map.of("ok", true, "model", config.get().model(), "items", items);
+        boolean anySuccess = items.stream().anyMatch(item -> Boolean.TRUE.equals(item.get("description"))
+                || item.containsKey("mime_type"));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", anySuccess);
+        result.put("model", config.get().model());
+        result.put("items", List.copyOf(items));
+        if (!anySuccess) {
+            result.put("error", "vision_all_files_failed");
+        }
+        return Map.copyOf(result);
+    }
+
+    /**
+     * 在批量任务入队前验证当前视觉配置和 provider 路由，避免把必然失败的任务放入队列重试。
+     * @param userId 当前 owner
+     * @return ready、model 和 provider 的安全诊断
+     * @throws VisionProviderUnavailableException 配置缺失或探测失败
+     */
+    public Map<String, Object> requireReady(UUID userId) {
+        Optional<VisionRuntimeConfig.Config> config = configs.find(userId);
+        if (config.isEmpty() || config.get().apiKey() == null || config.get().apiKey().isBlank()) {
+            throw new VisionProviderUnavailableException("vision_not_configured: 请先配置视觉模型和 API Key");
+        }
+        Map<String, Object> probe = client.test(config.get());
+        if (!Boolean.TRUE.equals(probe.get("ok"))) {
+            String detail = String.valueOf(probe.getOrDefault("error", "vision provider unavailable"));
+            throw new VisionProviderUnavailableException("vision_provider_unavailable: " + detail);
+        }
+        return Map.of("ready", true, "model", config.get().model());
     }
 
     /**

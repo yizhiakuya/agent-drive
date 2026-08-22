@@ -1,6 +1,5 @@
 package com.agentdrive.api;
 
-import com.agentdrive.tasks.TaskWorkerStore;
 import com.agentdrive.infrastructure.AppProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,40 +29,31 @@ import java.util.Map;
 @RequestMapping("/api/v1")
 public class HealthController {
     private final JdbcTemplate jdbc;
-    private final TaskWorkerStore workers;
     private final Path storageRoot;
 
     /** Production constructor; optional providers keep the liveness slice lightweight. */
     @Autowired
     public HealthController(ObjectProvider<JdbcTemplate> jdbc,
-                            ObjectProvider<TaskWorkerStore> workers,
                             ObjectProvider<AppProperties> properties) {
         this(jdbc == null ? null : jdbc.getIfAvailable(),
-                workers == null ? null : workers.getIfAvailable(),
                 storagePath(properties == null ? null : properties.getIfAvailable()));
     }
 
-    /** Constructor used by focused contract tests. */
-    public HealthController(JdbcTemplate jdbc, TaskWorkerStore workers) {
-        this(jdbc, workers, Path.of("."));
-    }
-
     /** Constructor with an explicit storage root for readiness contract tests. */
-    public HealthController(JdbcTemplate jdbc, TaskWorkerStore workers, Path storageRoot) {
+    public HealthController(JdbcTemplate jdbc, Path storageRoot) {
         this.jdbc = jdbc;
-        this.workers = workers;
         this.storageRoot = storageRoot;
     }
 
     /** Constructor used by minimal embedding callers. */
     public HealthController() {
-        this((JdbcTemplate) null, (TaskWorkerStore) null, Path.of("."));
+        this((JdbcTemplate) null, Path.of("."));
     }
 
     /**
      * 响应 {@code GET /api/v1/health} 探针。
      *
-     * @return 包含 {@code ok=true} 和 {@code service=agent-drive} 的 JSON 对象；该响应不代表数据库、Worker 或外部 Provider 已就绪。
+     * @return 包含 {@code ok=true} 和 {@code service=agent-drive} 的 JSON 对象；该响应不代表数据库、存储或外部 Provider 已就绪。
      */
     @GetMapping("/health")
     public Map<String, Object> health() {
@@ -72,7 +62,7 @@ public class HealthController {
 
     /**
      * 响应 {@code GET /api/v1/ready} 就绪探针。
-     * 与固定响应的 liveness 不同，该探针执行数据库探活并读取最近十秒的 Worker 心跳。
+     * 与固定响应的 liveness 不同，该探针执行数据库和存储探活。
      */
     @GetMapping("/ready")
     public Mono<ResponseEntity<Map<String, Object>>> ready() {
@@ -82,9 +72,7 @@ public class HealthController {
 
     private ResponseEntity<Map<String, Object>> readiness() {
         boolean databaseOk = false;
-        int workerCount = 0;
         String databaseError = null;
-        String workerError = null;
 
         if (jdbc == null) {
             databaseError = "database probe unavailable";
@@ -99,16 +87,6 @@ public class HealthController {
             }
         }
 
-        if (workers == null) {
-            workerError = "worker heartbeat probe unavailable";
-        } else {
-            try {
-                workerCount = Math.max(0, workers.onlineWorkerCount());
-            } catch (RuntimeException error) {
-                workerError = "worker heartbeat unavailable";
-            }
-        }
-        boolean workerOk = workerError == null && workerCount > 0;
         boolean storageOk = false;
         long storageFree = 0;
         long storageTotal = 0;
@@ -131,7 +109,7 @@ public class HealthController {
                 storageError = "storage unavailable";
             }
         }
-        boolean ready = databaseOk && workerOk && storageOk;
+        boolean ready = databaseOk && storageOk;
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ready", ready);
@@ -141,12 +119,6 @@ public class HealthController {
         database.put("ok", databaseOk);
         if (databaseError != null) database.put("error", databaseError);
         body.put("database", database);
-        Map<String, Object> workers = new LinkedHashMap<>();
-        workers.put("ok", workerOk);
-        workers.put("online", workerCount);
-        workers.put("window_seconds", 10);
-        if (workerError != null) workers.put("error", workerError);
-        body.put("workers", workers);
         Map<String, Object> storage = new LinkedHashMap<>();
         storage.put("ok", storageOk);
         storage.put("free_bytes", storageFree);
@@ -157,7 +129,7 @@ public class HealthController {
         return ResponseEntity.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE).body(body);
     }
 
-    /** 读取最近可验证的备份摘要；备份异常不改变 API/Worker/storage readiness 判定。 */
+    /** 读取最近可验证的备份摘要；备份异常不改变 API/database/storage readiness 判定。 */
     private Map<String, Object> backupStatus() {
         Path backupRoot = storageRoot == null ? null : storageRoot.toAbsolutePath().normalize().resolveSibling("backups");
         Map<String, Object> result = new LinkedHashMap<>();

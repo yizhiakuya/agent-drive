@@ -205,6 +205,21 @@ class BackendApiToolTest {
     }
 
     @Test
+    void convertsBusinessExceptionsIntoStructuredToolErrors() throws Exception {
+        BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> {
+            throw new IllegalArgumentException("vision provider returned HTTP 404");
+        }, mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "call", null, "GET /api/v1/files", null, null, null, null)));
+
+        assertThat(result.path("ok").asBoolean()).isFalse();
+        assertThat(result.path("status").asInt()).isEqualTo(400);
+        assertThat(result.path("error").asText()).isEqualTo("invalid_business_request");
+        assertThat(result.path("detail").asText()).contains("vision provider returned HTTP 404");
+    }
+
+    @Test
     void exposesOneStructuredBackendApiTool() {
         List<ToolSpecification> specifications = ToolSpecifications.toolSpecificationsFrom(BackendApiTool.class);
 

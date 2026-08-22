@@ -1,6 +1,5 @@
 package com.agentdrive.api;
 
-import com.agentdrive.tasks.TaskWorkerStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,52 +34,41 @@ class HealthControllerTest {
     }
 
     @Test
-    void readinessRequiresDatabaseAndRecentWorkerHeartbeat() {
+    void readinessDoesNotDependOnRemovedTaskWorker() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        TaskWorkerStore workers = mock(TaskWorkerStore.class);
         when(jdbc.queryForObject("SELECT 1", Integer.class)).thenReturn(1);
-        when(workers.onlineWorkerCount()).thenReturn(2);
 
-        WebTestClient.bindToController(new HealthController(jdbc, workers)).build()
+        WebTestClient.bindToController(new HealthController(jdbc, Path.of("."))).build()
                 .get().uri("/api/v1/ready")
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.ready").isEqualTo(true)
                 .jsonPath("$.database.ok").isEqualTo(true)
-                .jsonPath("$.workers.ok").isEqualTo(true)
-                .jsonPath("$.workers.online").isEqualTo(2)
-                .jsonPath("$.workers.window_seconds").isEqualTo(10)
                 .jsonPath("$.storage.ok").isEqualTo(true);
     }
 
     @Test
-    void readinessReturns503WhenWorkerIsOffline() {
+    void readinessRemainsReadyWhenTaskWorkerIsDisabled() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        TaskWorkerStore workers = mock(TaskWorkerStore.class);
         when(jdbc.queryForObject("SELECT 1", Integer.class)).thenReturn(1);
-        when(workers.onlineWorkerCount()).thenReturn(0);
 
-        WebTestClient.bindToController(new HealthController(jdbc, workers)).build()
+        WebTestClient.bindToController(new HealthController(jdbc, Path.of("."))).build()
                 .get().uri("/api/v1/ready")
                 .exchange()
-                .expectStatus().isEqualTo(503)
+                .expectStatus().isOk()
                 .expectBody()
-                .jsonPath("$.ready").isEqualTo(false)
+                .jsonPath("$.ready").isEqualTo(true)
                 .jsonPath("$.database.ok").isEqualTo(true)
-                .jsonPath("$.workers.ok").isEqualTo(false)
-                .jsonPath("$.workers.online").isEqualTo(0)
                 .jsonPath("$.storage.ok").isEqualTo(true);
     }
 
     @Test
     void readinessReturns503WhenDatabaseProbeFails() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        TaskWorkerStore workers = mock(TaskWorkerStore.class);
         when(jdbc.queryForObject("SELECT 1", Integer.class)).thenThrow(new IllegalStateException("database down"));
-        when(workers.onlineWorkerCount()).thenReturn(1);
 
-        WebTestClient.bindToController(new HealthController(jdbc, workers)).build()
+        WebTestClient.bindToController(new HealthController(jdbc, Path.of("."))).build()
                 .get().uri("/api/v1/ready")
                 .exchange()
                 .expectStatus().isEqualTo(503)
@@ -88,18 +76,15 @@ class HealthControllerTest {
                 .jsonPath("$.ready").isEqualTo(false)
                 .jsonPath("$.database.ok").isEqualTo(false)
                 .jsonPath("$.database.error").isEqualTo("database unavailable")
-                .jsonPath("$.workers.ok").isEqualTo(true)
                 .jsonPath("$.storage.ok").isEqualTo(true);
     }
 
     @Test
     void readinessReturns503WhenStorageDirectoryIsUnavailable() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        TaskWorkerStore workers = mock(TaskWorkerStore.class);
         when(jdbc.queryForObject("SELECT 1", Integer.class)).thenReturn(1);
-        when(workers.onlineWorkerCount()).thenReturn(1);
 
-        WebTestClient.bindToController(new HealthController(jdbc, workers,
+        WebTestClient.bindToController(new HealthController(jdbc,
                         Path.of("target", "missing-readiness-storage")))
                 .build()
                 .get().uri("/api/v1/ready")
@@ -108,7 +93,6 @@ class HealthControllerTest {
                 .expectBody()
                 .jsonPath("$.ready").isEqualTo(false)
                 .jsonPath("$.database.ok").isEqualTo(true)
-                .jsonPath("$.workers.ok").isEqualTo(true)
                 .jsonPath("$.storage.ok").isEqualTo(false)
                 .jsonPath("$.storage.error").isEqualTo("storage directory unavailable");
     }
@@ -121,11 +105,9 @@ class HealthControllerTest {
         Files.writeString(archive, "backup");
         Files.writeString(backups.resolve(archive.getFileName() + ".sha256"), "checksum");
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        TaskWorkerStore workers = mock(TaskWorkerStore.class);
         when(jdbc.queryForObject("SELECT 1", Integer.class)).thenReturn(1);
-        when(workers.onlineWorkerCount()).thenReturn(1);
 
-        WebTestClient.bindToController(new HealthController(jdbc, workers, data)).build()
+        WebTestClient.bindToController(new HealthController(jdbc, data)).build()
                 .get().uri("/api/v1/ready")
                 .exchange()
                 .expectStatus().isOk()

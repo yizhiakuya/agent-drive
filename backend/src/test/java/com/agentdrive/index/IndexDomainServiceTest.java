@@ -54,26 +54,33 @@ class IndexDomainServiceTest {
     }
 
     @Test
-    void recordsBatchVisionExecutionThroughTaskMonitorBehindIndexApi() {
+    void executesBatchVisionDirectlyWithoutTaskMonitor() {
         IndexStore index = mock(IndexStore.class);
-        IndexExecutionMonitor monitor = mock(IndexExecutionMonitor.class);
+        IndexingService indexing = mock(IndexingService.class);
+        VisionDescriptionService vision = mock(VisionDescriptionService.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
         UUID owner = UUID.randomUUID();
-        Map<String, Object> task = Map.of("id", UUID.randomUUID().toString(), "status", "queued");
-        when(monitor.submit(eq(owner), eq("index.vision"), eq("index.vision"),
-                eq(List.of("photos/a.png", "photos/b.png")), eq(false), eq("")))
-                .thenReturn(Optional.of(new IndexExecutionMonitor.Submission(true, "queued",
-                        String.valueOf(task.get("id")), task)));
-        IndexDomainService service = new IndexDomainService(index, mock(IndexingService.class),
-                mock(EmbeddingService.class), emptyConfig(), mock(VisionDescriptionService.class),
-                new ObjectMapper(), monitor);
+        when(vision.describeFile(eq(owner), eq("photos/a.png"))).thenReturn(Map.of(
+                "description", Map.of("summary", "a"), "model", "vision-test"));
+        when(vision.describeFile(eq(owner), eq("photos/b.png"))).thenReturn(Map.of(
+                "description", Map.of("summary", "b"), "model", "vision-test"));
+        when(indexing.indexDescription(eq(owner), eq("photos/a.png"), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Map.of("indexed", true));
+        when(indexing.indexDescription(eq(owner), eq("photos/b.png"), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Map.of("indexed", true));
+        when(embeddings.embed(eq(owner), eq(List.of("photos/a.png")), eq(64), eq(false)))
+                .thenReturn(Map.of("vectorized", true));
+        when(embeddings.embed(eq(owner), eq(List.of("photos/b.png")), eq(64), eq(false)))
+                .thenReturn(Map.of("vectorized", true));
+        IndexDomainService service = new IndexDomainService(index, indexing,
+                embeddings, emptyConfig(), vision, new ObjectMapper());
 
         Map<String, Object> result = service.indexVision(owner,
                 List.of("photos/a.png", "photos/b.png"), false);
 
         assertThat(result).containsEntry("operation", "index.vision")
-                .containsEntry("accepted", true)
-                .containsEntry("status", "queued")
-                .containsKey("monitor");
+                .containsEntry("status", "succeeded")
+                .containsKey("items");
     }
 
     private static IndexDomainService service(IndexStore index, IndexingService indexing, EmbeddingService embeddings) {

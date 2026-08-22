@@ -32,7 +32,7 @@ public record AppProperties(
      * 绑定完整的 {@code app.*} 配置并在边界处固定默认值。
      * <p>密钥去除首尾空白；提示词只把 {@code null} 转为空字符串；数值默认值分别为 100、
      * {@code data} 和 300。</p>
-     * @param mode 运行模式，例如 {@code api} 或 {@code worker}。
+     * @param mode 运行模式，例如 {@code api} 或 {@code migrate}。
      * @param cookieSecure 是否只通过 HTTPS 发送 Cookie。
      * @param confirmationKey 用于确认重放签名的 Base64 密钥文本。
      * @param llmConfigEncryptionKey 用于加密模型 API key 的 Base64 密钥文本。

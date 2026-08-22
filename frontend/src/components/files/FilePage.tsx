@@ -5,7 +5,7 @@ import { listFiles, listFavorites, listRecent, setFavorite, uploadFile, getFileI
 import FilePreview from "./FilePreview";
 import FileDetails, { indexStatusLabel } from "./FileDetails";
 import { fmtSize, fmtTime } from "@/lib/format";
-import { EV, emitToast, emitFilesChanged, emitTasksChanged } from "@/lib/events";
+import { EV, emitToast, emitFilesChanged } from "@/lib/events";
 import {
   dispatchFrontendAction,
   isSafeFrontendPath,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/frontend-actions";
 import type { PendingFrontendAction } from "@/lib/frontend-actions";
 import { useAppStore } from "@/lib/store";
-import { enqueueEmbedIndex, enqueueVisionIndex } from "@/lib/api/tasks";
+import { indexFiles, indexVision } from "@/lib/api/index";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -317,13 +317,12 @@ export default function FilePage() {
         const controller = new AbortController();
         uploadControllersRef.current.set(entry.id, controller);
         try {
-          const result = await uploadFile(file, pathRef.current,
+          await uploadFile(file, pathRef.current,
             (progress) => setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, progress } : item)),
             controller.signal);
-          if (result.indexed?.task_id) emitTasksChanged();
           setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "succeeded", progress: 100 } : item));
           uploadFilesRef.current.delete(entry.id);
-          emitToast({ kind: "ok", text: `已上传 ${file.name}，内容将在后台处理` });
+          emitToast({ kind: "ok", text: `已上传 ${file.name}` });
         } catch (error) {
           const cancelled = controller.signal.aborted;
           setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) } : item));
@@ -355,10 +354,9 @@ export default function FilePage() {
     uploadControllersRef.current.set(id, controller);
     setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: "uploading", progress: 0, error: undefined } : item));
     try {
-      const result = await uploadFile(file, pathRef.current,
+      await uploadFile(file, pathRef.current,
         (progress) => setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, progress } : item)),
         controller.signal);
-      if (result.indexed?.task_id) emitTasksChanged();
       setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: "succeeded", progress: 100 } : item));
       uploadFilesRef.current.delete(id);
       emitToast({ kind: "ok", text: `已重试上传 ${file.name}` });
@@ -464,7 +462,7 @@ export default function FilePage() {
   }
 
   /**
-   * 为当前选中的文件创建后台索引任务，并在入队后刷新文件状态。
+   * 为当前选中的文件直接执行索引业务，并在完成后刷新文件状态。
    *
    * @param kind 选择普通文本 embedding，或图片视觉描述索引。
    */
@@ -475,16 +473,12 @@ export default function FilePage() {
     const request = ++indexingRequestRef.current;
     setIndexing(kind);
     try {
-      const result = kind === "vision"
-        ? await enqueueVisionIndex([filePath])
-        : await enqueueEmbedIndex([filePath]);
-      emitTasksChanged();
+      if (kind === "vision") await indexVision([filePath]);
+      else await indexFiles([filePath]);
       emitFilesChanged();
       emitToast({
         kind: "ok",
-        text: result.queued
-          ? kind === "vision" ? "图片视觉索引已进入后台" : "文件向量化已进入后台"
-          : "相同文件的索引任务已在处理中",
+        text: kind === "vision" ? "图片视觉索引已完成" : "文件向量化已完成",
       });
       const refreshed = await getFileInfo(filePath);
       if (request !== indexingRequestRef.current) return;
@@ -495,7 +489,7 @@ export default function FilePage() {
       } : current);
     } catch (error) {
       if (request === indexingRequestRef.current) {
-        emitToast({ kind: "error", text: `索引任务创建失败：${String(error)}` });
+          emitToast({ kind: "error", text: `索引执行失败：${String(error)}` });
       }
     } finally {
       if (request === indexingRequestRef.current) setIndexing(null);

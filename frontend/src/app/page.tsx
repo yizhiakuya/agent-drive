@@ -5,7 +5,6 @@ import FilePanel from "@/components/files/FilePanel";
 import FilePage from "@/components/files/FilePage";
 import SessionList from "@/components/sessions/SessionList";
 import SettingsPage from "@/components/settings/SettingsPage";
-import TaskPage from "@/components/tasks/TaskPage";
 import Onboarding from "@/components/onboarding/Onboarding";
 import ToastStack from "@/components/ToastStack";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -335,7 +334,6 @@ export default function Home() {
       </main>
       {/* 各工作区常驻挂载，仅用 CSS 切换可见性，保留目录、搜索和未保存设置草稿。 */}
       <main className={`${tab === "files" ? "flex" : "hidden"} flex-1 overflow-hidden`}><FilePage /></main>
-      <main className={`${tab === "tasks" ? "flex" : "hidden"} flex-1 overflow-hidden`}><TaskPage /></main>
       <main className={`${tab === "settings" ? "flex" : "hidden"} flex-1 overflow-hidden`}><SettingsPage initialSection={settingsSection} /></main>
       <ToastStack />
     </div>

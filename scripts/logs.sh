@@ -3,8 +3,7 @@
 #
 # 用法：
 #   logs.sh api [选项]        API 进程日志（journalctl -u agent-drive-java.service）
-#   logs.sh worker [选项]     Worker 进程日志（journalctl -u agent-drive-java-worker.service）
-#   audit 日志不再由本地文件提供；按 request_id 查询 API/Worker journal 即可。
+#   audit 日志不再由本地文件提供；按 request_id 查询 API journal 即可。
 #
 # 选项：
 #   -n N           行数（默认 100）
@@ -13,7 +12,6 @@
 #   -m, --msg 关键词  只显示整行含关键词的记录
 #
 # 示例：
-#   logs.sh worker ERROR --msg task        # worker 最近的 ERROR 任务日志
 #   logs.sh api -f                          # 实时跟踪 API
 #   logs.sh api -m request_id=...           # 按请求 ID 筛选 API 日志
 set -u
@@ -26,7 +24,7 @@ MSG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    api|worker) TARGET="$1" ;;
+    api) TARGET="$1" ;;
     -f|--follow) FOLLOW=1 ;;
     -n) N="$2"; shift ;;
     -l|--level) LEVEL="$2"; shift ;;
@@ -38,9 +36,6 @@ while [ $# -gt 0 ]; do
 done
 
 UNIT="agent-drive-java.service"
-if [ "$TARGET" = "worker" ]; then
-  UNIT="agent-drive-java-worker.service"
-fi
 echo "# journalctl -u $UNIT -n $N"
 filter_lines() {
   while IFS= read -r line; do

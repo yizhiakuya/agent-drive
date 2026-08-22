@@ -17,13 +17,12 @@ import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
 import SkillsManager from "./SkillsManager";
-import AutomationCenter from "@/components/tasks/AutomationCenter";
 import SystemStatusCenter from "./SystemStatusCenter";
 import { Capacitor } from "@capacitor/core";
 import { apiErrorMessage, authenticatedFetch, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
 import { useAppStore } from "@/lib/store";
-import { EV, emitTasksChanged, emitToast } from "@/lib/events";
+import { EV, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
@@ -91,7 +90,6 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
   const [visionModelsLoading, setVisionModelsLoading] = useState(false);
   const [visionModelsOpen, setVisionModelsOpen] = useState(false);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
-  const setTab = useAppStore((s) => s.setTab);
   const isNative = Capacitor.isNativePlatform();
   const loadRequestRef = useRef(0);
   const modelRequestRef = useRef(0);
@@ -290,13 +288,10 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
       const d = await saveEmbeddings(embForm) as {
         ok?: boolean;
         test?: { ok: boolean; dimensions?: number; error?: string };
-        rebuild_task?: { id: string } | null;
       };
       if (d.ok) {
-        const suffix = d.rebuild_task ? " · 索引重建已进入后台" : "";
         setEmbForm((form) => ({ ...form, api_key: "" }));
-        setEmbMsg({ kind: "ok", text: `向量化已保存 · 连接: ${d.test?.ok ? `ok(${d.test.dimensions}维)` : d.test?.error}${suffix}` });
-        if (d.rebuild_task) emitTasksChanged();
+        setEmbMsg({ kind: "ok", text: `向量化已保存 · 连接: ${d.test?.ok ? `ok(${d.test.dimensions}维)` : d.test?.error}` });
       }
       else setEmbMsg({ kind: "error", text: JSON.stringify(d) });
       await load();
@@ -677,13 +672,11 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
 
       <div id="settings-status" data-settings-section="status" className="mb-4 overflow-hidden border border-border">
         <SystemStatusCenter
-          onOpenTasks={() => setTab("tasks")}
           onOpenSettings={() => document.getElementById("settings-model")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           onOpenSync={() => document.getElementById("settings-sync")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           onOpenBackup={() => document.getElementById("settings-status")?.scrollIntoView({ behavior: "smooth", block: "start" })}
           onOpenDevices={() => document.getElementById("settings-security")?.scrollIntoView({ behavior: "smooth", block: "start" })}
         />
-        <AutomationCenter onViewTasks={() => setTab("tasks")} />
       </div>
 
       <SkillsManager />

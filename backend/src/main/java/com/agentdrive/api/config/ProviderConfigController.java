@@ -4,7 +4,6 @@ import com.agentdrive.agent.LlmProviderConfig;
 import com.agentdrive.agent.ChatModelCapabilities;
 import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.EmbeddingConfigStore;
-import com.agentdrive.tasks.TaskStore;
 import com.agentdrive.infrastructure.LlmProviderConfigService;
 import com.agentdrive.infrastructure.LlmProviderConfigView;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
@@ -59,7 +58,6 @@ public final class ProviderConfigController {
     private final WebRequestPrincipalResolver principalResolver;
     private final ProviderProbeClient probe;
     private final EmbeddingConfigStore embeddingConfigs;
-    private final TaskStore tasks;
     private final EmbeddingProbeClient embeddingProbe;
 
     /**
@@ -74,7 +72,7 @@ public final class ProviderConfigController {
                                     LlmApiKeyCipher keyCipher,
                                     WebRequestPrincipalResolver principalResolver,
                                     com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
-        this(configs, keyCipher, principalResolver, objectMapper, null, null);
+        this(configs, keyCipher, principalResolver, objectMapper, null, null, new EmbeddingProbeClient(objectMapper));
     }
 
     /**
@@ -85,16 +83,25 @@ public final class ProviderConfigController {
      * @param principalResolver 解析请求 owner 的认证组件。
      * @param objectMapper 用于解析 Provider 和 embedding 响应的 JSON 映射器。
      * @param embeddingConfigs 读取和保存 owner-scoped embedding 配置的存储；可为 null 以兼容无该功能的测试构造。
-     * @param tasks embedding 配置变更后入队索引重建的任务存储；可为 null 以兼容无任务服务的测试构造。
      */
     @Autowired
     public ProviderConfigController(LlmProviderConfigService configs,
                                     LlmApiKeyCipher keyCipher,
                                     WebRequestPrincipalResolver principalResolver,
                                     com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                                    EmbeddingConfigStore embeddingConfigs) {
+        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs, null,
+                new EmbeddingProbeClient(objectMapper));
+    }
+
+    /** Compatibility constructor for callers that still pass the removed task store. */
+    public ProviderConfigController(LlmProviderConfigService configs,
+                                    LlmApiKeyCipher keyCipher,
+                                    WebRequestPrincipalResolver principalResolver,
+                                    com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                                     EmbeddingConfigStore embeddingConfigs,
-                                    TaskStore tasks) {
-        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs, tasks,
+                                    Object ignoredTasks) {
+        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs, ignoredTasks,
                 new EmbeddingProbeClient(objectMapper));
     }
 
@@ -106,7 +113,7 @@ public final class ProviderConfigController {
      * @param principalResolver 请求 owner 解析器。
      * @param objectMapper Provider 响应 JSON 映射器。
      * @param embeddingConfigs embedding 配置存储。
-     * @param tasks 索引重建任务存储。
+     * @param ignoredTasks legacy task store, ignored now that task system is removed.
      * @param embeddingProbe embedding 连接探测器。
      */
     ProviderConfigController(LlmProviderConfigService configs,
@@ -114,14 +121,13 @@ public final class ProviderConfigController {
                              WebRequestPrincipalResolver principalResolver,
                              com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                              EmbeddingConfigStore embeddingConfigs,
-                             TaskStore tasks,
+                             Object ignoredTasks,
                              EmbeddingProbeClient embeddingProbe) {
         this.configs = configs;
         this.keyCipher = keyCipher;
         this.principalResolver = principalResolver;
         this.probe = new ProviderProbeClient(objectMapper);
         this.embeddingConfigs = embeddingConfigs;
-        this.tasks = tasks;
         this.embeddingProbe = embeddingProbe;
     }
 
@@ -490,7 +496,7 @@ public final class ProviderConfigController {
     }
 
     /**
-     * 校验并保存 Jina embedding 配置，随后测试连接并在成功时入队索引重建。
+     * 校验并保存 Jina embedding 配置，随后测试连接；索引业务由调用方按需直接执行。
      *
      * <p>provider 固定为 {@code jina}；空地址/模型使用 Jina 默认值，空 key 仅在
      * provider、地址和模型都未改变时复用旧密文。连接测试成功后才持久化配置，
@@ -498,7 +504,7 @@ public final class ProviderConfigController {
      *
      * @param userId 配置所属用户 UUID。
      * @param payload embedding 配置请求体。
-     * @return 保存字段、连接测试结果以及可选的 index.rebuild 任务。
+     * @return 保存字段和连接测试结果。
      * @throws IllegalArgumentException provider 不是 jina 或无法得到 API key 时抛出。
      */
     private Map<String, Object> saveEmbeddings(java.util.UUID userId, EmbeddingRequest payload) {
@@ -530,7 +536,6 @@ public final class ProviderConfigController {
             failed.put("ok", false);
             failed.put("saved", null);
             failed.put("test", diagnostics);
-            failed.put("rebuild_task", null);
             failed.put("message", "连接测试失败，配置未保存");
             return failed;
         }
@@ -540,14 +545,6 @@ public final class ProviderConfigController {
         result.put("ok", true);
         result.put("saved", Map.of("provider", provider, "model", model));
         result.put("test", diagnostics);
-        if (Boolean.TRUE.equals(diagnostics.get("ok")) && tasks != null) {
-            String dedupe = "embedding-rebuild:" + userId + ":" + fingerprint(apiKey);
-            TaskStore.EnqueueResult enqueue = tasks.enqueue(userId, "index.rebuild", "index", Map.of(),
-                    dedupe, "embedding.config", null);
-            result.put("rebuild_task", enqueue.task());
-        } else {
-            result.put("rebuild_task", null);
-        }
         return result;
     }
 

@@ -62,8 +62,13 @@ final class ChatBackendApiIndexHandler implements BackendApiOperationHandler {
     private List<String> paths(BackendApiRequest request) {
         Object value = request.body().get("paths");
         if (value == null) {
+            // `files` is accepted as a compatibility alias for multi-file index calls.
+            // The operation catalog still documents `paths` as the canonical field.
+            value = request.body().get("files");
+        }
+        if (value == null) {
             String path = BackendApiParams.parameter(request, "path", "");
-            if (path.isBlank()) throw new IllegalArgumentException("path or paths is required");
+            if (path.isBlank()) throw new IllegalArgumentException("path, paths, or files is required");
             return List.of(path);
         }
         if (!(value instanceof List<?> values)) throw new IllegalArgumentException("paths must be a list");

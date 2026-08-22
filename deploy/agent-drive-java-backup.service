@@ -1,6 +1,6 @@
 [Unit]
 Description=Agent Drive Java PostgreSQL and owner data backup
-After=network-online.target agent-drive-java.service agent-drive-java-worker.service
+After=network-online.target agent-drive-java.service
 Wants=network-online.target
 
 [Service]

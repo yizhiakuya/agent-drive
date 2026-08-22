@@ -2,7 +2,6 @@ package com.agentdrive.api.chat;
 
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.auth.ConversationSessionService;
-import com.agentdrive.tasks.TaskStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,7 +9,6 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.http.codec.ServerSentEvent;
@@ -21,7 +19,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -29,9 +26,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -56,7 +50,6 @@ public final class ChatController {
     private final ChatSseEncoder encoder;
     private final ConversationSessionService sessionService;
     private final WebRequestPrincipalResolver principalResolver;
-    private final TaskStore tasks;
     private final ChatRunRegistry runRegistry;
 
     /**
@@ -66,7 +59,7 @@ public final class ChatController {
      * @param objectMapper 编码 SSE data JSON 的映射器。
      */
     public ChatController(ChatRuntime runtime, ObjectMapper objectMapper) {
-        this(runtime, objectMapper, null, null, null, null);
+        this(runtime, objectMapper, null, null, null);
     }
 
     /**
@@ -79,7 +72,7 @@ public final class ChatController {
     public ChatController(ChatRuntime runtime, ObjectMapper objectMapper,
                           ConversationSessionService sessionService,
                           WebRequestPrincipalResolver principalResolver) {
-        this(runtime, objectMapper, sessionService, principalResolver, null, null);
+        this(runtime, objectMapper, sessionService, principalResolver, null);
     }
 
     /**
@@ -95,13 +88,11 @@ public final class ChatController {
                           ObjectMapper objectMapper,
                           ConversationSessionService sessionService,
                           WebRequestPrincipalResolver principalResolver,
-                          TaskStore tasks,
                           ChatRunRegistry runRegistry) {
         this.runtime = runtime;
         this.encoder = new ChatSseEncoder(objectMapper);
         this.sessionService = sessionService;
         this.principalResolver = principalResolver;
-        this.tasks = tasks;
         this.runRegistry = runRegistry;
     }
 
@@ -116,50 +107,6 @@ public final class ChatController {
     public Mono<ChatResponse> complete(@Valid @RequestBody ChatRequest request,
                                        ServerWebExchange exchange) {
         return prepare(request, exchange).flatMap(runtime::complete);
-    }
-
-    /**
-     * 响应 {@code POST /api/v1/chat/run}，创建一个与 HTTP 生命周期无关的后台 Agent 任务。
-     * 任务只是聊天域提供给任务模块的一个普通业务入口，实际执行仍由 Worker 状态机负责。
-     *
-     * @param request 聊天消息和受控选项；后台不接受确认或剪贴板图片
-     * @param exchange 用于认证 owner 和确认会话归属
-     * @return queued 标志和 owner-scoped 任务快照
-     */
-    @PostMapping("/chat/run")
-    public Mono<Map<String, Object>> run(@Valid @RequestBody ChatRequest request,
-                                         ServerWebExchange exchange) {
-        if (tasks == null) {
-            return Mono.error(new IllegalStateException("task store unavailable"));
-        }
-        return prepare(request, exchange).flatMap(normalized -> {
-            if (!normalized.confirmations().isEmpty()) {
-                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "background chat does not accept confirmations"));
-            }
-            if (!normalized.inlineImages().isEmpty()) {
-                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "background chat does not accept inline images"));
-            }
-            UUID userId = normalized.authenticatedUserId();
-            if (userId == null) {
-                return Mono.error(new IllegalStateException("authenticated user is required"));
-            }
-            Map<String, Object> payload = new java.util.LinkedHashMap<>();
-            payload.put("session_id", normalized.sessionId());
-            payload.put("message", normalized.message());
-            payload.put("thinking_level", normalized.thinkingLevel());
-            if (!normalized.model().isBlank()) payload.put("model", normalized.model());
-            if (!normalized.fileContext().isEmpty()) payload.put("file_context", normalized.fileContext());
-            String dedupe = "chat.run:" + normalized.sessionId() + ":" + digest(
-                    normalized.message() + "\n" + normalized.thinkingLevel() + "\n" + normalized.model());
-            return blocking(() -> {
-                TaskStore.EnqueueResult result = tasks.enqueue(
-                        userId, "chat.run", "automation", payload,
-                        dedupe, "api", null, 0, 1);
-                return Map.of("queued", result.created(), "task", result.task());
-            });
-        });
     }
 
     /**
@@ -392,12 +339,4 @@ public final class ChatController {
         return ChatLogSupport.message(error);
     }
 
-    private String digest(String value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("SHA-256 is unavailable", error);
-        }
-    }
 }

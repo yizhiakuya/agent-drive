@@ -6,7 +6,6 @@ import {
   Cpu,
   Folder,
   HardDrive,
-  ListChecks,
   Menu,
   MessageSquare,
   Settings,
@@ -14,11 +13,8 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import TaskPeekDrawer from "@/components/tasks/TaskPeekDrawer";
-import { listTasks } from "@/lib/api/tasks";
-import { EV } from "@/lib/events";
 
-type AppTab = "chat" | "files" | "tasks" | "settings";
+type AppTab = "chat" | "files" | "settings";
 
 interface WorkspaceHeaderProps {
   tab: AppTab;
@@ -30,47 +26,22 @@ interface WorkspaceHeaderProps {
 const NAV_ITEMS: { key: AppTab; label: string; icon: typeof MessageSquare }[] = [
   { key: "chat", label: "对话", icon: MessageSquare },
   { key: "files", label: "文件", icon: Folder },
-  { key: "tasks", label: "任务", icon: ListChecks },
   { key: "settings", label: "设置", icon: Settings },
 ];
 
 export default function WorkspaceHeader({ tab, modelName, onTabChange, onSettingsSection }: WorkspaceHeaderProps) {
   const [navOpen, setNavOpen] = useState(false);
-  const [tasksOpen, setTasksOpen] = useState(false);
-  const [taskAttention, setTaskAttention] = useState(false);
 
   useEffect(() => {
-    let disposed = false;
-    const loadAttention = async () => {
-      try {
-        const response = await listTasks("queued,running,retry_wait,cancelling,failed", { limit: 1 });
-        if (!disposed) setTaskAttention(response.items.length > 0 || Object.entries(response.overview?.counts || {}).some(([status, count]) =>
-          ["queued", "running", "retry_wait", "cancelling", "failed"].includes(status) && Number(count) > 0));
-      } catch {
-        // 顶部提示只反映最近已知状态，任务抽屉仍会展示独立错误态。
-      }
-    };
-    void loadAttention();
-    window.addEventListener(EV.tasksChanged, loadAttention);
-    window.addEventListener(EV.refresh, loadAttention);
-    return () => {
-      disposed = true;
-      window.removeEventListener(EV.tasksChanged, loadAttention);
-      window.removeEventListener(EV.refresh, loadAttention);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!navOpen && !tasksOpen) return;
+    if (!navOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setNavOpen(false);
-        setTasksOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navOpen, tasksOpen]);
+  }, [navOpen]);
 
   function selectTab(nextTab: AppTab) {
     onTabChange(nextTab);
@@ -108,21 +79,6 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange, onSetting
             <Activity className="size-3.5 shrink-0 text-success" aria-hidden="true" />
             <span className="truncate">{modelName || "Agent 已就绪"}</span>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-9 gap-1.5 border-border bg-panel px-2.5 text-xs font-medium text-text hover:bg-card sm:px-3"
-            aria-label="打开后台任务"
-            title="后台任务"
-            onClick={() => setTasksOpen(true)}
-          >
-            <span className="relative grid size-3.5 place-items-center" aria-hidden="true">
-              <span className={`size-2 rounded-full ${taskAttention ? "bg-warn" : "bg-muted/50"}`} />
-              {taskAttention && <span className="absolute size-3.5 animate-ping rounded-full bg-warn/30" />}
-            </span>
-            <ListChecks className="size-4" aria-hidden="true" />
-            <span className="hidden sm:inline">任务队列</span>
-          </Button>
         </div>
       </header>
 
@@ -196,20 +152,12 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange, onSetting
                 <Activity className="size-3.5 text-success" aria-hidden="true" />
                 <span className="truncate">{modelName || "Agent 已就绪"}</span>
               </div>
-              <div className="mt-1 font-mono text-[10px] text-muted">数据与任务状态来自当前服务端</div>
+              <div className="mt-1 font-mono text-[10px] text-muted">数据来自当前服务端</div>
             </div>
           </aside>
         </div>
       )}
 
-      <TaskPeekDrawer
-        open={tasksOpen}
-        onClose={() => setTasksOpen(false)}
-        onViewAll={() => {
-          setTasksOpen(false);
-          onTabChange("tasks");
-        }}
-      />
     </>
   );
 }

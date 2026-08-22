@@ -28,7 +28,6 @@ public final class IndexDomainService {
     private final EmbeddingRuntimeConfig embeddingConfig;
     private final VisionDescriptionService vision;
     private final ObjectMapper objectMapper;
-    private final IndexExecutionMonitor monitor;
 
     public IndexDomainService(IndexStore index,
                               IndexingService indexing,
@@ -36,24 +35,12 @@ public final class IndexDomainService {
                               EmbeddingRuntimeConfig embeddingConfig,
                               VisionDescriptionService vision,
                               ObjectMapper objectMapper) {
-        this(index, indexing, embeddings, embeddingConfig, vision, objectMapper, null);
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
-    public IndexDomainService(IndexStore index,
-                              IndexingService indexing,
-                              EmbeddingService embeddings,
-                              EmbeddingRuntimeConfig embeddingConfig,
-                              VisionDescriptionService vision,
-                              ObjectMapper objectMapper,
-                              IndexExecutionMonitor monitor) {
         this.index = index;
         this.indexing = indexing;
         this.embeddings = embeddings;
         this.embeddingConfig = embeddingConfig;
         this.vision = vision;
         this.objectMapper = objectMapper;
-        this.monitor = monitor;
     }
 
     /** 返回当前 owner 的索引统计和路径范围内的文件索引资源。 */
@@ -95,15 +82,12 @@ public final class IndexDomainService {
         return indexing.indexFile(userId, normalizePath(path));
     }
 
-    /** 单文件直接抽取；多文件请求由任务模块记录执行状态，但入口仍是索引业务 API。 */
+    /** 直接抽取并写入文本索引；多文件请求逐个执行并返回逐项结果。 */
     public Map<String, Object> indexFiles(UUID userId, List<String> paths, boolean force) {
         requireUser(userId);
         List<String> normalized = normalizePaths(paths);
-        if (normalized.size() == 1 || monitor == null) {
-            List<Map<String, Object>> results = normalized.stream().map(path -> indexFile(userId, path)).toList();
-            return Map.of("operation", "index.file", "status", "succeeded", "items", results);
-        }
-        return enqueueMonitor(userId, "index.embed", "index.file", normalized, force);
+        List<Map<String, Object>> results = normalized.stream().map(path -> indexFile(userId, path)).toList();
+        return Map.of("operation", "index.file", "status", "succeeded", "items", results);
     }
 
     /** 同步读取图片、生成结构化描述并写入视觉文档。 */
@@ -111,36 +95,21 @@ public final class IndexDomainService {
         return indexVision(userId, List.of(path), false);
     }
 
-    /** 单图片直接执行；多图片由任务模块记录执行状态，但入口仍是索引业务 API。 */
+    /** 直接执行图片描述、视觉文档写入和视觉向量生成；多图片逐个执行。 */
     public Map<String, Object> indexVision(UUID userId, List<String> paths, boolean force) {
         requireUser(userId);
         List<String> normalizedPaths = normalizePaths(paths);
-        if (normalizedPaths.size() > 1 && monitor != null) {
-            return enqueueMonitor(userId, "index.vision", "index.vision", normalizedPaths, force);
-        }
-        String normalized = normalizedPaths.get(0);
-        Map<String, Object> described = vision.describeFile(userId, normalized);
-        Object description = described.get("description");
-        if (description == null) throw new IllegalStateException("vision description is empty");
-        try {
-            Map<String, Object> result = new LinkedHashMap<>(indexing.indexDescription(
-                    userId, normalized, objectMapper.writeValueAsString(description)));
-            result.put("description", description);
-            result.put("model", described.get("model"));
-            result.put("embedding", embeddings.embed(userId, List.of(normalized), 64, force));
-            return result;
-        } catch (JsonProcessingException error) {
-            throw new IllegalStateException("vision description encoding failed", error);
-        }
+        vision.requireReady(userId);
+        List<Map<String, Object>> results = normalizedPaths.stream()
+                .map(path -> indexVisionOne(userId, path, force))
+                .toList();
+        return Map.of("operation", "index.vision", "status", "succeeded", "items", results);
     }
 
     /** 同步向量化指定范围的当前文档块；空 paths 表示 owner 全部文档。 */
     public Map<String, Object> vectorize(UUID userId, List<String> paths, boolean force, int limit) {
         requireUser(userId);
         List<String> normalized = paths == null ? List.of() : normalizePaths(paths);
-        if ((normalized.size() != 1 || force) && monitor != null) {
-            return enqueueMonitor(userId, "index.embed", "index.vectors", normalized, force);
-        }
         return embeddings.embed(userId, normalized, Math.max(1, Math.min(limit, 1000)), force);
     }
 
@@ -160,29 +129,23 @@ public final class IndexDomainService {
     public Map<String, Object> rebuild(UUID userId, String prefix) {
         requireUser(userId);
         String normalizedPrefix = normalizePrefix(prefix);
-        if (monitor == null) return indexing.rebuild(userId, normalizedPrefix);
-        return monitor.submit(userId, "index.rebuild", "index.rebuild", List.of(), false, normalizedPrefix)
-                .map(submission -> monitorResult("index.rebuild", submission))
-                .orElseGet(() -> indexing.rebuild(userId, normalizedPrefix));
+        return indexing.rebuild(userId, normalizedPrefix);
     }
 
-    private Map<String, Object> enqueueMonitor(UUID userId, String taskType, String operation,
-                                                List<String> paths, boolean force) {
-        if (monitor == null) return Map.of("operation", operation, "status", "succeeded");
-        return monitor.submit(userId, operation, taskType, paths, force, "")
-                .map(submission -> monitorResult(operation, submission))
-                .orElseGet(() -> Map.of("operation", operation, "status", "succeeded"));
-    }
-
-    private Map<String, Object> monitorResult(String operation, IndexExecutionMonitor.Submission submission) {
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("operation", operation);
-        response.put("accepted", true);
-        response.put("created", submission.created());
-        response.put("status", submission.status());
-        response.put("task", submission.task());
-        response.put("monitor", Map.of("task_id", submission.taskId(), "status", submission.status()));
-        return response;
+    private Map<String, Object> indexVisionOne(UUID userId, String path, boolean force) {
+        Map<String, Object> described = vision.describeFile(userId, path);
+        Object description = described.get("description");
+        if (description == null) throw new IllegalStateException("vision description is empty");
+        try {
+            Map<String, Object> result = new LinkedHashMap<>(indexing.indexDescription(
+                    userId, path, objectMapper.writeValueAsString(description)));
+            result.put("description", description);
+            result.put("model", described.get("model"));
+            result.put("embedding", embeddings.embed(userId, List.of(path), 64, force));
+            return result;
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("vision description encoding failed", error);
+        }
     }
 
     private List<String> normalizePaths(List<String> paths) {

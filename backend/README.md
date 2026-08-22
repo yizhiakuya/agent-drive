@@ -1,6 +1,6 @@
 # Agent Drive Java Backend
 
-`backend/` 是 Agent Drive 的唯一后端目录。API 和任务 Worker 使用同一个 Java 21 Maven 工程；生产 API 监听 `127.0.0.1:8000`，Worker 不监听 HTTP。模块边界、数据所有权和安全约束见 [`docs/architecture.md`](../docs/architecture.md) 与 [`docs/security.md`](../docs/security.md)。
+`backend/` 是 Agent Drive 的唯一后端目录。当前只运行 Java 21 API；任务/Worker 运行链路已移除，索引等业务由 API 直接执行。生产 API 监听 `127.0.0.1:8000`。模块边界、数据所有权和安全约束见 [`docs/architecture.md`](../docs/architecture.md) 与 [`docs/security.md`](../docs/security.md)。
 
 ## 技术栈
 
@@ -12,7 +12,7 @@
 
 ## 本地运行
 
-本地需要可用的 PostgreSQL/pgvector 和对应环境变量。API、Worker 通过 `app.mode` 区分：
+本地需要可用的 PostgreSQL/pgvector 和对应环境变量。启动 API：
 
 ```bash
 # API
@@ -20,13 +20,9 @@ mvn spring-boot:run \
   -Dspring-boot.run.profiles=db,java-chat \
   -Dspring-boot.run.arguments="--app.mode=api"
 
-# Worker
-mvn spring-boot:run \
-  -Dspring-boot.run.profiles=db,java-chat \
-  -Dspring-boot.run.arguments="--app.mode=worker"
 ```
 
-生产使用 `deploy/agent-drive-java.service` 和 `deploy/agent-drive-java-worker.service`。两个进程共享 PostgreSQL、owner 文件根、`/etc/agent-drive-java/java.env` 和 HTTP(S) 代理配置；生产 API 禁止内嵌 Worker。
+生产使用 `deploy/agent-drive-java.service`，备份由独立 timer 执行。
 
 ## 测试与构建
 
@@ -52,10 +48,10 @@ java scripts/SessionView.java <SESSION_ID> --full
 - Cookie/Bearer 认证、设备登记/撤销、会话；
 - provider、embedding、vision 配置和模型 probe；
 - 文件列表、上传、预览、全文、回收站、dedupe 和 semantic search；
-- tasks/schedules、SSE、取消/重试、index/embed/vision/rebuild/cleanup/clear-vectors enqueue；
+- 直接索引/向量/视觉业务 API，失败返回结构化 `code/detail`；
 - Chat SSE、reasoning、工具轨迹、确认、replay 和自动化报告。
 
-向量和视觉接口只负责校验参数并创建 owner-scoped 任务；普通文档 Tika、chunk、Jina 文本向量，以及图片视觉描述 + Jina 视觉向量均由 Worker 执行，图片不走 OCR。`cleanup-index` 只清理失效索引，`clear-vectors` 才清空向量。Chat SSE 每个 `data` 都是 JSON object，模型只使用统一的 `backend_api`/`frontend_api` catalog。
+向量和视觉接口直接执行 owner-scoped 业务并返回逐项结果；普通文档 Tika、chunk、Jina 文本向量，以及图片视觉描述 + Jina 视觉向量均由 API 执行，图片不走 OCR。Provider 不可用时不会创建任务，会返回明确的 `code/detail`。Chat SSE 每个 `data` 都是 JSON object，模型只使用统一的 `backend_api`/`frontend_api` catalog，Agent 不暴露任务创建接口。
 
 ## 迁移资料
 
@@ -76,10 +72,9 @@ java -jar agent-drive-backend.jar \
 
 - artifact：`/opt/agent-drive-java/agent-drive-backend.jar`
 - API unit：`agent-drive-java.service`
-- Worker unit：`agent-drive-java-worker.service`
 - Backup timer：`agent-drive-java-backup.timer` → `/opt/agent-drive-java/backups/`
 - 数据根：`/opt/agent-drive-java/data`
 - Java 环境和随机密钥：`/etc/agent-drive-java/java.env`（0600）
 - PostgreSQL：独立 `agent-drive-java-postgres`，宿主只绑定 `127.0.0.1:15433`
 
-推荐从仓库根目录执行 `pwsh -File scripts/deploy.ps1 -Target all`。它会运行 Maven 门禁、安装 artifact、API/Worker/backup units、执行 systemd 校验、按 API → Worker 重启并检查 health。脚本不自动 commit/push。
+推荐从仓库根目录执行 `pwsh -File scripts/deploy.ps1 -Target all`。它会运行 Maven 门禁、安装 artifact、API/backup units、执行 systemd 校验并检查 health/readiness。脚本不自动 commit/push。

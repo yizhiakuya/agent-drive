@@ -209,8 +209,22 @@ public class BackendApiTool implements AgentTool {
         result.put("action", "call");
         result.put("operation", definition.operation());
         result.put("risk", definition.risk());
-        result.put("result", dispatcher.dispatch(definition, request, userId));
-        return json(result);
+        try {
+            result.put("result", dispatcher.dispatch(definition, request, userId));
+            return json(result);
+        } catch (RuntimeException error) {
+            // A business failure is a structured tool result, not a thrown tool protocol error.
+            // This lets the model stop and explain the actual operation failure instead of
+            // treating the call as an opaque provider/tool interruption.
+            int status = operationStatus(error);
+            result.put("ok", false);
+            result.put("status", status);
+            result.put("error", status == 400 ? "invalid_business_request" :
+                    status == 503 ? "provider_unavailable" : "operation_failed");
+            result.put("message", ChatLogSupport.message(error));
+            result.put("detail", ChatLogSupport.message(error));
+            return json(result);
+        }
     }
 
     /**
@@ -371,6 +385,14 @@ public class BackendApiTool implements AgentTool {
             result.put("suggestions", suggestions);
         }
         return json(result);
+    }
+
+    private int operationStatus(RuntimeException error) {
+        if (error instanceof com.agentdrive.files.FileStorageException storage) return storage.status();
+        if (error instanceof IllegalArgumentException) return 400;
+        String type = error.getClass().getName();
+        if (type.contains("Unavailable") || type.contains("Timeout")) return 503;
+        return 500;
     }
 
     /**

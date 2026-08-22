@@ -4,10 +4,8 @@ import com.agentdrive.agent.BackendApiDispatcher;
 import com.agentdrive.agent.BackendApiRequest;
 import com.agentdrive.agent.OperationCatalog;
 import com.agentdrive.agent.OperationDefinition;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Constructor;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,13 +50,18 @@ class ChatBackendApiOperationsTest {
     }
 
     @Test
-    void exposesTaskOperationsAsNormalDomainOperations() {
+    void doesNotExposeTaskCreationOperationsToAgent() {
         OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
 
         assertThat(catalog.find("DELETE /api/v1/index/stale")).isPresent();
         assertThat(catalog.find("DELETE /api/v1/index/vectors")).get()
                 .satisfies(operation -> assertThat(operation.summary()).contains("直接删除"));
+        assertThat(catalog.find("POST /api/v1/tasks/rebuild-index")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/tasks/embed-index")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/tasks/vision-index")).isEmpty();
         assertThat(catalog.find("POST /api/v1/tasks/clear-vectors")).isEmpty();
+        assertThat(catalog.find("GET /api/v1/tasks")).isEmpty();
+        assertThat(catalog.find("GET /api/v1/schedules")).isEmpty();
     }
 
     @Test
@@ -134,15 +137,6 @@ class ChatBackendApiOperationsTest {
         assertThatThrownBy(() -> new ChatBackendApiOperations().backendApiDispatcher(List.of(first, second)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("GET /api/v1/files");
-    }
-
-    @Test
-    void marksTheProductionScheduleHandlerConstructorForSpringInjection() {
-        assertThat(java.util.Arrays.stream(ChatBackendApiScheduleHandler.class.getDeclaredConstructors())
-                .filter(constructor -> constructor.isAnnotationPresent(Autowired.class))
-                .map(Constructor::getParameterCount)
-                .toList())
-                .containsExactly(2);
     }
 
     private BackendApiOperationHandler handlerFor(String operation) {

@@ -13,13 +13,12 @@ frontend/src/
 │   ├── files/           # FilePage、FilePanel、FilePreview、FileDetails
 │   ├── sessions/        # 会话列表和摘要刷新
 │   ├── settings/        # provider、embedding、Skill、设备、同步和系统状态
-│   ├── tasks/           # 任务列表、详情、状态流和自动化计划
 │   ├── workspace/       # 工作区面板收缩、拖拽调整和键盘分隔轨道
 │   ├── onboarding/      # web-only AI 配置引导
 │   ├── ui/              # shadcn/ui 基础控件
 │   └── PullToRefresh/   # Web/App 共用的下拉刷新
 └── lib/
-    ├── api/             # client、auth、chat、files、config、tasks 等 API 封装
+    ├── api/             # client、auth、chat、files、config、index 等 API 封装
     ├── native/          # ServerConfig、PhotoSync Capacitor 桥
     ├── store.ts         # zustand 全局状态和前端动作队列
     ├── events.ts        # 类型化窗口事件总线
@@ -32,13 +31,12 @@ frontend/src/
 
 `app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。启动检查把 401/403 与服务故障分开：前者进入 web 登录或原生重扫码，5xx、网络、JSON 解析和布尔字段契约错误进入保留凭据的 `server-error`，通过同一入口重新执行完整认证与配置检查。整页 Skeleton 只由初次 `authMode=loading` 控制；下拉刷新仍更新 store.loading，但工作区继续挂载，因此未发送草稿、SSE 和工具步骤不会丢失。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
 
-对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。完整会话侧栏在 `xl` 以下隐藏并改用抽屉，文件栏同样在 `xl` 以下隐藏，避免中等宽度挤压聊天 composer；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。设置页把 `SystemStatusCenter` 和 `AutomationCenter` 作为独立 section 挂载，分别负责并行健康探测和计划控制。
+对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。完整会话侧栏在 `xl` 以下隐藏并改用抽屉，文件栏同样在 `xl` 以下隐藏，避免中等宽度挤压聊天 composer；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。设置页的 `SystemStatusCenter` 负责并行健康探测和局部错误展示。
 
 跨组件刷新使用 `lib/events.ts` 中的类型化事件：
 
 - `agent-drive:refresh`：全局下拉刷新；
 - `agent-drive:files-changed`：文件 mutation 或索引入队后刷新文件列表；
-- `agent-drive:tasks-changed`：任务状态变化；
 - `agent-drive:toast`：跨页面反馈；
 - `agent-drive:unauthorized`：当前身份失效，回到登录/重扫码流程。
 
@@ -67,15 +65,13 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 
 `FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
 
-`FilePanel` 对目录列表和文件详情使用独立请求代次；`TaskPage` 的任务筛选列表、`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
+`FilePanel` 对目录列表和文件详情使用独立请求代次；`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
 
 `SkillsManager` 独立维护列表与详情请求代次，搜索和分页读取摘要，选中后才加载完整 instructions。内置 Skill 只读且始终启用；自定义 Skill 支持新建、编辑、启停和删除，mutation 后重拉当前查询。新建名称保存后不可改名，避免把 rename 隐式实现成跨记录覆盖。
 
-任务中心列表由 `listTasks` 提供顶层任务摘要，并通过 `has_more` 判断是否还有下一页；Worker 的 `progress` 事件触发列表刷新，已展开的任务随后重新读取 `getTaskDetail`，因此详情区能持续显示当前阶段、当前对象、计数/百分比、执行输入、结果、失败原因、时间/尝试次数和子任务进度。确定总量显示百分比，未知总量显示不定进度和阶段提示；详情请求使用独立请求代次，快速切换任务或卸载页面时，迟到详情不得覆盖当前展开任务；结构化 JSON 展示必须经过 `formatJson` 脱敏。
 
-任务页的“清理已结束”操作先二次确认，再调用 `POST /api/v1/tasks/clear-terminal`；它直接清理当前 owner 可安全回收的完成、失败和已取消记录，不受 30 天/2000 条自动维护策略限制。运行中、等待中、等待重试、取消中的任务，以及仍有活动后代的父任务由后端保护，前端展示实际清理数量。每个终态任务行同时提供二次确认的单条删除，父任务安全删除时 API 返回包含的子任务记录数量。
+索引、向量和视觉操作直接通过 `lib/api/index.ts` 调用业务 API；请求完成或失败都在当前文件详情中反馈，不再显示任务队列或“后台排队”状态。
 
-顶部任务抽屉复用任务类型、状态、资源和进度展示工具，只读取有限条待处理/需关注任务；抽屉刷新、关闭和重试都会递增请求代次，迟到响应不能恢复旧列表。读取失败必须提供可重复的重试入口，列表页负责完整历史、详情和分页。
 
 文件页支持：
 
@@ -88,13 +84,12 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 - revision、全文和向量状态查看；详情面板区分 `text` 文本向量与 `vision` 视觉描述向量，并读取 `/files/versions` 展示真实内容快照，通过 `/files/versions/restore` 恢复为新 revision；
 - embedding/vision 异步索引、上传、移动、复制、回收站和恢复。
 
-移动端预览与回收站是全屏覆盖层；小于 640px 时文件工具栏保持 3×2 触控网格，极窄屏隐藏品牌文字但保留无障碍名称。当前主视图是 tab state，不提供可分享的 URL 路由。上传队列状态只在当前页面生命周期内维护，服务端仍以发布成功的文件和任务事件为准；收藏/最近访问加载失败只影响当前集合，不清空其他列表状态。
+移动端预览与回收站是全屏覆盖层；小于 640px 时文件工具栏保持 3×2 触控网格，极窄屏隐藏品牌文字但保留无障碍名称。当前主视图是 tab state，不提供可分享的 URL 路由。上传队列状态只在当前页面生命周期内维护；收藏/最近访问加载失败只影响当前集合，不清空其他列表状态。
 
 ## 5. 状态与自动化中心
 
-`SystemStatusCenter` 并行读取 readiness（含数据库、Worker、存储和备份摘要）、任务总览、Provider 配置、embedding 状态、设备同步和磁盘信息。每个请求通过 `Promise.allSettled` 独立收敛，失败项显示局部告警，已成功的其他项继续渲染；状态行提供任务、Provider、同步和设备跳转入口，但不携带密钥或文件内容。
+`SystemStatusCenter` 并行读取 readiness（含数据库、存储和备份摘要）、Provider 配置、embedding 状态、设备同步和磁盘信息。每个请求通过 `Promise.allSettled` 独立收敛，失败项显示局部告警，已成功的其他项继续渲染；状态行提供 Provider、同步和设备跳转入口，但不携带密钥或文件内容。
 
-`AutomationCenter` 读取 owner 计划列表，显示启用状态、计划表达式、时区、下次/上次运行和失败原因。启停、立即运行和删除都使用 schedule API，按钮按计划名串行禁用，立即运行只派发任务并通过任务事件刷新任务中心。
 
 ## 6. 认证与原生桥
 

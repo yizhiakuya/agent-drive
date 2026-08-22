@@ -6,7 +6,7 @@ import {
   PendingFrontendAction,
 } from "./frontend-actions";
 
-type Tab = "chat" | "files" | "tasks" | "settings";
+type Tab = "chat" | "files" | "settings";
 export type AuthMode = "loading" | "setup" | "login" | "ready" | "rescan" | "server-error"; // rescan=原生 App 待扫码授权
 
 interface AppState {

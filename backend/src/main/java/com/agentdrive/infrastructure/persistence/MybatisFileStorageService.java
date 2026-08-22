@@ -5,8 +5,6 @@ import com.agentdrive.files.FileStorageService;
 import com.agentdrive.index.EmbeddingFingerprint;
 import com.agentdrive.index.EmbeddingRuntimeConfig;
 import com.agentdrive.index.SemanticSearchService;
-import com.agentdrive.outbox.OutboxStore;
-import com.agentdrive.tasks.TaskStore;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -92,92 +90,23 @@ public class MybatisFileStorageService implements FileStorageService {
     private final FileMapper mapper;
     private final Path root;
     private final long maxUploadBytes;
-    private final OutboxStore outbox;
     private final EmbeddingRuntimeConfig embeddingConfigs;
     private final SemanticSearchService semanticSearch;
-    private final TaskStore tasks;
     private final ReentrantLock mutationLock = new ReentrantLock();
 
-    /**
-     * 创建不发送文件变更 outbox 事件的服务。
-     * <p>构造过程仍会把根路径转为绝对规范路径并确保根目录存在；上传、移动等成功后的
-     * metadata/dedupe 更新不会通过该实例发布 {@code file.changed} 事件。</p>
-     * @param mapper 读写文件 metadata、revision、trash 和 dedupe 的 Mapper。
-     * @param root 所有 owner 目录的父路径。
-     * @param maxUploadBytes 单个上传临时文件允许发布的最大字节数。
-     * @throws FileStorageException 无法创建根目录时抛出。
-     */
     public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes) {
-        this(mapper, root, maxUploadBytes, null);
+        this(mapper, root, maxUploadBytes, null, null);
     }
 
-    /**
-     * 创建带文件变更 outbox 端口的服务。
-     * <p>根路径会在构造时创建；{@code outbox} 非空时，文件内容和 metadata 变更完成后由
-     * 本服务写入 {@code file.changed} 事件，供异步索引或同步流程消费。</p>
-     * @param mapper 读写文件 metadata、revision、trash 和 dedupe 的 Mapper。
-     * @param root 所有 owner 目录的父路径。
-     * @param maxUploadBytes 单个上传临时文件允许发布的最大字节数。
-     * @param outbox 内容变化后写入索引/同步事件的 outbox；为空时不发布事件。
-     * @throws FileStorageException 无法创建根目录时抛出。
-     */
-    public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes, OutboxStore outbox) {
-        this(mapper, root, maxUploadBytes, outbox, null);
-    }
-
-    /**
-     * 创建带索引状态查询的文件服务。
-     *
-     * <p>embedding 配置是可选依赖，以便纯文件测试和回滚工具仍可复用本服务；生产装配会
-     * 注入它来区分当前模型的有效向量与旧模型遗留向量。</p>
-     *
-     * @param mapper 读写文件 metadata、revision、trash 和 dedupe 的 Mapper。
-     * @param root 所有 owner 目录的父路径。
-     * @param maxUploadBytes 单个上传临时文件允许发布的最大字节数。
-     * @param outbox 内容变化后写入索引/同步事件的 outbox。
-     * @param embeddingConfigs 读取当前 owner embedding 配置的运行时端口，可为空。
-     */
+    /** Create a file service with the optional semantic search dependencies. */
     public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
-                                     OutboxStore outbox, EmbeddingRuntimeConfig embeddingConfigs) {
-        this(mapper, root, maxUploadBytes, outbox, embeddingConfigs, null);
-    }
-
-    /**
-     * 创建带语义搜索端口的文件服务。
-     *
-     * @param mapper 读写文件 metadata、revision、trash 和 dedupe 的 Mapper。
-     * @param root 所有 owner 目录的父路径。
-     * @param maxUploadBytes 单个上传临时文件允许发布的最大字节数。
-     * @param outbox 内容变化后写入索引/同步事件的 outbox。
-     * @param embeddingConfigs 读取当前 owner embedding 配置的运行时端口。
-     * @param semanticSearch owner-scoped pgvector 语义搜索服务。
-     */
-    public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
-                                     OutboxStore outbox, EmbeddingRuntimeConfig embeddingConfigs,
+                                     EmbeddingRuntimeConfig embeddingConfigs,
                                      SemanticSearchService semanticSearch) {
-        this(mapper, root, maxUploadBytes, outbox, embeddingConfigs, semanticSearch, null);
-    }
-
-    /**
-     * 创建带任务总览缓存失效通知的文件服务。
-     * @param mapper 读写文件 metadata、revision、trash 和 dedupe 的 Mapper。
-     * @param root 所有 owner 目录的父路径。
-     * @param maxUploadBytes 单个上传临时文件允许发布的最大字节数。
-     * @param outbox 内容变化后写入索引/同步事件的 outbox。
-     * @param embeddingConfigs 读取当前 owner embedding 配置的运行时端口。
-     * @param semanticSearch owner-scoped pgvector 语义搜索服务。
-     * @param tasks 文件变更后需要失效索引概览缓存的任务存储，可为空。
-     */
-    public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
-                                     OutboxStore outbox, EmbeddingRuntimeConfig embeddingConfigs,
-                                     SemanticSearchService semanticSearch, TaskStore tasks) {
         this.mapper = mapper;
         this.root = root.toAbsolutePath().normalize();
         this.maxUploadBytes = maxUploadBytes;
-        this.outbox = outbox;
         this.embeddingConfigs = embeddingConfigs;
         this.semanticSearch = semanticSearch;
-        this.tasks = tasks;
         try {
             Files.createDirectories(this.root);
         } catch (IOException error) {
@@ -1255,15 +1184,12 @@ public class MybatisFileStorageService implements FileStorageService {
      * @param idempotencyKey 事件去重键。
      */
     private void publishChange(UUID ownerId, String action, List<String> paths, String idempotencyKey) {
-        invalidateOverview(ownerId);
-        if (outbox == null || paths == null || paths.isEmpty()) return;
-        outbox.enqueue(ownerId, "file.changed", "file", paths.get(0), idempotencyKey,
-                mapOf("action", action, "paths", paths));
+        // Task/outbox execution was removed from the active product path. File mutations
+        // remain durable; indexing is an explicit synchronous business operation.
     }
 
-    /** 文件 metadata 或内容变化后使任务中心的索引统计立即失效。 */
+    /** Legacy no-op retained for old storage call sites; task overview is no longer active. */
     private void invalidateOverview(UUID ownerId) {
-        if (tasks != null) tasks.invalidateOverview(ownerId);
     }
 
     /**

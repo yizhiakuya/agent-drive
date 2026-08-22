@@ -52,7 +52,6 @@ vi.mock("@/components/files/FilePanel", () => ({ default: () => <div>file panel<
 vi.mock("@/components/files/FilePage", () => ({ default: () => <div>files</div> }));
 vi.mock("@/components/sessions/SessionList", () => ({ default: () => <div>sessions</div> }));
 vi.mock("@/components/settings/SettingsPage", () => ({ default: () => <div>settings</div> }));
-vi.mock("@/components/tasks/TaskPage", () => ({ default: () => <div>tasks</div> }));
 vi.mock("@/components/onboarding/Onboarding", () => ({ default: () => <div>onboarding</div> }));
 vi.mock("@/components/auth/LoginCard", () => ({
   default: ({ mode }: { mode: string }) => <div>login:{mode}</div>,
