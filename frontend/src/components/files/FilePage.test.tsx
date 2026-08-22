@@ -44,6 +44,7 @@ vi.mock("@/lib/api/files", () => ({
 
 const indexFiles = vi.fn();
 const indexVision = vi.fn();
+const vectorize = vi.fn();
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -67,6 +68,7 @@ function fileInfo(path: string, snippet: string) {
 vi.mock("@/lib/api/index", () => ({
   indexFiles: (...a: unknown[]) => indexFiles(...a),
   indexVision: (...a: unknown[]) => indexVision(...a),
+  vectorize: (...a: unknown[]) => vectorize(...a),
 }));
 
 // 预览面板依赖较重，测试关注文件操作主流程，直接桩掉。
@@ -102,8 +104,9 @@ describe("FilePage 核心操作", () => {
     getFileContent.mockResolvedValue({
       path: "合同.txt", name: "合同.txt", content: "完整合同内容", encoding: "UTF-8", size: 20, truncated: false,
     });
-    indexFiles.mockResolvedValue({ operation: "index.file", status: "succeeded", items: [] });
-    indexVision.mockResolvedValue({ operation: "index.vision", status: "succeeded", items: [] });
+    indexFiles.mockResolvedValue({ ok: true, operation: "index.file", status: "succeeded", items: [] });
+    indexVision.mockResolvedValue({ ok: true, operation: "index.vision", status: "succeeded", items: [] });
+    vectorize.mockResolvedValue({ ok: true, operation: "index.vectors", vectorized: true, embedded: 1 });
     emptyTrash.mockResolvedValue({ removed: 1 });
   });
 
@@ -556,5 +559,19 @@ describe("FilePage 核心操作", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /视觉索引/ })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /视觉索引/ }));
     await waitFor(() => expect(indexVision).toHaveBeenCalledWith(["合同.txt"]));
+  });
+
+  it("文本向量化先抽取正文再写入向量", async () => {
+    getFileInfo.mockResolvedValue({
+      path: "合同.txt", name: "合同.txt", size: 75, modified: 1750000000,
+      preview_kind: "text", snippet: "摘要", indexed: null,
+    });
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("合同.txt"));
+    await waitFor(() => expect(screen.getByTitle("为当前文件创建文本向量索引")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("为当前文件创建文本向量索引"));
+    await waitFor(() => expect(indexFiles).toHaveBeenCalledWith(["合同.txt"]));
+    expect(vectorize).toHaveBeenCalledWith(["合同.txt"]);
   });
 });

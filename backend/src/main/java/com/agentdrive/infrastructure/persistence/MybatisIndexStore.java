@@ -74,6 +74,15 @@ public class MybatisIndexStore implements IndexStore {
         return mapper.selectFiles(userId.toString(), prefix == null || prefix.isBlank() ? null : prefix);
     }
 
+    /** 将索引概览的有限窗口直接下推到 PostgreSQL。 */
+    @Override
+    public List<Map<String, Object>> files(UUID userId, String prefix, int limit) {
+        requireUser(userId);
+        int bounded = Math.max(1, Math.min(limit, 1001));
+        return mapper.selectFilesLimited(userId.toString(), prefix == null || prefix.isBlank() ? null : prefix,
+                bounded);
+    }
+
     /**
      * 执行 owner-scoped pgvector 语义搜索，并将返回上限限制在合理范围。
      *

@@ -1,6 +1,6 @@
 # 安全边界
 
-> 现行安全基线（2026-08-21）。服务面向个人单用户使用，但内部状态、文件路径、设备和任务都按 owner 隔离。认证、文件写入、Agent 工具和 Android 令牌是四条独立边界。
+> 现行安全基线（2026-08-22）。服务面向个人单用户使用，但内部状态、文件路径、设备和任务历史都按 owner 隔离。认证、文件写入、Agent 工具和 Android 令牌是四条独立边界。
 
 ## 1. 暴露面
 
@@ -13,11 +13,11 @@
         └── owner-scoped 本地文件系统
 ```
 
-- nginx 是唯一公网入口，API 只绑定 `127.0.0.1:8000`；Worker 不监听 HTTP。
+- nginx 是唯一公网入口，API 只绑定 `127.0.0.1:8000`；当前没有独立 Java Worker HTTP 入口。
 - nginx 覆写 `X-Forwarded-For` 为单个公网 `$remote_addr`；Java 只有在 TCP 对端为 loopback 且头值是单个合法 IP 字面量时才用它做认证限速，直连伪造头不能改变限速身份。
 - `/api/v1/health` 用于探活；认证初始化端点按认证规则公开；其他业务 API 默认需要当前 owner。
 - 静态资源和 `.well-known/assetlinks.json` 可公开读取，但 SPA fallback 不能越过 `frontend/out` 目录边界。
-- nginx 对公网上传限制 200 MB，Java API 还有 `max_upload_mb=300` 的直连兜底；API/Worker 只读取 `/etc/agent-drive/proxy.env` 中的 HTTP(S) 代理，并清除 `ALL_PROXY/all_proxy`。
+- nginx 对公网上传限制 200 MB，Java API 还有 `max_upload_mb=300` 的直连兜底；API 只读取 `/etc/agent-drive/proxy.env` 中的 HTTP(S) 代理，并清除 `ALL_PROXY/all_proxy`。
 
 ## 2. 认证模型
 
@@ -44,23 +44,23 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 上传请求体流式写入 0600 临时文件，服务端复算 MD5 后才发布；`noclobber` 使用原子 no-replace 语义，不走“先 exists 再写”。
 - 文本写入、覆盖、移动、目录复制和回收站使用 staging/backup、fsync 和 atomic move/link；storage lock 持有到 PostgreSQL 事务 afterCompletion，事务回滚或提交失败会恢复发布前磁盘状态。目录复制的 recovery marker 用于处理进程崩溃；数据库已提交后的隐藏 artifact 清理失败只记 warning，不能伪报已发布文件失败。
 - raw 只允许 PDF、常见图片、音频和视频 MIME 内联；HTML、SVG、文本及未知类型强制 `application/octet-stream` + attachment。媒体响应统一设置 `nosniff`、sandbox CSP、same-origin CORP、`no-referrer` 和 `private, no-store`，WebFlux 资源编码器不得按扩展名把活动内容重新推断为可执行类型。
-- 文件 metadata、revision、dedupe、全文和向量都按 owner 绑定；文件内容变化先失效旧索引，再由 Worker 异步重建。
+- 文件 metadata、revision、dedupe、全文和向量都按 owner 绑定；文件内容变化先失效旧索引，索引/视觉/向量由用户或 Agent 显式调用 `/api/v1/index` 直接执行。
 - 覆盖上传/文本写入前，旧普通文件复制到 owner 私有 `.versions` 目录并在 `file_version_snapshots` 登记；版本列表只返回当前 owner 且仍存在的快照元数据，恢复通过原子上传产生新 revision，不允许客户端直接读取快照路径。
 - Chat 文件上下文只接受当前 owner 的相对 POSIX 路径，后端重新读取文件/文件夹内容，不信任客户端传入正文；文件选择器附件写入 owner-scoped `聊天附件` 目录并沿用上传 MD5、路径和索引边界，剪贴板图片只允许受限 Base64 内联到支持图片的当前模型请求，不持久化。
-- 聊天 relay 和后台任务也按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件。`/chat/run` 入队 payload 禁止 confirmations 和 inline images，只允许服务端重新读取的相对 `file_context`，Worker 不接收 Cookie、Bearer 或 API key。
+- 聊天 relay 按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件，不提供跨进程后台任务入口。
 
 ## 4. Agent 和外部 provider
 
 - 模型只能使用稳定的 `backend_api`、`frontend_api`、只读 `read_skill` 和受限 plan 工具；调用后端必须先 discover，再使用登记的 `METHOD /api/v1/path` 或 `INTERNAL name`。
 - 自定义 Skill 按 owner 写入 PostgreSQL，只能经认证 REST/UI 或 red `backend_api` 修改；每次模型请求注入启用 Skill 的名称/说明目录；会话曾经成功 `read_skill` 的名称由服务端 transcript 记录，后续轮次从当前 owner registry 重新注入正文，客户端不能伪造已加载状态。`Agent/AGENT.md`、`USER.md`、`MEMORY.md` 通过 owner 文件服务读取并在进入模型/context transcript 前清理已知 key/Bearer 模式；context 历史只允许当前 owner 查询。Skill 内容是 Markdown 指令，不执行脚本、不加载任意文件/URL，也不能绕过 operation allowlist、owner 注入或 red 确认。内置 Skill 随应用发布且不可修改。
 - 模型不能提供任意 URL、Cookie、Bearer、Authorization、请求头、Python 入口、Java 类名、JavaScript 或 `eval`。
-- 当前 Request 的 Cookie/Bearer 只在进程内传给 backend dispatcher；Worker 通过 PostgreSQL 任务租约和 owner-scoped payload 执行，不接收模型提供的凭据。
+- 当前 Request 的 Cookie/Bearer 只在进程内传给 owner-scoped backend dispatcher；模型不能提供或覆盖任何凭据。
 - 文件引用只在前端把固定 `https://agent-drive.local/file` 哨兵地址解析为已登记的 `files.open` / `files.open_folder` 动作后执行；普通外链仍按 Markdown 链接展示，模型不能借引用语法提供任意 URL 或脚本。
 - GET 和只读 probe 自动执行；写操作按 operation 风险处理，ask/auto 模式下 red 操作需要签名确认、nonce TTL 和一次性消费，full 模式按用户明确授权直接执行但仍受 owner 和 allowlist 约束。非 red 操作按 session/tool/arguments 做确定性 replay。
-- 索引资源直接 API 与任务 API 共用 owner、路径和 revision 校验；直接清空向量只更新当前 owner 的 `document_chunks.embedding` 和 fingerprint，不删除原文件或正文。Agent 不获得绕过索引服务的数据库或文件系统入口。
+- 索引资源直接 API 共用 owner、路径和 revision 校验；直接清空向量只更新当前 owner 的 `document_chunks.embedding` 和 fingerprint，不删除原文件或正文。Agent 不获得绕过索引服务的数据库或文件系统入口。
 - provider API key 只在后端规定的配置边界相同且表单留空时复用：LLM 和 vision 比较 provider/base URL，embedding 还要求 model 相同；只改视觉模型可沿用同一地址的已存 key。密钥落库使用 AES-GCM，普通响应、日志、会话、工具轨迹和 `last_trace` 只保留掩码/脱敏值。设置页眼睛可通过专用 `POST .../api-key/reveal` 回显已存 key；端点仅接受 Web `SESSION`、拒绝设备 Bearer、强制 `Cache-Control: no-store`，且不在 Agent operation 目录中。SettingsPage 与 Onboarding 在协议/base URL 边界变化时清空对应 key，embedding 模型变化时同样清空；回显和模型目录请求使用代次校验，保存成功或重新加载脱敏配置后销毁前端状态中的明文 key。
 - API key、Cookie、Bearer、设备 token、query credential、完整消息和文件内容不进入普通日志。聊天日志记录 request ID、provider/model、工具 operation、状态和耗时；异常 message/cause 与 SSE error 先脱敏。
-- 自动化计划、立即运行要求当前 owner；公开 `/api/v1/ready` 只输出数据库/Worker/存储健康摘要和不含路径的备份摘要，备份状态不改变三项 readiness 判定。schedule 响应不包含 payload 中的凭据，立即运行只入队任务，不把 Worker handler 暴露给浏览器。
+- 自动化报告读取要求当前 owner；公开 `/api/v1/ready` 只输出数据库、owner 文件存储和不含路径的备份摘要，备份状态不改变 DB/存储两项 readiness 判定。
 
 ## 5. Android 令牌与权限
 
@@ -72,11 +72,11 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 
 ## 6. 日志、备份与恢复
 
-- API/Worker 使用统一 SLF4J/Logback，生产日志进入 systemd journal；聊天链路按 request ID 检索，敏感字段不写普通日志。
+- Java API 使用统一 SLF4J/Logback，生产日志进入 systemd journal；聊天链路按 request ID 检索，敏感字段不写普通日志。
 - `agent-drive-java-backup.timer` 每日调用 `scripts/backup-java.sh`，将 PostgreSQL dump、owner 文件根和 manifest 归档到 `/opt/agent-drive-java/backups/`，保留最近 7 份并生成 SHA-256 校验文件；环境密钥位于 0600 的 `/etc/agent-drive-java/java.env`，均不进 git。仓库不再提供旧 Python/SQLite 定时备份脚本。
 - 只有处理 legacy 恢复资料时才需要 SQLite snapshot；必须通过 SQLite backup API 生成一致快照，禁止直接打包活动 WAL 三件套。
 - 认证表、设备撤销状态和 PostgreSQL schema 异常时服务失败关闭，不得把错误当作“未初始化”重新开放首次设密。
-- 生产发布必须执行 `systemd-analyze verify`、API health、Worker active 和 Worker 心跳驱动的 `/api/v1/ready` 检查；推荐使用 `scripts/deploy.ps1`，它保留前一版静态目录和 JAR 作为回滚副本，readiness 未收敛会触发回滚。
+- 生产发布必须执行 `systemd-analyze verify`、API health 和 `/api/v1/ready` 检查；推荐使用 `scripts/deploy.ps1`，它保留前一版静态目录和 JAR 作为回滚副本，readiness 未收敛会触发回滚。
 
 ## 7. 当前明确边界
 

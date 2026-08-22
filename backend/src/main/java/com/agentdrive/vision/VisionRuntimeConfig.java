@@ -5,7 +5,7 @@ import java.util.UUID;
 
 /**
  * 提供按 owner 隔离的视觉模型运行时配置。
- * {@link Config#apiKey()} 只允许用于服务端 HTTP 请求，不得写入日志、任务结果或响应。
+ * {@link Config#apiKey()} 只允许用于服务端 HTTP 请求，不得写入日志、operation 结果或响应。
  */
 public interface VisionRuntimeConfig {
     /**

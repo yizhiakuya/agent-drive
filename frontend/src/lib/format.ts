@@ -79,7 +79,7 @@ export function maskSecretsJson(obj: unknown): string {
   );
 }
 
-/** 将任务 payload/result 脱敏后格式化为可阅读的 JSON；非 JSON 值保留可展示的降级文本。 */
+/** 将工具参数/结果脱敏后格式化为可阅读的 JSON；非 JSON 值保留可展示的降级文本。 */
 export function formatJson(value: unknown): string {
   if (value === null || value === undefined) return "";
   const masked = maskSecretsJson(value);

@@ -48,10 +48,10 @@ java scripts/SessionView.java <SESSION_ID> --full
 - Cookie/Bearer 认证、设备登记/撤销、会话；
 - provider、embedding、vision 配置和模型 probe；
 - 文件列表、上传、预览、全文、回收站、dedupe 和 semantic search；
-- 直接索引/向量/视觉业务 API，失败返回结构化 `code/detail`；
+- 直接索引/向量/视觉业务 API：文本先由 `/index/file` 抽取，再由 `/index/vectors` 写入向量；失败返回结构化 `ok/status/code/detail` 和逐项结果；
 - Chat SSE、reasoning、工具轨迹、确认、replay 和自动化报告。
 
-向量和视觉接口直接执行 owner-scoped 业务并返回逐项结果；普通文档 Tika、chunk、Jina 文本向量，以及图片视觉描述 + Jina 视觉向量均由 API 执行，图片不走 OCR。Provider 不可用时不会创建任务，会返回明确的 `code/detail`。Chat SSE 每个 `data` 都是 JSON object，模型只使用统一的 `backend_api`/`frontend_api` catalog，Agent 不暴露任务创建接口。
+向量和视觉接口直接执行 owner-scoped 业务并返回逐项结果；普通文档 Tika、chunk、Jina 文本向量，以及图片视觉描述 + Jina 视觉向量均由 API 执行，图片不走 OCR。Provider 不可用时返回明确的 `ok/status/code/detail`，不会伪报排队或成功。Chat SSE 每个 `data` 都是 JSON object，模型只使用统一的 `backend_api`/`frontend_api` catalog，Agent 不暴露任务创建接口。
 
 ## 迁移资料
 

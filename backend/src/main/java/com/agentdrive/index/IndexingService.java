@@ -11,7 +11,10 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.nio.charset.MalformedInputException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -89,8 +92,8 @@ public class IndexingService {
      * 把视觉模型生成的结构化 JSON 写入当前文件 revision 的全文索引。
      *
      * <p>视觉描述不是直接写入向量列，而是先作为稳定的文档正文切块；这样普通文本检索、
-     * 现有 embedding provider 和 revision 失效规则都能复用。调用方应在 Worker 中完成模型
-     * 调用后再进入本方法。</p>
+     * 现有 embedding provider 和 revision 失效规则都能复用。调用方应在视觉模型调用完成后
+     * 再进入本方法。</p>
      *
      * @param userId 文件归属用户 UUID。
      * @param path 图片相对路径。
@@ -114,7 +117,8 @@ public class IndexingService {
 
     /**
      * 遍历用户指定前缀下的全部文件并逐个重建全文索引。
-     * 单文件的成功与跳过结果分别计数；向量化由任务处理器在全文重建之后执行，本方法不会调用 embedding provider。
+     * 单文件的成功与跳过结果分别计数；向量化由独立的向量 operation 在全文重建之后执行，
+     * 本方法不会调用 embedding provider。
      *
      * @param userId 文件归属用户的 UUID。
      * @param prefix 可选的用户相对路径前缀；为 {@code null} 时处理用户全部文件。
@@ -158,8 +162,8 @@ public class IndexingService {
     }
 
     /**
-     * 清空 owner 全部文本/视觉向量，保留正文索引和原始文件，供后续任务重新生成。
-     * 该入口只由 Worker 调用，不在上传、聊天或普通文件请求内执行。
+     * 清空 owner 全部文本/视觉向量，保留正文索引和原始文件，供后续向量 operation 重新生成。
+     * 该入口不在上传、聊天或普通文件请求内隐式执行。
      *
      * @param userId 文件归属 owner。
      * @return 清空数量和稳定操作状态。
@@ -186,13 +190,7 @@ public class IndexingService {
                 || lower.endsWith(".py") || lower.endsWith(".yaml") || lower.endsWith(".yml")
                 || lower.endsWith(".log") || lower.endsWith(".properties");
         if (!plainText) return extractWithTika(source, path);
-        try {
-            return Files.readString(source, StandardCharsets.UTF_8);
-        } catch (MalformedInputException error) {
-            return new String(readLimited(source), StandardCharsets.UTF_8);
-        } catch (IOException error) {
-            throw new IllegalStateException("cannot extract text from " + path, error);
-        }
+        return decodeText(readLimited(source));
     }
 
     /**
@@ -234,6 +232,22 @@ public class IndexingService {
         } catch (IOException error) {
             throw new IllegalStateException("cannot read file for indexing", error);
         }
+    }
+
+    /** 严格按 UTF-8、GBK、ISO-8859-1 顺序解码，禁止替换字符伪装成成功抽取。 */
+    private String decodeText(byte[] bytes) {
+        for (Charset charset : List.of(StandardCharsets.UTF_8, Charset.forName("GBK"), StandardCharsets.ISO_8859_1)) {
+            try {
+                return charset.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(bytes))
+                        .toString();
+            } catch (CharacterCodingException ignored) {
+                // Try the next explicit legacy encoding.
+            }
+        }
+        throw new IllegalStateException("text encoding is not supported");
     }
 
     /**

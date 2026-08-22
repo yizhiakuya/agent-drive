@@ -58,7 +58,7 @@ public final class IndexController {
         return authenticated(exchange, owner -> index.indexFiles(owner, requiredPaths(request), request != null && request.force()));
     }
 
-    /** 直接识别、写入视觉描述并向量化图片；多图片由任务模块记录执行状态。 */
+    /** 直接识别、写入视觉描述并向量化图片；多图片返回逐项同步结果。 */
     @PutMapping("/vision")
     public Mono<Map<String, Object>> indexVision(@RequestBody(required = false) IndexRequest request,
                                                   ServerWebExchange exchange) {

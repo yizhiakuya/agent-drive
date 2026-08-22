@@ -40,8 +40,8 @@ import java.util.concurrent.Callable;
  * <p>所有端点按 owner 读取或写入配置。LLM API key 和 embedding API key 只以
  * {@link LlmApiKeyCipher} 加密结果持久化，普通配置响应只返回掩码；专用回显端点仅接受
  * Web 会话并禁止缓存。当请求 key 留空时，仅在 provider 与 base URL 都和已存配置一致时
- * 复用旧 key。配置保存会先探测 Provider，embedding 保存成功后还会探测连接并入队索引重建，
- * 实际重建由 Worker 执行。
+ * 复用旧 key。配置保存会先探测 Provider，embedding 保存成功后只保存配置；索引重建由用户
+ * 或 Agent 显式调用索引 operation。
  */
 @RestController
 @Profile({"java-auth", "java-chat"})
@@ -72,7 +72,7 @@ public final class ProviderConfigController {
                                     LlmApiKeyCipher keyCipher,
                                     WebRequestPrincipalResolver principalResolver,
                                     com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
-        this(configs, keyCipher, principalResolver, objectMapper, null, null, new EmbeddingProbeClient(objectMapper));
+        this(configs, keyCipher, principalResolver, objectMapper, null, new EmbeddingProbeClient(objectMapper));
     }
 
     /**
@@ -90,18 +90,7 @@ public final class ProviderConfigController {
                                     WebRequestPrincipalResolver principalResolver,
                                     com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                                     EmbeddingConfigStore embeddingConfigs) {
-        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs, null,
-                new EmbeddingProbeClient(objectMapper));
-    }
-
-    /** Compatibility constructor for callers that still pass the removed task store. */
-    public ProviderConfigController(LlmProviderConfigService configs,
-                                    LlmApiKeyCipher keyCipher,
-                                    WebRequestPrincipalResolver principalResolver,
-                                    com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-                                    EmbeddingConfigStore embeddingConfigs,
-                                    Object ignoredTasks) {
-        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs, ignoredTasks,
+        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs,
                 new EmbeddingProbeClient(objectMapper));
     }
 
@@ -113,7 +102,6 @@ public final class ProviderConfigController {
      * @param principalResolver 请求 owner 解析器。
      * @param objectMapper Provider 响应 JSON 映射器。
      * @param embeddingConfigs embedding 配置存储。
-     * @param ignoredTasks legacy task store, ignored now that task system is removed.
      * @param embeddingProbe embedding 连接探测器。
      */
     ProviderConfigController(LlmProviderConfigService configs,
@@ -121,7 +109,6 @@ public final class ProviderConfigController {
                              WebRequestPrincipalResolver principalResolver,
                              com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                              EmbeddingConfigStore embeddingConfigs,
-                             Object ignoredTasks,
                              EmbeddingProbeClient embeddingProbe) {
         this.configs = configs;
         this.keyCipher = keyCipher;
@@ -189,7 +176,7 @@ public final class ProviderConfigController {
      *
      * @param payload 包含 provider、base URL、API key 和模型的请求体；provider 目前只接受 jina。
      * @param exchange 用于解析配置 owner 的请求上下文。
-     * @return 保存结果、连接探测结果以及成功时创建的索引重建任务。
+     * @return 保存结果和连接探测结果。
      */
     @PutMapping("/embeddings")
     public Mono<Map<String, Object>> embeddings(@RequestBody EmbeddingRequest payload,
@@ -305,7 +292,7 @@ public final class ProviderConfigController {
     }
 
     /**
-     * 为内部调用保存 embedding 配置，并沿用 HTTP API 的测试和重建入队语义。
+     * 为内部调用保存 embedding 配置，并沿用 HTTP API 的测试语义。
      *
      * @param userId 配置所属用户 UUID。
      * @param provider embedding Provider，目前必须为 {@code jina}。

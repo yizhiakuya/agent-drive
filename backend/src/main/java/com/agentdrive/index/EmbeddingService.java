@@ -3,7 +3,6 @@ package com.agentdrive.index;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.agentdrive.net.HttpClientSupport;
-import com.agentdrive.progress.TaskProgressReporter;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -24,7 +23,7 @@ import java.util.UUID;
 /**
  * 把索引文本块发送给 embedding provider 并把向量写回索引的服务接口。
  * 调用以用户为边界，可选择全部待处理文件或指定路径；实现必须用当前 provider 配置指纹筛选 chunks，
- * 并把外部请求放在任务 Worker 中执行，而不是阻塞 HTTP/Agent 请求。
+ * 外部请求由 API 的 bounded-elastic 边界执行，避免阻塞 WebFlux 事件循环。
  */
 public interface EmbeddingService {
     /**
@@ -73,16 +72,6 @@ public interface EmbeddingService {
     Map<String, Object> embed(UUID userId, List<String> paths, int limit, boolean force);
 
     /**
-     * 执行向量化并报告批次进度；默认实现保持外部实现与旧调用方兼容。
-     *
-     * @param userId embedding 配置所属用户的 UUID。
-     * @param paths 要处理的用户相对文件路径列表；空列表表示全部文件。
-     * @param limit 每批最多处理的 chunk 数。
-     * @param force 是否通过稳定游标包含并覆盖目标范围的当前向量。
-     * @param progress 当前任务进度回调，可为空。
-     * @return 向量化结果及处理统计。
-     */
-    /**
      * 为语义搜索问题生成查询向量。
      * Provider 请求必须使用 {@code retrieval.query} 任务类型，并返回与文档 embedding
      * 相同模型配置的 fingerprint，避免跨模型混合检索。
@@ -104,6 +93,7 @@ public interface EmbeddingService {
     final class Jina implements EmbeddingService {
         private static final Duration TIMEOUT = Duration.ofSeconds(30);
         private static final int MAX_BATCH_SIZE = 64;
+        private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
         private final EmbeddingRuntimeConfig configs;
         private final IndexStore index;
         private final ObjectMapper objectMapper;
@@ -182,101 +172,6 @@ public interface EmbeddingService {
         }
 
         /**
-         * 执行向量化循环并在每个 provider 批次前后报告阶段信息。
-         * 总 chunk 数由索引查询动态产生，因此处理期间使用不定总量，完成时再落为确定计数。
-         *
-         * @param userId 文件归属用户的 UUID。
-         * @param paths 要筛选的用户相对路径列表。
-         * @param limit 每轮查询上限，最终会限制在 1 到 64 之间。
-         * @param force 是否包含并逐批覆盖所选文件已有向量。
-         * @param progress 当前任务进度回调，可为空。
-         * @return provider 调用和索引写回的累计结果。
-         */
-        public Map<String, Object> embedWithProgressRemoved(UUID userId, List<String> paths, int limit, boolean force,
-                                         Object progress) {
-            TaskProgressReporter reporter = TaskProgressReporter.noop();
-            Optional<EmbeddingRuntimeConfig.Config> configured = configs.find(userId);
-            if (configured.isEmpty()) {
-                reporter.report(0, 0, "向量化未执行：未配置向量服务");
-                return Map.of("vectorized", false, "reason", "embedding_not_configured");
-            }
-            EmbeddingRuntimeConfig.Config config = configured.get();
-            String apiKey = config.apiKey();
-            if (apiKey.isBlank()) {
-                reporter.report(0, 0, "向量化未执行：未配置向量服务");
-                return Map.of("vectorized", false, "reason", "embedding_not_configured");
-            }
-            String fingerprint = fingerprint(config);
-            List<String> selectedPaths = paths == null ? List.of() : List.copyOf(paths);
-            String selectionFingerprint = fingerprint;
-            int batchSize = Math.max(1, Math.min(limit, MAX_BATCH_SIZE));
-            int embedded = 0;
-            int batches = 0;
-            UUID afterChunkId = null;
-            reporter.report(0, 0, selectedPaths.isEmpty()
-                    ? "向量化：准备处理全部文本块"
-                    : "向量化：准备处理 " + selectedPaths.size() + " 个文件");
-            try {
-                while (true) {
-                    List<Map<String, Object>> chunks;
-                    if (force) {
-                        chunks = index.chunks(userId, selectionFingerprint, selectedPaths,
-                                true, afterChunkId, batchSize);
-                    } else {
-                        chunks = selectedPaths.isEmpty()
-                                ? index.chunks(userId, selectionFingerprint, batchSize)
-                                : index.chunks(userId, selectionFingerprint, selectedPaths, batchSize);
-                    }
-                    if (chunks.isEmpty()) {
-                        reporter.report(embedded, embedded, embedded == 0
-                                ? "向量化：没有待处理文本块"
-                                : "向量化：已完成，共写入 " + embedded + " 个文本块");
-                        return Map.of(
-                                "vectorized", true,
-                                "embedded", embedded,
-                                "batches", batches,
-                                "selected_files", selectedPaths.size(),
-                                "fingerprint", fingerprint
-                            );
-                    }
-                    reporter.report(embedded, 0, "向量化：正在处理第 " + (batches + 1)
-                            + " 批（" + chunks.size() + " 个文本块）");
-                    Map<String, Object> batch = embedBatch(userId, config, apiKey, chunks, fingerprint);
-                    if (!Boolean.TRUE.equals(batch.get("vectorized"))) {
-                        reporter.report(embedded, 0, "向量化失败：" + batch.get("reason"));
-                        Map<String, Object> result = new LinkedHashMap<>(batch);
-                        result.put("embedded", embedded + number(batch.get("embedded")));
-                        result.put("batches", batches);
-                        result.put("selected_files", selectedPaths.size());
-                        return result;
-                    }
-                    int batchEmbedded = number(batch.get("embedded"));
-                    if (batchEmbedded != chunks.size()) {
-                        return failure("embedding_persist_mismatch", embedded + batchEmbedded,
-                                batches + 1, selectedPaths.size(), fingerprint);
-                    }
-                    embedded += batchEmbedded;
-                    batches++;
-                    if (force) {
-                        afterChunkId = UUID.fromString(String.valueOf(chunks.get(chunks.size() - 1).get("id")));
-                    }
-                    reporter.report(embedded, 0, "向量化：第 " + batches + " 批完成，已写入 "
-                            + embedded + " 个文本块");
-                }
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                reporter.report(embedded, 0, "向量化已中断");
-                return failure("embedding_interrupted", embedded, batches, selectedPaths.size(), fingerprint);
-            } catch (Exception error) {
-                reporter.report(embedded, 0, "向量化失败：" + safeMessage(error));
-                Map<String, Object> result = failure("embedding_failed", embedded, batches,
-                        selectedPaths.size(), fingerprint);
-                result.put("error", safeMessage(error));
-                return result;
-            }
-        }
-
-        /**
          * 调用 Jina 生成一个 retrieval.query 向量供 pgvector 检索。
          * 该方法只读取 owner 的运行时配置，不写入 chunk，避免搜索请求改变索引状态。
          *
@@ -306,7 +201,7 @@ public interface EmbeddingService {
                         .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                         .build();
                 HttpResponse<String> response = client.send(request,
-                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                        HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     throw new IllegalStateException("embedding_query_provider_http_" + response.statusCode());
                 }
@@ -357,7 +252,7 @@ public interface EmbeddingService {
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> response = client.send(request,
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 return Map.of("vectorized", false, "reason", "provider_http_" + response.statusCode(), "embedded", 0);
             }
@@ -466,8 +361,8 @@ public interface EmbeddingService {
         }
 
         /**
-         * 提取可用于任务结果的异常说明；没有消息时退回异常类名。
-         * 该方法不拼接堆栈，避免把底层实现细节直接放进任务响应。
+         * 提取可用于索引 operation 结果的异常说明；没有消息时退回异常类名。
+         * 该方法不拼接堆栈，避免把底层实现细节直接放进响应。
          *
          * @param error 捕获到的异常。
          * @return 非空错误说明或异常简单类名。

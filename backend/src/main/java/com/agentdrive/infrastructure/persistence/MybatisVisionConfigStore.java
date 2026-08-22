@@ -15,7 +15,7 @@ import java.util.UUID;
  * 把视觉模型配置以 owner preference JSON 持久化。
  *
  * <p>JSON 中只保存 Base64 编码的 AES-GCM 密文；配置损坏会直接失败，而不会静默回退成
- * 未配置，避免 Worker 在错误模型或错误凭据下运行。</p>
+ * 未配置，避免视觉 operation 在错误模型或错误凭据下执行。</p>
  */
 public final class MybatisVisionConfigStore implements VisionConfigStore {
     private final VisionConfigMapper mapper;

@@ -33,6 +33,8 @@ cd backend
 mvn -q test
 mvn -q -DskipTests package
 
+# 真实持久化门禁必须设置 AGENT_DRIVE_JDBC_TEST_URL，并启用 db profile；未设置时集成用例会被跳过，不能记为完整通过。
+
 # 前端
 cd ..\frontend
 npm run lint
@@ -50,7 +52,7 @@ gradlew.bat testDebugUnitTest
 rg -n "console\.|TODO|FIXME" frontend/src backend/src -g "*.ts" -g "*.tsx" -g "*.java" | rg -v test
 ```
 
-生产 smoke 由 `scripts/deploy.ps1` 完成：它负责前端/Java 构建、静态资源原子替换、systemd unit 校验、API → Worker 重启和 health 检查。
+生产 smoke 由 `scripts/deploy.ps1` 完成：它负责前端/Java 构建、静态资源原子替换、systemd unit 校验、API 重启和 health/readiness 检查。
 
 ## 3. 报告模板
 
@@ -79,10 +81,10 @@ rg -n "console\.|TODO|FIXME" frontend/src backend/src -g "*.ts" -g "*.tsx" -g "*
 
 ## 4. 当前基线快照
 
-> 审计基线：2026-08-19。重大架构或技术栈变更时更新此处，并同步 [`AGENTS.md`](../AGENTS.md)。
+> 审计基线：2026-08-22。重大架构或技术栈变更时更新此处，并同步 [`AGENTS.md`](../AGENTS.md)。
 
-- **架构**：Java 21 + Spring Boot/WebFlux API 与独立 PostgreSQL Worker；Next.js 16 静态导出前端；Capacitor 7 Android 壳。详见 [`architecture.md`](architecture.md)。
+- **架构**：Java 21 + Spring Boot/WebFlux API、PostgreSQL/pgvector；Next.js 16 静态导出前端；Capacitor 7 Android 壳。当前没有 Java 任务 Worker，索引/视觉/向量由业务 API 直接执行。详见 [`architecture.md`](architecture.md)。
 - **技术栈**：Java 21、Spring Modulith、LangChain4j、MyBatis-Plus、Flyway、PostgreSQL/pgvector、Tika、视觉模型/Jina；TypeScript 5、React 19、Tailwind 4、shadcn/ui、Vitest；AndroidX Security Crypto/WorkManager。
 - **当前达标项**：backend_api 已按 catalog/router 和领域 handler 分层；聊天流已拆出事件、状态和帧模块；前端文件页有请求代次保护；文件列表使用有界 top-k 和批量 metadata upsert；Agent 工具不捕获 JVM `Error`；锁序、原子发布、失败关闭和数据库集成测试已纳入门禁。
 - **主要复杂度热点**：文件存储、Agent runtime、文件页、聊天流和 Android `SyncEngine`。后续重构应以测试和行为不变量为前提，不在质量分析阶段直接改写。
-- **生产状态**：Java API/Worker 已运行，生产入口为 nginx `13311`；旧 Python source/unit 不属于运行时，旧资料只在 fixture/cutover backup 中保留。
+- **生产状态**：Java API 已运行，生产入口为 nginx `13311`；旧 Python source/unit 和历史任务表不属于运行时，旧资料只在 fixture/cutover backup 中保留。

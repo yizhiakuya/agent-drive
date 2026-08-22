@@ -109,6 +109,19 @@
         ORDER BY path ASC
     </select>
 
+    <select id="selectFilesLimited" resultType="map">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
+        SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256
+        FROM files
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND is_dir = false
+          AND (#{prefix, jdbcType=VARCHAR} IS NULL OR path = #{prefix, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+        ORDER BY path ASC
+        LIMIT #{limit}
+    </select>
+
     <select id="semanticSearch" resultType="map">
         <bind name="escapedPrefix"
               value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />

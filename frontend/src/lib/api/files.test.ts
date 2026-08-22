@@ -17,7 +17,6 @@ describe("uploadFile", () => {
   it("使用认证 multipart 请求并返回上传结果", async () => {
     const payload = {
       uploaded: { path: "照片/a.txt", size: 3 },
-      indexed: { task_id: "t1", status: "queued" },
     };
     const fetchMock = vi.fn().mockResolvedValue(response(payload));
     global.fetch = fetchMock;
@@ -104,7 +103,7 @@ describe("文件生产力列表 API", () => {
       upload = { onprogress: null as ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | null };
       status = 201;
       statusText = "Created";
-      responseText = JSON.stringify({ uploaded: { path: "photo.jpg", size: 10 }, indexed: null });
+      responseText = JSON.stringify({ uploaded: { path: "photo.jpg", size: 10 } });
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
       onabort: (() => void) | null = null;

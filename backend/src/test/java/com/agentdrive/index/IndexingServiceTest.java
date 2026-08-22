@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -89,5 +90,27 @@ class IndexingServiceTest {
         verify(index).replaceDocument(eq(owner), eq(fileId), eq(7L),
                 eq(IndexStore.VISION_DOCUMENT_TYPE), eq("{\"summary\":\"receipt\"}"),
                 eq("vision-description-v1"), any(), eq("vision-chunk-v1"));
+    }
+
+    @Test
+    void decodesGbkTextWithoutReplacementCharacters() throws Exception {
+        FileStorageService files = mock(FileStorageService.class);
+        IndexStore index = mock(IndexStore.class);
+        UUID owner = UUID.randomUUID();
+        UUID fileId = UUID.randomUUID();
+        Path source = temp.resolve("legacy.txt");
+        Files.write(source, "中文内容".getBytes(Charset.forName("GBK")));
+        when(index.file(owner, "legacy.txt")).thenReturn(Map.of(
+                "id", fileId.toString(), "size_bytes", Files.size(source), "revision", 1L
+        ));
+        when(files.fileForRead(owner, "legacy.txt")).thenReturn(source);
+
+        Map<String, Object> result = new IndexingService(files, index).indexFile(owner, "legacy.txt");
+
+        assertThat(result).containsEntry("indexed", true);
+        org.mockito.ArgumentCaptor<String> content = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(index).replaceDocument(eq(owner), eq(fileId), eq(1L), content.capture(),
+                eq("java-tika-v1"), any(), eq("java-chunk-v1"));
+        assertThat(content.getValue()).isEqualTo("中文内容").doesNotContain("\uFFFD");
     }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { dispatchChatStreamEvent } from "./chat-stream-dispatch";
+import { dispatchChatStreamEvent, isFileMutationTrace } from "./chat-stream-dispatch";
 
 function handlers() {
   return {
@@ -56,5 +56,18 @@ describe("dispatchChatStreamEvent", () => {
     expect(target.frame.beginToolStep).toHaveBeenCalledTimes(1);
     expect(target.setMessages).toHaveBeenCalledTimes(2);
     expect(target.setPlan).toHaveBeenCalledWith([{ step: "读取文件", status: "in_progress" }]);
+  });
+
+  it("recognizes current backend_api mutation operations for file refresh", () => {
+    expect(isFileMutationTrace({
+      tool: "backend_api",
+      output: "{}",
+      parsed: { operation: "POST /api/v1/files/mkdir", ok: true },
+    })).toBe(true);
+    expect(isFileMutationTrace({
+      tool: "backend_api",
+      output: "{}",
+      parsed: { operation: "GET /api/v1/files", ok: true },
+    })).toBe(false);
   });
 });

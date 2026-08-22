@@ -35,7 +35,7 @@ public interface IndexStore {
                     missingVectors, staleVectors, 0, 0, 0, 0);
         }
         /**
-         * 转为任务概览 API 使用的 snake_case 字段。
+         * 转为索引概览 API 使用的 snake_case 字段。
          * @return 不包含敏感信息的统计映射。
          */
         public Map<String, Object> asMap() {
@@ -56,7 +56,7 @@ public interface IndexStore {
 
     /**
      * 全盘读取 owner 当前 revision 的索引和向量状态。
-     * 该查询只用于任务总览，调用方负责短时间缓存，不能放入文件列表或上传请求路径。
+     * 该查询只用于索引总览，调用方负责短时间缓存，不能放入文件列表或上传请求路径。
      *
      * @param userId 文件归属 owner 的 UUID。
      * @param fingerprint 当前 embedding 配置指纹；为空时不把任何已存向量计为有效。
@@ -81,6 +81,20 @@ public interface IndexStore {
      * @return 按存储顺序返回的文件元数据列表。
      */
     List<Map<String, Object>> files(UUID userId, String prefix);
+
+    /**
+     * 分页读取索引文件；实现应把 limit 下推到数据库，避免概览请求先加载整棵文件树。
+     * 默认实现保留旧适配器兼容性，生产 MyBatis 实现提供真正的 SQL 限制。
+     *
+     * @param userId 文件归属 owner 的 UUID
+     * @param prefix 可选路径前缀
+     * @param limit 最多读取的行数
+     * @return 按路径排序的有限文件列表
+     */
+    default List<Map<String, Object>> files(UUID userId, String prefix, int limit) {
+        int bounded = Math.max(1, Math.min(limit, 1001));
+        return files(userId, prefix).stream().limit(bounded).toList();
+    }
 
     /**
      * 使用当前 embedding fingerprint 在 owner 范围内执行语义检索。
@@ -140,7 +154,7 @@ public interface IndexStore {
 
     /**
      * 清空 owner 当前所有文档 chunk 的向量值，但保留文本/视觉描述正文和文件原文。
-     * 该操作只应由后台任务调用，避免把 owner 全量更新放进聊天请求。
+     * 该操作由显式索引业务调用，避免把 owner 全量更新隐式绑定到文件 mutation。
      *
      * @param userId 文件归属 owner。
      * @return 实际清空向量的 chunk 数量。

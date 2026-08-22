@@ -66,7 +66,7 @@ public final class ApiExceptionHandler {
         return response(HttpStatus.BAD_REQUEST.value(), "invalid_argument", safeDetail(error.getMessage(), "参数无效"));
     }
 
-    /** 视觉 provider 在入队前置检查失败，提示用户修正配置而不是重试空队列。 */
+    /** 视觉 provider 在 operation 开始前置检查失败，提示用户修正配置。 */
     @ExceptionHandler(VisionProviderUnavailableException.class)
     public ResponseEntity<Map<String, Object>> visionProvider(VisionProviderUnavailableException error) {
         return response(HttpStatus.SERVICE_UNAVAILABLE.value(), "vision_provider_unavailable",

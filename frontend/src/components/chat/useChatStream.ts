@@ -2,11 +2,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelChatRun, chatReconnect, chatRunActive, chatStream } from "@/lib/api/chat";
 import { getFrontendCapabilities, normalizeFrontendAction } from "@/lib/frontend-actions";
+import { emitFilesChanged } from "@/lib/events";
 import { useAppStore } from "@/lib/store";
 import type { PlanStep } from "./PlanCard";
 import { createChatStreamFrame, type ChatStreamFrame } from "./chat-stream-frame";
 import { parseChatStreamEvent } from "./chat-stream-events";
-import { dispatchChatStreamEvent } from "./chat-stream-dispatch";
+import { dispatchChatStreamEvent, isFileMutationTrace } from "./chat-stream-dispatch";
 import { buildChatHistory, removeEmptyAssistantMessages } from "./chat-stream-state";
 import type { ContextUsage, InlineImage, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
 
@@ -166,6 +167,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (!streamEvent) return;
         const visible = isVisible(run);
         if (!visible) run.detached = true;
+        // 文件变更通知与当前会话视图解耦；切换会话时后台运行也必须刷新文件栏。
+        if (streamEvent.type === "tool_trace" && isFileMutationTrace(streamEvent.trace)) {
+          emitFilesChanged();
+        }
         if (streamEvent.type === "text" || streamEvent.type === "reasoning") {
           dispatchChatStreamEvent(streamEvent, eventHandlers);
         } else if (streamEvent.type === "frontend_action") {
@@ -270,9 +275,12 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         };
         return chatReconnect(key, (event, data) => {
           if (!run || streamsRef.current.get(key) !== run) return;
-          const streamEvent = parseChatStreamEvent(event, data);
-          if (!streamEvent) return;
-          if (streamEvent.type === "frontend_action") {
+           const streamEvent = parseChatStreamEvent(event, data);
+           if (!streamEvent) return;
+           if (streamEvent.type === "tool_trace" && isFileMutationTrace(streamEvent.trace)) {
+             emitFilesChanged();
+           }
+           if (streamEvent.type === "frontend_action") {
             eventHandlers.onFrontendAction(streamEvent.data);
           } else {
             dispatchChatStreamEvent(streamEvent, eventHandlers);

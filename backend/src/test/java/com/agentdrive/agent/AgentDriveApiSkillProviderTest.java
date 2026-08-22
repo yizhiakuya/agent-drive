@@ -17,7 +17,7 @@ class AgentDriveApiSkillProviderTest {
 
         assertThat(instructions)
                 .contains("discover", "Registered operations", "POST /api/v1/tasks/clear-vectors",
-                        "queued", "不得主动调用任务创建/入队接口", "真实原因")
+                        "不得主动调用任务创建/入队接口", "真实原因")
                 .doesNotContain("execution_mode", "必须走后台任务", "系统规定的后台任务");
     }
 }

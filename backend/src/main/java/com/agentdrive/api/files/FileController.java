@@ -35,7 +35,7 @@ import java.util.function.Function;
  *
  * <p>文件路径和存储安全由 {@link FileStorageService} 统一校验；控制器只负责解析
  * HTTP 参数、解析用户主体并把同步文件系统操作移到 bounded-elastic。上传先把
- * multipart 内容写入临时文件，再由存储服务校验 MD5、执行原子发布和入队索引，
+ * multipart 内容写入临时文件，再由存储服务校验 MD5 并执行原子发布；索引由显式业务 operation 执行，
  * 最终无论成功或失败都会清理临时文件。
  */
 @RestController
@@ -345,7 +345,7 @@ public final class FileController {
      * 接收 multipart 文件并响应 {@code POST /api/v1/files/upload}。
      *
      * <p>请求体先流式写入受保护的临时文件，随后由存储服务重新计算 MD5、按
-     * {@code noclobber} 规则原子发布，并登记索引/入队后续任务；临时文件在终止信号
+     * {@code noclobber} 规则原子发布，并登记文件 metadata；临时文件在终止信号
      * 到来时清理，客户端提供的 MD5 不直接作为可信结果。
      *
      * @param file multipart 中名为 {@code file} 的上传内容。

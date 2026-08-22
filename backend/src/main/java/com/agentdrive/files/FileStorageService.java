@@ -299,7 +299,7 @@ public interface FileStorageService {
     /**
      * 删除指定保留期之前的回收站条目，并保留仍在保留期内的内容。
      *
-     * <p>该接口供每日维护任务使用，和 {@link #emptyTrash(UUID)} 的语义不同：
+     * <p>该接口供显式维护命令使用，和 {@link #emptyTrash(UUID)} 的语义不同：
      * 它只处理 {@code deleted_at} 早于截止时间的条目，并继续按 revision 检查保护
      * 新建同路径文件。</p>
      *

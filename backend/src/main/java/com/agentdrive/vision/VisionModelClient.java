@@ -27,6 +27,7 @@ import java.util.Map;
  */
 public final class VisionModelClient {
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
+    private static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
     private static final String SCHEMA_VERSION = "image-description-v1";
     private static final byte[] PROBE_PNG = Base64.getDecoder().decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
@@ -63,7 +64,7 @@ public final class VisionModelClient {
                         .header("Authorization", "Bearer " + config.apiKey())
                         .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                         .build(),
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IllegalStateException("vision provider returned HTTP " + response.statusCode());
         }
@@ -107,7 +108,7 @@ public final class VisionModelClient {
                             .header("Authorization", "Bearer " + config.apiKey())
                             .GET()
                             .build(),
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 return Map.of("ok", false, "error", "vision provider returned HTTP " + response.statusCode());
             }
@@ -177,7 +178,7 @@ public final class VisionModelClient {
     }
 
     /**
-     * 规范化模型 JSON，限制字段长度和数组规模，防止异常输出膨胀任务/索引。
+     * 规范化模型 JSON，限制字段长度和数组规模，防止异常输出膨胀索引正文。
      * @param raw 模型返回的 JSON 节点。
      * @return 固定字段顺序的结构化描述。
      */

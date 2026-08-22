@@ -106,7 +106,9 @@ public final class ChatController {
     @PostMapping("/chat")
     public Mono<ChatResponse> complete(@Valid @RequestBody ChatRequest request,
                                        ServerWebExchange exchange) {
-        return prepare(request, exchange).flatMap(runtime::complete);
+        return prepare(request, exchange)
+                .flatMap(normalized -> runtime.complete(normalized)
+                        .subscribeOn(Schedulers.boundedElastic()));
     }
 
     /**

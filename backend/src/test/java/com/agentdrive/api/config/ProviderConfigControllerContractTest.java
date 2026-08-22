@@ -164,7 +164,11 @@ class ProviderConfigControllerContractTest {
                 .bodyValue(Map.of("provider", "unsupported", "api_key", "test-key"))
                 .exchange()
                 .expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.detail").isEqualTo("当前仅支持 Jina embedding provider");
+                .expectBody()
+                .jsonPath("$.status").isEqualTo(400)
+                .jsonPath("$.code").isEqualTo("bad_request")
+                .jsonPath("$.ok").isEqualTo(false)
+                .jsonPath("$.detail").isEqualTo("当前仅支持 Jina embedding provider");
     }
 
     @Test
@@ -177,7 +181,7 @@ class ProviderConfigControllerContractTest {
                 .thenReturn(Map.of("ok", false, "status", 401, "error", "embedding provider returned HTTP 401"));
         ProviderConfigController controller = new ProviderConfigController(
                 new FakeConfigService(owner, null), cipher, new WebRequestPrincipalResolver(authenticator(owner)),
-                new com.fasterxml.jackson.databind.ObjectMapper(), embeddings, new Object(), probe);
+                new com.fasterxml.jackson.databind.ObjectMapper(), embeddings, probe);
         WebTestClient client = WebTestClient.bindToController(controller)
                 .controllerAdvice(new ProviderConfigExceptionHandler()).build();
 
@@ -228,8 +232,7 @@ class ProviderConfigControllerContractTest {
                 cipher,
                 new WebRequestPrincipalResolver(authenticator),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                embeddings,
-                new Object()
+                embeddings
         );
         return WebTestClient.bindToController(controller)
                 .controllerAdvice(new ProviderConfigExceptionHandler())

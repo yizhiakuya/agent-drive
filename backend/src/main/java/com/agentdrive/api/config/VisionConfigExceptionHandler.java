@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** 将视觉配置输入、地址和 provider 校验错误转换为稳定的 HTTP 400 JSON。 */
@@ -19,7 +20,12 @@ public final class VisionConfigExceptionHandler {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, String> badRequest(IllegalArgumentException error) {
-        return Map.of("detail", error.getMessage() == null ? "invalid vision configuration" : error.getMessage());
+    public Map<String, Object> badRequest(IllegalArgumentException error) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", HttpStatus.BAD_REQUEST.value());
+        body.put("code", "bad_request");
+        body.put("detail", error.getMessage() == null ? "invalid vision configuration" : error.getMessage());
+        body.put("ok", false);
+        return body;
     }
 }

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -22,7 +23,12 @@ public final class ProviderConfigExceptionHandler {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, String> badRequest(IllegalArgumentException error) {
-        return Map.of("detail", error.getMessage() == null ? "invalid provider configuration" : error.getMessage());
+    public Map<String, Object> badRequest(IllegalArgumentException error) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", HttpStatus.BAD_REQUEST.value());
+        body.put("code", "bad_request");
+        body.put("detail", error.getMessage() == null ? "invalid provider configuration" : error.getMessage());
+        body.put("ok", false);
+        return body;
     }
 }

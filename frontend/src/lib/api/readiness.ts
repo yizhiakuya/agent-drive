@@ -8,5 +8,5 @@ export interface ReadinessView {
   checked_at?: number | string;
 }
 
-/** DB/Worker readiness；与公开 liveness `/health` 分开，供状态中心和部署 smoke 使用。 */
+/** DB/存储 readiness；与公开 liveness `/health` 分开，供状态中心和部署 smoke 使用。 */
 export const getReadiness = () => api<ReadinessView>("/ready", { cache: "no-store" });

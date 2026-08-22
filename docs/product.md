@@ -70,7 +70,7 @@ Agent Drive 是面向个人用户的 Agent-first 私人网盘。用户可以直�
 |------|----------|------------|
 | 对话 | 会话、流式正文、上下文注入、reasoning、工具步骤、权限模式、确认、停止、刷新重连、失败会话恢复、标题摘要、本轮模型选择 | 需要已配置且可用的对话 Provider；Agent 不创建任务系统 |
 | 文件 | 列表、排序、多选批量操作、上传队列、收藏、最近访问、类型/时间筛选、名称搜索、语义搜索、预览、全文、移动、复制、重命名、回收站、版本历史和版本恢复 | 文件与版本快照保存在 owner-scoped 本地文件系统；版本恢复始终产生新 revision，搜索显示相关度和截断状态，收藏/访问记录也按 owner 隔离 |
-| 内容索引 | 索引状态、单文件全文写入、视觉描述写入、Jina 文本/视觉向量、向量清空、失效索引清理、revision 校验 | `/api/v1/index` 提供 owner-scoped 直接业务 CRUD；批量操作同步执行并返回逐项错误；embedding/vision 为可选配置，图片不走 OCR |
+| 内容索引 | 索引状态、单文件全文写入、视觉描述写入、Jina 文本/视觉向量、向量清空、失效索引清理、revision 校验 | `/api/v1/index` 提供 owner-scoped 直接业务 CRUD；文本索引与向量化是两个同步步骤，批量操作返回 `succeeded/partial/failed` 和逐项错误；embedding/vision 为可选配置，图片不走 OCR |
 | 设置 | LLM、embedding、vision、模型探测、二维码配对、设备列表、统一系统状态、退出登录 | 已存 API key 默认显示掩码，可点击眼睛临时回显；服务端加密存储；状态中心汇总 DB/Provider/索引/相册同步/备份/存储/设备 |
 | Skills | 内置 Skill、自定义 Skill 搜索/新建/编辑/启停/删除、Agent 按需读取 | 指令只编排登记工具；内置 Skill 只读，自定义 Skill 按 owner 隔离 |
 | Android App | 扫码连接、加密令牌、相册同步、去重、断点续传、同步状态和诊断统计 | Capacitor 7；当前没有 iOS 客户端 |

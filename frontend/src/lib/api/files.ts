@@ -123,7 +123,6 @@ export interface FileContent {
 
 interface UploadResponse {
   uploaded: { path: string; size: number; deduped?: boolean };
-  indexed: { task_id: string; status: string } | null;
 }
 
 /**

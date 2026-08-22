@@ -13,7 +13,7 @@ import {
 } from "@/lib/frontend-actions";
 import type { PendingFrontendAction } from "@/lib/frontend-actions";
 import { useAppStore } from "@/lib/store";
-import { indexFiles, indexVision } from "@/lib/api/index";
+import { indexFiles, indexVision, vectorize, type IndexResult } from "@/lib/api/index";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -67,6 +67,29 @@ function epochBoundary(value: string, endOfDay = false) {
   const parsed = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00"}`);
   const seconds = parsed.getTime() / 1000;
   return Number.isFinite(seconds) ? seconds : undefined;
+}
+
+/** 以小并发执行批量 mutation，避免一次选择大量文件时压垮 API 和 storage lock。 */
+async function settleWithConcurrency<T>(
+  values: T[],
+  operation: (value: T) => Promise<unknown>,
+  concurrency = 4,
+): Promise<PromiseSettledResult<unknown>[]> {
+  const results: PromiseSettledResult<unknown>[] = new Array(values.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= values.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await operation(values[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, worker));
+  return results;
 }
 
 export default function FilePage() {
@@ -473,12 +496,15 @@ export default function FilePage() {
     const request = ++indexingRequestRef.current;
     setIndexing(kind);
     try {
-      if (kind === "vision") await indexVision([filePath]);
-      else await indexFiles([filePath]);
+      const result = kind === "vision"
+        ? await indexVision([filePath])
+        : await indexTextAndVectors(filePath);
+      const failure = indexFailure(result);
+      if (failure) throw new Error(failure);
       emitFilesChanged();
       emitToast({
         kind: "ok",
-        text: kind === "vision" ? "图片视觉索引已完成" : "文件向量化已完成",
+        text: kind === "vision" ? "图片视觉索引已完成" : "文件文本与向量索引已完成",
       });
       const refreshed = await getFileInfo(filePath);
       if (request !== indexingRequestRef.current) return;
@@ -494,6 +520,30 @@ export default function FilePage() {
     } finally {
       if (request === indexingRequestRef.current) setIndexing(null);
     }
+  }
+
+  /** 文本文件需要先抽取正文，再按当前 embedding 配置写入向量。 */
+  async function indexTextAndVectors(filePath: string): Promise<IndexResult> {
+    const extracted = await indexFiles([filePath]);
+    const extractionFailure = indexFailure(extracted);
+    if (extractionFailure) throw new Error(extractionFailure);
+    return vectorize([filePath]);
+  }
+
+  /** 从统一索引 envelope 提取逐项错误，兼容旧响应中的 reason/error 字段。 */
+  function indexFailure(result: IndexResult): string | null {
+    if (result.vectorized === false) {
+      return String(result.reason || result.error || "向量化未完成");
+    }
+    const failedItem = result.items?.find((item) => item.indexed === false
+      || (item.embedding && typeof item.embedding === "object"
+        && (item.embedding as { vectorized?: unknown }).vectorized === false)
+      || item.status === "error");
+    if (failedItem) return String(failedItem.error || failedItem.status || "索引项失败");
+    if (result.ok === false || result.status === "failed" || result.status === "partial") {
+      return String(result.error || result.reason || "索引未完整完成");
+    }
+    return null;
   }
 
   const crumbs = path ? path.split("/").filter(Boolean) : [];
@@ -561,12 +611,12 @@ export default function FilePage() {
           emitToast({ kind: "error", text: "请填写目标目录" });
           return;
         }
-        const results = await Promise.allSettled(paths.map((source) => {
+        const results = await settleWithConcurrency(paths, (source) => {
           if (type === "batch-delete") return deleteToTrash(source);
           if (type === "batch-move") return moveFile(source, actionValue.trim());
           const name = source.split("/").pop() || source;
           return copyFile(source, `${actionValue.trim().replace(/\/$/, "")}/${name}`);
-        }));
+        });
         const failed = results.filter((result) => result.status === "rejected").length;
         setSelectedPaths(new Set());
         emitToast({ kind: failed ? "error" : "ok", text: failed ? `${paths.length - failed} 项完成，${failed} 项失败` : `已处理 ${paths.length} 项` });
@@ -802,7 +852,7 @@ export default function FilePage() {
           {(selected || actionSelection) && (
             <div className="flex h-full items-center gap-1.5 overflow-x-auto whitespace-nowrap">
               <span className="mr-1 max-w-40 truncate font-medium text-text" title={selectedItem()!.path}>已选: {selectedItem()!.path.split("/").pop()}</span>
-              {selected?.info && <Button variant="outline" size="sm" disabled={indexing !== null}
+              {selected?.info && selected.info.preview_kind !== "image" && <Button variant="outline" size="sm" disabled={indexing !== null}
                       onClick={() => void enqueueSelectedIndex("embed")} title="为当前文件创建文本向量索引">
                 <RefreshCw className={`size-3.5 ${indexing === "embed" ? "animate-spin" : ""}`} /> 向量化
               </Button>}
@@ -1016,7 +1066,7 @@ export default function FilePage() {
                 {selected.info && <Button variant={view === "preview" ? "default" : "ghost"} size="sm" onClick={() => setView("preview")} aria-label="预览" title="预览"><Eye className="size-4" /></Button>}
                 {selected.info?.preview_kind === "text" && <Button variant={view === "content" ? "default" : "ghost"} size="sm" onClick={viewContent} aria-label="查看内容" title="查看内容"><FileText className="size-4" /></Button>}
                 {selected.info && <Button variant={view === "details" ? "default" : "ghost"} size="sm" onClick={() => setView("details")} aria-label="文件详情" title="文件详情"><Info className="size-4" /></Button>}
-                {selected.info && <Button variant="ghost" size="sm" className="lg:hidden" disabled={indexing !== null} onClick={() => void enqueueSelectedIndex("embed")} aria-label="预览文件向量化" title="向量化"><RefreshCw className={`size-4 ${indexing === "embed" ? "animate-spin" : ""}`} /></Button>}
+                {selected.info && selected.info.preview_kind !== "image" && <Button variant="ghost" size="sm" className="lg:hidden" disabled={indexing !== null} onClick={() => void enqueueSelectedIndex("embed")} aria-label="预览文件向量化" title="向量化"><RefreshCw className={`size-4 ${indexing === "embed" ? "animate-spin" : ""}`} /></Button>}
                 {selected.info?.preview_kind === "image" && <Button variant="ghost" size="sm" className="lg:hidden" disabled={indexing !== null} onClick={() => void enqueueSelectedIndex("vision")} aria-label="预览文件图片索引" title="视觉索引"><Eye className={`size-4 ${indexing === "vision" ? "animate-pulse" : ""}`} /></Button>}
                 <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => beginAction("rename")} aria-label="预览文件重命名" title="重命名"><Pencil className="size-4" /></Button>
                 <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => beginAction("move")} aria-label="预览文件移动" title="移动"><MoveRight className="size-4" /></Button>

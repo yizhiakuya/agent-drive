@@ -48,6 +48,11 @@ public interface IndexMapper {
      */
     List<Map<String, Object>> selectFiles(@Param("userId") String userId, @Param("prefix") String prefix);
 
+    /** 查询索引概览的有限文件窗口。 */
+    List<Map<String, Object>> selectFilesLimited(@Param("userId") String userId,
+                                                 @Param("prefix") String prefix,
+                                                 @Param("limit") int limit);
+
     /**
      * 在 owner 当前 revision 的有效向量中按 cosine distance 检索文件。
      *

@@ -20,6 +20,7 @@ import java.util.Map;
  */
 final class EmbeddingProbeClient {
     private static final Duration TIMEOUT = Duration.ofSeconds(20);
+    private static final int MAX_RESPONSE_BYTES = 1 * 1024 * 1024;
     private final HttpClient client = HttpClientSupport.builder(TIMEOUT).build();
     private final ObjectMapper objectMapper;
 
@@ -55,7 +56,7 @@ final class EmbeddingProbeClient {
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> response = client.send(request,
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("ok", response.statusCode() >= 200 && response.statusCode() < 300);
             result.put("status", response.statusCode());

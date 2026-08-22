@@ -59,9 +59,8 @@ import java.util.stream.Stream;
  * owner 根下的相对路径，再拒绝绝对路径、{@code ..} 越界、首段内部名称、符号链接和非普通
  * 文件类型；因此调用方不能通过文件 API 访问其他 owner 或 {@code .trash} 等内部区域。</p>
  * <p>上传、文本写入、移动、复制和回收站变更先在 storage lock 内完成磁盘可见性提交，
- * 再更新 MyBatis metadata、revision、dedupe 行，并在同一数据库事务写入
- * {@code file.changed} outbox。storage lock 会持有到事务完成：提交后清理旧目标，回滚或
- * 提交失败时恢复原文件，避免客户端收到失败时磁盘内容却已经不可逆改变。</p>
+ * 再更新 MyBatis metadata、revision 和 dedupe 行。storage lock 会持有到事务完成：提交后
+ * 清理旧目标，回滚或提交失败时恢复原文件，避免客户端收到失败时磁盘内容却已经不可逆改变。</p>
  */
 public class MybatisFileStorageService implements FileStorageService {
     private static final int INDEX_DETAIL_LIMIT = 100;
@@ -539,7 +538,6 @@ public class MybatisFileStorageService implements FileStorageService {
         }
         if (!changed.isEmpty()) {
             mapper.upsertMetadataBatch(ownerId.toString(), changed);
-            invalidateOverview(ownerId);
         }
     }
 
@@ -707,7 +705,7 @@ public class MybatisFileStorageService implements FileStorageService {
      * 仍有效的 dedupe 命中时，不移动临时文件而直接返回去重结果。否则在 storage lock 内
      * 选择目标并移动文件：{@code noclobber} 使用序号名称且不覆盖，覆盖模式拒绝已有目录并
      * 替换其他已有目标。文件移动后写入 content、revision 和 verified dedupe 行，并可写入
-     * {@code file.changed} outbox；storage lock 持有到数据库事务完成，失败时恢复发布前内容。</p>
+     * storage lock 持有到数据库事务完成，失败时恢复发布前内容。</p>
      * @param ownerId 文件所属 owner 的 UUID。
      * @param directory owner 根下的相对目录。
      * @param filename 目标文件名，不得含路径分隔符。
@@ -817,7 +815,7 @@ public class MybatisFileStorageService implements FileStorageService {
     /**
      * 在 owner 文件树中创建目录并同步该目录的 metadata。
      * <p>操作在 storage lock 内执行；已有目录保持不变，普通文件或内部路径不能作为目标。
-     * 此方法只更新 metadata，不单独发布 {@code file.changed} outbox 事件。</p>
+     * 此方法只更新 metadata，不隐式触发索引 operation。</p>
      * @param ownerId 目录所属 owner 的 UUID。
      * @param path owner 根下的相对目录路径。
      * @return 新目录的 owner 相对路径。
@@ -1052,7 +1050,7 @@ public class MybatisFileStorageService implements FileStorageService {
      * 删除 owner 回收站中的全部磁盘内容和对应 trash 行。
      * <p>只有当当前原路径不存在且 metadata revision 仍等于删除时记录的 revision 时，才删除
      * 该路径 metadata 前缀，避免清理后来重新创建的文件；每条记录都会发布 {@code delete}
-     * 事件（配置了 outbox 时）。处理按条目进行，途中失败时可能只完成部分清空。</p>
+     * 事件。物理内容和版本 artifact 在数据库事务提交后才清理，事务回滚时保留以便重试。</p>
      * @param ownerId 回收站所属 owner 的 UUID。
      * @return 实际删除的 trash 条目数量。
      * @throws FileStorageException 回收站路径非法或某个条目删除/状态清理失败时抛出，后续条目可能尚未处理。
@@ -1061,14 +1059,15 @@ public class MybatisFileStorageService implements FileStorageService {
     @Transactional
     public Map<String, Object> emptyTrash(UUID ownerId) {
         int removed = 0;
-        for (Map<String, Object> row : mapper.selectTrash(ownerId.toString())) {
-            String id = String.valueOf(row.get("trash_id"));
-            Path stored = safeInternalTrash(ownerId, String.valueOf(row.get("stored_path")));
-            try (StorageLock ignored = storageLock()) {
+        try (MutationScope mutation = mutationScope()) {
+            for (Map<String, Object> row : mapper.selectTrash(ownerId.toString())) {
+                String id = String.valueOf(row.get("trash_id"));
+                Path stored = safeInternalTrash(ownerId, String.valueOf(row.get("stored_path")));
+                if (mapper.deleteTrash(ownerId.toString(), id) <= 0) continue;
                 if (Files.exists(stored, LinkOption.NOFOLLOW_LINKS)) {
-                    deleteTree(stored);
-                    removed++;
+                    deferDelete(mutation, stored);
                 }
+                removed++;
                 String original = String.valueOf(row.get("original_path"));
                 Map<String, Object> current = mapper.selectByPath(ownerId.toString(), original);
                 boolean pathExists;
@@ -1079,13 +1078,13 @@ public class MybatisFileStorageService implements FileStorageService {
                 }
                 if (!pathExists && (current == null || sameLong(current.get("revision"), row.get("file_revision")))) {
                     if (current != null) mapper.deletePrefix(ownerId.toString(), original);
-                    deleteVersionSnapshots(ownerId, original);
+                    deferVersionSnapshotCleanup(mutation, ownerId, original);
                 }
-                mapper.deleteTrash(ownerId.toString(), id);
                 publishChange(ownerId, "delete", List.of(original), "file-empty-trash:" + ownerId + ":" + id);
-            } catch (IOException error) {
-                throw new FileStorageException(500, "回收站仅部分清空", error);
             }
+            mutation.complete();
+        } catch (IOException error) {
+            throw new FileStorageException(500, "回收站清理失败", error);
         }
         return mapOf("removed", removed);
     }
@@ -1093,9 +1092,9 @@ public class MybatisFileStorageService implements FileStorageService {
     /**
      * 清理 owner 回收站中超过保留期的条目。
      *
-     * <p>每日维护不会调用 {@link #emptyTrash(UUID)}，而是先按数据库删除时间筛选候选，
-     * 再在存储锁内删除磁盘内容、检查原路径 revision、删除回收站行并发布索引失效事件。
-     * 因此同一路径后来重新创建文件时不会被旧回收站记录误删。</p>
+     * <p>先按数据库删除时间筛选候选，检查原路径 revision 并删除回收站行；磁盘内容和版本
+     * artifact 在事务提交后清理。因此同一路径后来重新创建文件时不会被旧记录误删，事务
+     * 回滚时 artifact 仍可重试。</p>
      *
      * @param ownerId 回收站归属 owner 的 UUID。
      * @param retentionDays 回收站保留天数。
@@ -1109,12 +1108,13 @@ public class MybatisFileStorageService implements FileStorageService {
         int days = Math.max(1, Math.min(retentionDays, 3650));
         double cutoff = Instant.now().minus(days, ChronoUnit.DAYS).toEpochMilli() / 1000.0;
         int removed = 0;
-        for (Map<String, Object> row : mapper.selectExpiredTrash(ownerId.toString(), cutoff)) {
-            String id = String.valueOf(row.get("trash_id"));
-            Path stored = safeInternalTrash(ownerId, String.valueOf(row.get("stored_path")));
-            try (StorageLock ignored = storageLock()) {
+        try (MutationScope mutation = mutationScope()) {
+            for (Map<String, Object> row : mapper.selectExpiredTrash(ownerId.toString(), cutoff)) {
+                String id = String.valueOf(row.get("trash_id"));
+                Path stored = safeInternalTrash(ownerId, String.valueOf(row.get("stored_path")));
+                if (mapper.deleteTrash(ownerId.toString(), id) <= 0) continue;
                 if (Files.exists(stored, LinkOption.NOFOLLOW_LINKS)) {
-                    deleteTree(stored);
+                    deferDelete(mutation, stored);
                 }
                 String original = String.valueOf(row.get("original_path"));
                 Map<String, Object> current = mapper.selectByPath(ownerId.toString(), original);
@@ -1126,29 +1126,43 @@ public class MybatisFileStorageService implements FileStorageService {
                 }
                 if (!pathExists && (current == null || sameLong(current.get("revision"), row.get("file_revision")))) {
                     if (current != null) mapper.deletePrefix(ownerId.toString(), original);
-                    deleteVersionSnapshots(ownerId, original);
+                    deferVersionSnapshotCleanup(mutation, ownerId, original);
                 }
-                if (mapper.deleteTrash(ownerId.toString(), id) > 0) {
-                    removed++;
-                    publishChange(ownerId, "delete", List.of(original), "file-cleanup-trash:" + ownerId + ":" + id);
-                }
-            } catch (IOException error) {
-                throw new FileStorageException(500, "回收站过期清理失败", error);
+                removed++;
+                publishChange(ownerId, "delete", List.of(original), "file-cleanup-trash:" + ownerId + ":" + id);
             }
+            mutation.complete();
+        } catch (IOException error) {
+            throw new FileStorageException(500, "回收站过期清理失败", error);
         }
         return mapOf("removed", removed, "retention_days", days);
     }
 
-    /** 永久删除已确认不再存在的原路径时同步回收其版本快照文件和元数据。 */
-    private void deleteVersionSnapshots(UUID ownerId, String path) throws IOException {
+    /** 登记一项数据库提交后才执行的 artifact 删除。 */
+    private void deferDelete(MutationScope mutation, Path path) {
+        mutation.onPublished(() -> {
+            deleteTree(path);
+            forceDirectory(path.getParent());
+        }, () -> {
+            // 数据库回滚时保留原 artifact，下一次维护可以安全重试。
+        });
+    }
+
+    /** 删除版本快照 metadata，并把物理文件清理延迟到数据库提交之后。 */
+    private void deferVersionSnapshotCleanup(MutationScope mutation, UUID ownerId, String path) throws IOException {
         List<Map<String, Object>> rows = mapper.selectVersionSnapshots(ownerId.toString(), path, 1000);
-        if (rows == null) return;
+        if (rows == null || rows.isEmpty()) return;
+        List<Path> snapshots = new ArrayList<>();
         for (Map<String, Object> row : rows) {
-            Path snapshot = safeInternalVersion(ownerId, String.valueOf(row.get("snapshot_path")));
-            Files.deleteIfExists(snapshot);
+            snapshots.add(safeInternalVersion(ownerId, String.valueOf(row.get("snapshot_path"))));
             mapper.deleteVersionSnapshot(ownerId.toString(), String.valueOf(row.get("version_id")));
         }
-        forceDirectory(ownerRoot(ownerId).resolve(".versions"));
+        mutation.onPublished(() -> {
+            for (Path snapshot : snapshots) deleteTree(snapshot);
+            forceDirectory(ownerRoot(ownerId).resolve(".versions"));
+        }, () -> {
+            // Database rollback retains both the snapshot rows and their files.
+        });
     }
 
     /**
@@ -1175,21 +1189,14 @@ public class MybatisFileStorageService implements FileStorageService {
     }
 
     /**
-     * 为一次文件变更写入可选的 outbox 事件。
-     * <p>事件类型固定为 {@code file.changed}，实体为 {@code file}，首个路径用于投递索引，
-     * 完整路径列表和 action 放在 payload 中；空 outbox 或空路径列表时不产生副作用。</p>
+     * 保留文件 mutation 的统一通知调用点；当前索引由显式业务 operation 执行，因此不写 outbox。
      * @param ownerId 数据所属用户的唯一标识。
      * @param action 文件变更动作，例如 {@code upsert}、{@code move} 或 {@code delete}。
      * @param paths 已经发生变化的 owner 相对路径列表。
-     * @param idempotencyKey 事件去重键。
+     * @param idempotencyKey 兼容旧调用方的幂等标识。
      */
     private void publishChange(UUID ownerId, String action, List<String> paths, String idempotencyKey) {
-        // Task/outbox execution was removed from the active product path. File mutations
-        // remain durable; indexing is an explicit synchronous business operation.
-    }
-
-    /** Legacy no-op retained for old storage call sites; task overview is no longer active. */
-    private void invalidateOverview(UUID ownerId) {
+        // File mutations remain durable; indexing is an explicit synchronous business operation.
     }
 
     /**
@@ -2691,7 +2698,7 @@ public class MybatisFileStorageService implements FileStorageService {
     /**
      * 递归删除文件或目录树，不跟随目录判断中的符号链接。
      * <p>调用方必须先通过 owner 或回收站路径边界检查；此方法只负责物理删除，不更新
-     * metadata、dedupe 或 outbox。</p>
+     * metadata 或 dedupe。</p>
      * @param path 已通过安全检查的待删除路径。
      * @throws IOException 删除目录内容或节点失败时抛出。
      */
@@ -2787,6 +2794,7 @@ public class MybatisFileStorageService implements FileStorageService {
      * @return 两个值转换后的 long 相等时为 {@code true}。
      */
     private static boolean sameLong(Object left, Object right) {
+        if (left == null || right == null) return false;
         return longValue(left) == longValue(right);
     }
 

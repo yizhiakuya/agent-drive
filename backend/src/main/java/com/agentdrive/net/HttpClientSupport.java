@@ -5,6 +5,12 @@ import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.net.http.HttpResponse;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +35,35 @@ public final class HttpClientSupport {
                 .connectTimeout(timeout)
                 .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
                 .proxy(new EnvironmentProxySelector());
+    }
+
+    /**
+     * 创建带字节上限的 UTF-8 响应处理器，避免外部 provider 用异常大 JSON 消耗 API 内存。
+     * @param maxBytes 最大响应字节数
+     * @return 受限的 JDK HTTP body handler
+     */
+    public static HttpResponse.BodyHandler<String> limitedUtf8BodyHandler(int maxBytes) {
+        if (maxBytes < 1) throw new IllegalArgumentException("maxBytes must be positive");
+        return responseInfo -> HttpResponse.BodySubscribers.mapping(
+                HttpResponse.BodySubscribers.ofInputStream(),
+                input -> {
+                    try (InputStream stream = input;
+                         ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(maxBytes, 8192))) {
+                        byte[] buffer = new byte[8192];
+                        int total = 0;
+                        int count;
+                        while ((count = stream.read(buffer)) != -1) {
+                            if (count > maxBytes - total) {
+                                throw new IllegalArgumentException("provider response exceeds size limit");
+                            }
+                            output.write(buffer, 0, count);
+                            total += count;
+                        }
+                        return output.toString(StandardCharsets.UTF_8);
+                    } catch (IOException error) {
+                        throw new UncheckedIOException(error);
+                    }
+                });
     }
 
     /** 根据 HTTP_PROXY、HTTPS_PROXY 和 NO_PROXY 为每个 URI 选择代理。 */

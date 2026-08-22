@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -166,6 +167,58 @@ class MybatisFileStorageServiceMutationTest {
                 .get(2, TimeUnit.SECONDS);
         assertThat(Files.isDirectory(ownerRoot.resolve("after-rollback"))).isTrue();
         assertNoMutationArtifacts();
+    }
+
+    @Test
+    void trashCleanupDefersPhysicalDeletionUntilTransactionCommit() throws Exception {
+        String trashId = UUID.randomUUID().toString();
+        Path stored = Files.createDirectories(ownerRoot.resolve(".trash")).resolve(trashId);
+        Files.writeString(stored, "archived", StandardCharsets.UTF_8);
+        when(mapper.selectTrash(owner.toString())).thenReturn(List.of(Map.of(
+                "trash_id", trashId,
+                "original_path", "old.txt",
+                "stored_path", ".trash/" + trashId,
+                "file_revision", 1L
+        )));
+        when(mapper.deleteTrash(owner.toString(), trashId)).thenReturn(1);
+        when(mapper.selectByPath(owner.toString(), "old.txt")).thenReturn(null);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            files.emptyTrash(owner);
+            assertThat(Files.exists(stored)).isTrue();
+            var synchronizations = TransactionSynchronizationManager.getSynchronizations();
+            assertThat(synchronizations).hasSize(1);
+            synchronizations.get(0).afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+            assertThat(Files.exists(stored)).isTrue();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void trashCleanupDeletesPhysicalContentAfterCommit() throws Exception {
+        String trashId = UUID.randomUUID().toString();
+        Path stored = Files.createDirectories(ownerRoot.resolve(".trash")).resolve(trashId);
+        Files.writeString(stored, "archived", StandardCharsets.UTF_8);
+        when(mapper.selectTrash(owner.toString())).thenReturn(List.of(Map.of(
+                "trash_id", trashId,
+                "original_path", "old.txt",
+                "stored_path", ".trash/" + trashId,
+                "file_revision", 1L
+        )));
+        when(mapper.deleteTrash(owner.toString(), trashId)).thenReturn(1);
+        when(mapper.selectByPath(owner.toString(), "old.txt")).thenReturn(null);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            files.emptyTrash(owner);
+            TransactionSynchronizationManager.getSynchronizations().get(0)
+                    .afterCompletion(TransactionSynchronization.STATUS_COMMITTED);
+            assertThat(Files.exists(stored)).isFalse();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

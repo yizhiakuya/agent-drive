@@ -139,11 +139,25 @@ archive='__REMOTE_ARCHIVE__'
 out="$repo/frontend/out"
 stage="$repo/frontend/.out.new.$$"
 backup="$repo/frontend/.out-backup.$(date +%Y%m%d%H%M%S).$$"
+rollback_needed=0
+
+rollback() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rollback_needed" -eq 1 ]; then
+    printf 'frontend deployment failed; restoring previous static directory\n' >&2
+    failed="$repo/frontend/.out-failed.$$"
+    if [ -e "$out" ]; then mv "$out" "$failed" || true; fi
+    if [ -e "$backup" ]; then mv "$backup" "$out" || true; fi
+    rm -rf -- "$failed"
+  fi
+  rm -rf -- "$stage"
+  exit "$rc"
+}
+trap rollback EXIT
 
 test -f "$archive"
 test -d "$out"
 mkdir "$stage"
-trap 'rm -rf "$stage"' EXIT
 tar --warning=no-timestamp -xf "$archive" -C "$stage"
 test -f "$stage/index.html"
 test -f "$stage/.well-known/assetlinks.json"
@@ -156,24 +170,24 @@ fi
 chmod -R a+rX "$stage"
 mv "$out" "$backup"
 mv "$stage" "$out"
+rollback_needed=1
 rm -f "$archive"
+curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/api/v1/health >/dev/null
+curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/api/v1/auth/status \
+  | grep -Eq '"initialized"[[:space:]]*:[[:space:]]*(true|false)'
+grep -R --binary-files=without-match -q 'ID:' "$out/_next/static"
+grep -q 'agent-drive-v' "$out/sw.js"
+
+# Keep a bounded rollback window; never remove the current directory or newest backup.
+find "$repo/frontend" -maxdepth 1 -type d -name '.out-backup.*' -printf '%T@ %p\n' \
+  | sort -nr | awk 'NR > 6 { sub(/^[^ ]+ /, ""); print }' \
+  | while IFS= read -r old; do rm -rf -- "$old"; done
+rollback_needed=0
 trap - EXIT
 printf 'frontend deployed: %s\nbackup kept: %s\n' "$out" "$backup"
 '@
         $remoteScript = $remoteScript.Replace("__REMOTE_REPO__", $RemoteRepo).Replace("__REMOTE_ARCHIVE__", $RemoteArchive)
         Invoke-RemoteBash $remoteScript
-
-        $healthScript = @'
-set -euo pipefail
-curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health >/dev/null
-curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/auth/status \
-  | grep -Eq '"initialized"[[:space:]]*:[[:space:]]*(true|false)'
-grep -R --binary-files=without-match -q 'ID:' '__REMOTE_REPO__/frontend/out/_next/static'
-grep -q 'agent-drive-v' '__REMOTE_REPO__/frontend/out/sw.js'
-printf 'frontend health and session ID marker: OK\n'
-'@
-        $healthScript = $healthScript.Replace("__REMOTE_REPO__", $RemoteRepo)
-        Invoke-RemoteBash $healthScript
     }
     finally {
         if (Test-Path $archive) {

@@ -37,7 +37,7 @@ class IndexDomainServiceTest {
         UUID owner = UUID.randomUUID();
         when(config.find(owner)).thenReturn(Optional.of(
                 new EmbeddingRuntimeConfig.Config("jina", "https://api.jina.ai/v1", "jina-embeddings-v3", "secret")));
-        when(index.files(owner, "docs")).thenReturn(List.of(Map.of("path", "docs/a.md")));
+        when(index.files(owner, "docs", 11)).thenReturn(List.of(Map.of("path", "docs/a.md")));
         when(index.statistics(eq(owner), org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(new IndexStore.Stats(1, 1, 0, 0, 1, 0));
         when(embeddings.embed(owner, List.of("docs/a.md"), 64, false))
@@ -81,6 +81,43 @@ class IndexDomainServiceTest {
         assertThat(result).containsEntry("operation", "index.vision")
                 .containsEntry("status", "succeeded")
                 .containsKey("items");
+    }
+
+    @Test
+    void returnsPartialStatusInsteadOfAbortingOnOneTextFileFailure() {
+        IndexStore index = mock(IndexStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        UUID owner = UUID.randomUUID();
+        when(indexing.indexFile(owner, "ok.txt")).thenReturn(Map.of(
+                "path", "ok.txt", "indexed", true, "status", "indexed"));
+        when(indexing.indexFile(owner, "broken.txt")).thenThrow(new IllegalStateException("extract failed"));
+
+        Map<String, Object> result = new IndexDomainService(index, indexing, embeddings,
+                emptyConfig(), mock(VisionDescriptionService.class), new ObjectMapper())
+                .indexFiles(owner, List.of("ok.txt", "broken.txt"), false);
+
+        assertThat(result).containsEntry("ok", false)
+                .containsEntry("status", "partial")
+                .containsEntry("failed", 1);
+        assertThat((List<?>) result.get("items")).hasSize(2);
+    }
+
+    @Test
+    void emptyVectorPathsMeanAllOwnerChunks() {
+        IndexStore index = mock(IndexStore.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        EmbeddingRuntimeConfig config = emptyConfig();
+        UUID owner = UUID.randomUUID();
+        when(embeddings.embed(owner, List.of(), 64, false))
+                .thenReturn(Map.of("vectorized", true, "embedded", 3));
+
+        Map<String, Object> result = new IndexDomainService(index, mock(IndexingService.class), embeddings,
+                config, mock(VisionDescriptionService.class), new ObjectMapper())
+                .vectorize(owner, List.of(), false, 64);
+
+        assertThat(result).containsEntry("vectorized", true).containsEntry("embedded", 3);
+        verify(embeddings).embed(owner, List.of(), 64, false);
     }
 
     private static IndexDomainService service(IndexStore index, IndexingService indexing, EmbeddingService embeddings) {

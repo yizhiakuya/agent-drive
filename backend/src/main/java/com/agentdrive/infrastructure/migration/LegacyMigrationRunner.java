@@ -43,7 +43,7 @@ import java.util.UUID;
  * 在 {@code migrate} profile 下运行的一次性 legacy 单用户数据迁移器。
  * 默认只读取并报告 legacy 文件树、JSON 元数据和 SQLite 数量；只有同时启用导入开关并提供
  * {@code IMPORT_LEGACY_DATA} 确认值时，才会复制文件、写入空的 Java PostgreSQL 数据库并排入重建任务。
- * 普通 API 或 Worker profile 不会注册此组件，因此不会意外修改 legacy 数据。
+ * 普通 API profile 不会注册此组件，因此不会意外修改 legacy 数据。
  */
 @Component
 @Profile("migrate")

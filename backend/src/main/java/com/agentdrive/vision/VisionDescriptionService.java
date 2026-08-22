@@ -19,8 +19,8 @@ import java.util.UUID;
 /**
  * 负责读取 owner 图片并调用已配置的视觉模型生成结构化描述。
  *
- * <p>该服务只处理图片识别，不在 HTTP 请求中写入索引；批量向量化由 Worker 调用同一服务
- * 后再把描述交给全文/chunk/embedding 链路，保证模型调用和文件内容变更有清晰边界。</p>
+ * <p>该服务只处理图片识别；索引 operation 调用同一服务后再把描述交给
+ * 全文/chunk/embedding 链路，保证模型调用和文件内容变更有清晰边界。</p>
  */
 @Service
 @Profile({"java-files", "java-auth", "java-chat"})
@@ -87,7 +87,7 @@ public final class VisionDescriptionService {
     }
 
     /**
-     * 在批量任务入队前验证当前视觉配置和 provider 路由，避免把必然失败的任务放入队列重试。
+     * 在批量视觉 operation 开始前验证当前视觉配置和 provider 路由，避免执行必然失败的请求。
      * @param userId 当前 owner
      * @return ready、model 和 provider 的安全诊断
      * @throws VisionProviderUnavailableException 配置缺失或探测失败
@@ -106,7 +106,7 @@ public final class VisionDescriptionService {
     }
 
     /**
-     * 识别单个图片并返回可供索引任务复用的结构化结果。
+     * 识别单个图片并返回可供索引链路复用的结构化结果。
      * @param userId 图片归属 owner UUID。
      * @param path 图片相对路径。
      * @return path、MIME、模型和结构化 description。
@@ -170,7 +170,7 @@ public final class VisionDescriptionService {
     /**
      * 生成不暴露 provider body 的稳定错误文本。
      * @param error 识别异常。
-     * @return 面向任务和 API 的错误标识。
+     * @return 面向索引 operation 和 API 的错误标识。
      */
     private static String safeMessage(Exception error) {
         if (error instanceof FileStorageException storage) return storage.getMessage();

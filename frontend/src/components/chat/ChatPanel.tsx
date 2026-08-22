@@ -480,6 +480,10 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
 
   // 主动汇报：空会话时拉取最近一次自动化报告
   useEffect(() => {
+    if (sessionId) {
+      setAutoReport(null);
+      return;
+    }
     (async () => {
       try {
         const d = await api<{ report?: { date: string; text: string } | null }>(

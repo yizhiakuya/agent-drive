@@ -7,6 +7,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -15,7 +16,30 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public final class ChatRunRegistry implements AutoCloseable {
+    private static final int DEFAULT_MAX_ACTIVE_RUNS = 8;
+    private static final Duration DEFAULT_RUN_TIMEOUT = Duration.ofMinutes(10);
     private final Map<String, ActiveRun> runs = new ConcurrentHashMap<>();
+    private final int maxActiveRuns;
+    private final Duration runTimeout;
+
+    /** 使用生产默认并发上限和单次运行时限。 */
+    public ChatRunRegistry() {
+        this(DEFAULT_MAX_ACTIVE_RUNS, DEFAULT_RUN_TIMEOUT);
+    }
+
+    /**
+     * 创建可测试的聊天运行注册表。
+     * @param maxActiveRuns 进程内允许的最大并行 Agent 数
+     * @param runTimeout 单次 Agent 运行的最大时长
+     */
+    ChatRunRegistry(int maxActiveRuns, Duration runTimeout) {
+        if (maxActiveRuns < 1) throw new IllegalArgumentException("maxActiveRuns must be positive");
+        if (runTimeout == null || runTimeout.isZero() || runTimeout.isNegative()) {
+            throw new IllegalArgumentException("runTimeout must be positive");
+        }
+        this.maxActiveRuns = maxActiveRuns;
+        this.runTimeout = runTimeout;
+    }
 
     /**
      * 启动一个 owner session 的后台流并返回可订阅的事件 relay。
@@ -30,12 +54,18 @@ public final class ChatRunRegistry implements AutoCloseable {
             return runtime.stream(request);
         }
         ActiveRun run = new ActiveRun();
-        ActiveRun existing = runs.putIfAbsent(sessionId, run);
-        if (existing != null) {
-            throw new ActiveChatRunException("chat session already has a running agent");
+        synchronized (runs) {
+            if (runs.size() >= maxActiveRuns) {
+                throw new ActiveChatRunException("chat service is at active run capacity");
+            }
+            ActiveRun existing = runs.putIfAbsent(sessionId, run);
+            if (existing != null) {
+                throw new ActiveChatRunException("chat session already has a running agent");
+            }
         }
         try {
             run.subscription = runtime.stream(request)
+                    .timeout(runTimeout)
                     .subscribeOn(Schedulers.boundedElastic())
                     .subscribe(
                             run.events::tryEmitNext,

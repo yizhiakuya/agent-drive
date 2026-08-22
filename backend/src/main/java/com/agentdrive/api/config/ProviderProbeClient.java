@@ -31,6 +31,7 @@ import java.util.Set;
  */
 final class ProviderProbeClient {
     private static final Duration TIMEOUT = Duration.ofSeconds(20);
+    private static final int MAX_RESPONSE_BYTES = 1 * 1024 * 1024;
 
     private final HttpClient client;
     private final ObjectMapper objectMapper;
@@ -73,7 +74,7 @@ final class ProviderProbeClient {
         try {
             HttpResponse<String> response = client.send(
                     request.build(),
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+                    HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES)
             );
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 return ProbeResult.failure("provider returned HTTP " + response.statusCode());
