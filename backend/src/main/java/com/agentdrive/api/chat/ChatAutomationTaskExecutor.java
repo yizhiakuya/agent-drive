@@ -1,9 +1,15 @@
 package com.agentdrive.api.chat;
 
 import com.agentdrive.files.FileStorageService;
+import com.agentdrive.auth.ConversationSessionService;
+import com.agentdrive.progress.TaskProgressReporter;
 import com.agentdrive.tasks.AutomationTaskExecutor;
+import com.agentdrive.tasks.ChatTaskExecutor;
+import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -12,19 +18,24 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
-/**
- * 执行自动化任务中的受限聊天，并把结果写成 owner-scoped Markdown 报告。
- *
- * <p>任务 prompt 只允许查看、移动、重命名、复制、建目录和写文本，明确禁止删除；
- * runtime 最长阻塞十分钟。没有规则且没有自定义 prompt 时直接返回 skipped，避免
- * 无意义地调用模型；成功结果写入 {@code Agent/notes/自动化报告-日期.md}。
- */
+/** 执行后台聊天任务和受限自动化任务；聊天结果写入既有会话 transcript。 */
 @Component
 @Profile("java-chat")
-public final class ChatAutomationTaskExecutor implements AutomationTaskExecutor {
+public final class ChatAutomationTaskExecutor implements AutomationTaskExecutor, ChatTaskExecutor {
     private final ChatRuntime runtime;
     private final FileStorageService files;
+    private final ConversationSessionService sessions;
+    private final ScheduledExecutorService heartbeatExecutor = Executors.newScheduledThreadPool(2, runnable -> {
+        Thread thread = new Thread(runnable, "agent-drive-chat-task-heartbeat");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     /**
      * 创建自动化任务执行器。
@@ -32,9 +43,72 @@ public final class ChatAutomationTaskExecutor implements AutomationTaskExecutor 
      * @param runtime 执行受限自动化聊天的 runtime。
      * @param files 将执行报告以 UTF-8 文本写入用户文件区的存储服务。
      */
-    public ChatAutomationTaskExecutor(ChatRuntime runtime, FileStorageService files) {
+    @Autowired
+    public ChatAutomationTaskExecutor(ChatRuntime runtime, FileStorageService files,
+                                      ConversationSessionService sessions) {
         this.runtime = runtime;
         this.files = files;
+        this.sessions = sessions;
+    }
+
+    /** 兼容旧测试和非后台自动化调用。 */
+    public ChatAutomationTaskExecutor(ChatRuntime runtime, FileStorageService files) {
+        this(runtime, files, null);
+    }
+
+    /** 应用关闭时释放后台租约线程。 */
+    @PreDestroy
+    void shutdown() {
+        heartbeatExecutor.shutdownNow();
+    }
+
+    /**
+     * 执行 owner-scoped chat.run。后台任务不携带浏览器能力或确认参数，只允许运行绿色工具。
+     * @param userId 任务 owner
+     * @param payload 包含 session_id、message、thinking_level、model 和可选 file_context 的受控 payload
+     * @param progress 任务进度/租约回调
+     * @return 任务结果摘要
+     */
+    @Override
+    public Map<String, Object> execute(UUID userId, Map<String, Object> payload, TaskProgressReporter progress) {
+        if (sessions == null) throw new IllegalStateException("chat session service unavailable");
+        Map<String, Object> safePayload = payload == null ? Map.of() : payload;
+        String sessionId = text(safePayload.get("session_id"));
+        if (sessionId.isBlank()) throw new IllegalArgumentException("session_id is required");
+        ConversationSessionService.SessionDetails details = sessions.getOwned(userId, sessionId);
+        String message = text(safePayload.get("message"));
+        if (message.isBlank()) throw new IllegalArgumentException("message is required");
+        List<Map<String, Object>> history = history(details.messages());
+        progress.reportNow(0, 0, "聊天任务：开始执行");
+        ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleWithFixedDelay(
+                progress::heartbeat, 30, 30, TimeUnit.SECONDS);
+        try {
+            ChatRequest request = new ChatRequest(
+                    message, history, List.of(), sessionId,
+                    text(safePayload.get("thinking_level")).isBlank() ? "auto" : text(safePayload.get("thinking_level")),
+                    null, "task-" + sessionId, List.of(), text(safePayload.get("model")),
+                    paths(safePayload.get("file_context")), "auto", List.of())
+                    .withAuthenticatedUserId(userId);
+            ChatResponse response = runtime.complete(request)
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .block(Duration.ofMinutes(30));
+            if (response == null) throw new IllegalStateException("chat runtime returned no response");
+            if (response.pendingConfirmation() != null) {
+                throw new IllegalStateException("background chat cannot execute confirmation-required operations");
+            }
+            progress.reportNow(1, 1, "聊天任务：执行完成");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("ok", true);
+            result.put("session_id", sessionId);
+            result.put("reply", response.reply());
+            result.put("steps", response.steps());
+            result.put("latency_ms", response.latencyMs());
+            result.put("routed", response.routed());
+            result.put("truncated", response.truncated());
+            return result;
+        } finally {
+            heartbeat.cancel(true);
+        }
     }
 
     /**
@@ -102,5 +176,29 @@ public final class ChatAutomationTaskExecutor implements AutomationTaskExecutor 
      */
     private String text(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private List<Map<String, Object>> history(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            if (!"user".equals(message.get("role")) && !"assistant".equals(message.get("role"))) continue;
+            String content = text(message.get("content"));
+            if (content.isBlank()) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("role", String.valueOf(message.get("role")));
+            item.put("content", content);
+            result.add(item);
+        }
+        return List.copyOf(result);
+    }
+
+    private List<String> paths(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        List<String> result = new ArrayList<>();
+        for (Object item : values) {
+            String path = text(item);
+            if (!path.isBlank()) result.add(path);
+        }
+        return List.copyOf(result);
     }
 }

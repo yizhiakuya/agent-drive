@@ -47,6 +47,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 文件 metadata、revision、dedupe、全文和向量都按 owner 绑定；文件内容变化先失效旧索引，再由 Worker 异步重建。
 - 覆盖上传/文本写入前，旧普通文件复制到 owner 私有 `.versions` 目录并在 `file_version_snapshots` 登记；版本列表只返回当前 owner 且仍存在的快照元数据，恢复通过原子上传产生新 revision，不允许客户端直接读取快照路径。
 - Chat 文件上下文只接受当前 owner 的相对 POSIX 路径，后端重新读取文件/文件夹内容，不信任客户端传入正文；文件选择器附件写入 owner-scoped `聊天附件` 目录并沿用上传 MD5、路径和索引边界，剪贴板图片只允许受限 Base64 内联到支持图片的当前模型请求，不持久化。
+- 聊天 relay 和后台任务也按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件。`/chat/run` 入队 payload 禁止 confirmations 和 inline images，只允许服务端重新读取的相对 `file_context`，Worker 不接收 Cookie、Bearer 或 API key。
 
 ## 4. Agent 和外部 provider
 

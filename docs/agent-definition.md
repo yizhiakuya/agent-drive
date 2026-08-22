@@ -57,11 +57,11 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 - Provider 原生 tool call 才能产生工具步骤；正文中的 DSML/XML 只是普通文本，不能触发工具，也不应被文档描述为另一套可执行协议。
 - 工具返回结构化成功或失败；瞬时错误按 provider/工具策略退避，永久错误直接反馈原因。
 - ask/auto 模式下 red operation 先保存待确认参数，确认后做确定性签名校验；full 模式按用户授权直接执行；非 red operation 以 session/tool/arguments replay，避免重试再次产生副作用。
-- 每轮有步数、输出和上下文预算；流式输出结束、取消、断开和异常都进入明确终态。
+- 每轮有步数、输出和上下文预算；流式输出结束、取消、断开和异常都进入明确终态。聊天 runtime 通过 session relay 与 SSE 客户端解耦，断开只结束订阅，不等于取消 Agent；重新连接先校验 owner，再回放当前 relay。需要跨进程重启继续执行时，使用普通 `chat.run` 业务 API 入队任务，由 Worker 负责租约和状态。
 
 ## 5. 事件与记忆
 
-Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。context 对应模型可见的规范系统提示、owner Agent 文档和 Skill 目录，按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
+Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。context 对应模型可见的规范系统提示、owner Agent 文档和 Skill 目录，首轮固定装配五项基线（缺失文档或空 Skill 目录使用明确占位），按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
 
 持久状态分为：
 

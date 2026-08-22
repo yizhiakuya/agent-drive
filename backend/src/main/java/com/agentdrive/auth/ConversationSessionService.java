@@ -149,7 +149,7 @@ public final class ConversationSessionService {
         }
         String storedTitle = stringValue(details.meta().get("title"));
         boolean needsGeneratedTitle = isPlaceholderTitle(storedTitle);
-        String title = needsGeneratedTitle ? limitCodePoints(summary, 20) : storedTitle;
+        String title = needsGeneratedTitle ? deterministicTitle(details.messages(), summary) : storedTitle;
         if (needsGeneratedTitle && titleGenerator != null) {
             try {
                 title = normalizeGeneratedTitle(titleGenerator.generate(userId, details.messages()), title);
@@ -186,6 +186,20 @@ public final class ConversationSessionService {
                 .replaceFirst("^(?i:标题|title)\\s*[:：]\\s*", "")
                 .trim();
         return title.isBlank() ? fallback : limitCodePoints(title, 20);
+    }
+
+    /** 优先使用首条用户消息生成稳定标题，避免摘要中的工具/助手串联词污染标题。 */
+    private static String deterministicTitle(List<Map<String, Object>> messages, String summary) {
+        if (messages != null) {
+            for (Map<String, Object> message : messages) {
+                if (!"user".equals(message.get("role"))) continue;
+                String content = collapseWhitespace(messageContent(message))
+                        .replaceAll("<[^>]{1,80}>", "")
+                        .trim();
+                if (!content.isBlank()) return limitCodePoints(content, 20);
+            }
+        }
+        return limitCodePoints(summary, 20);
     }
 
     /** 读取消息正文，并将工具型 assistant 的 null 正文转换为空字符串。 */

@@ -41,6 +41,26 @@ export const chat = (
   }),
 });
 
+export const cancelChatRun = (sessionId: string) =>
+  api<{ cancelled: boolean }>(`/chat/${encodeURIComponent(sessionId)}/cancel`, { method: "POST" });
+
+export const chatRunActive = (sessionId: string) =>
+  api<{ active: boolean }>(`/chat/${encodeURIComponent(sessionId)}/active`, { cache: "no-store" });
+
+/** 订阅服务端保留的当前会话 relay；没有活跃运行时会自然结束。 */
+export async function chatReconnect(
+  sessionId: string,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+  signal: AbortSignal,
+): Promise<Record<string, unknown> | null> {
+  const res = await authenticatedFetch(`/chat/${encodeURIComponent(sessionId)}/stream`, { signal });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, apiErrorMessage(body, res.statusText || `HTTP ${res.status}`));
+  }
+  return readSseResponse(res, onEvent);
+}
+
 export async function chatStream(
   message: string,
   history: { role: string; content: string }[],
@@ -54,6 +74,7 @@ export async function chatStream(
   fileContext: string[] = [],
   permissionMode: PermissionMode = "auto",
   inlineImages: Pick<InlineImage, "name" | "mediaType" | "data">[] = [],
+  onSessionId?: (sessionId: string) => void,
 ): Promise<Record<string, unknown> | null> {
   const res = await authenticatedFetch("/chat/stream", {
     method: "POST",
@@ -76,8 +97,16 @@ export async function chatStream(
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, apiErrorMessage(body, res.statusText || `HTTP ${res.status}`));
   }
-  if (!res.body) throw new Error(`HTTP ${res.status}: empty response body`);
+  const headerSessionId = res.headers.get("X-Session-ID");
+  if (headerSessionId?.trim()) onSessionId?.(headerSessionId.trim());
+  return readSseResponse(res, onEvent);
+}
 
+async function readSseResponse(
+  res: Response,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+): Promise<Record<string, unknown> | null> {
+  if (!res.body) throw new Error(`HTTP ${res.status}: empty response body`);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

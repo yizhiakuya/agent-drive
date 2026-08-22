@@ -60,6 +60,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - `/api/v1/files/versions` 列出当前文件的真实内容快照，`POST /api/v1/files/versions/restore` 把快照作为新 revision 原子发布；快照元数据按 owner 绑定，内容位于 owner 私有 `.versions` 目录，公共路径解析拒绝该目录；每个文件最多保留 20 个快照，超出部分在数据库提交后回收。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
 - Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 context、text、reasoning、tool_start、tool_trace、frontend_action、done、error。context 携带 source/kind/content，并与历史 API 的 context 消息使用同一展示结构；流内异常保持 HTTP 200，error 携带脱敏消息和服务端已确认的 session ID，runtime 同时持久化脱敏错误与最后 trace。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
+- 聊天 runtime 由 owner session 级 `ChatRunRegistry` relay 持有，不绑定单个 SSE 客户端；浏览器刷新、切换页面或网络断开不会主动取消运行。初始流返回 `X-Session-ID`，`GET /api/v1/chat/{sessionId}/active`、`GET /api/v1/chat/{sessionId}/stream` 和 `POST /api/v1/chat/{sessionId}/cancel` 先做 owner 会话校验后提供状态、回放重连和显式停止。relay 是当前 API 进程内的运行态，跨进程重启的后台执行通过普通 `POST /api/v1/chat/run` 入队 `chat.run`，由独立 Worker 领取并续租。
 - `ChatRequest.file_context` 只接收 owner 内相对路径列表；后端在当前认证 owner 下读取文件/文件夹摘要后再注入模型。文件选择器附件先上传到 owner 的 `聊天附件` 目录；剪贴板图片只作为受限 `inline_images` Base64 随本轮请求发送，后端在模型不支持图片时拒绝，不写入会话或文件系统。模型输出的 `[[file:path]]` / `[[folder:path]]` 由前端转换成 allowlist 内的 `files.open` / `files.open_folder` 动作，不能触发任意 URL。
 - Skill 目录每轮注入摘要；成功读取过的 Skill 名称从当前会话的 owner-scoped `read_skill` transcript 轨迹恢复，下一轮由当前 registry 重新注入正文并避免重复工具调用。Skill 更新或停用不信任旧正文，始终以 registry 当前版本为准。
 - 索引资源由独立 `IndexDomainService` 和 `/api/v1/index` 提供 owner-scoped CRUD：读取状态/文件索引、写入文本或视觉文档、直接向量化、直接清空向量、清理失效索引和重建全文。多文件或长操作由索引域通过 `IndexExecutionMonitor` 可选登记任务并返回 monitor 状态；任务模块实现该端口，但索引域不反向依赖任务模块。`/api/v1/tasks` 仍是任务模块的独立入口，Agent 不依赖任务模块才能完成单项索引业务。
@@ -89,13 +90,13 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - 自动维护通过 owner-scoped 的 `POST /api/v1/tasks/prune-history` 按固定策略清理 30 天前的终态任务，至少保留最近 2000 条；它不代表用户手动清理的语义。
 - 任务页的 `POST /api/v1/tasks/clear-terminal` 清理当前 owner 全部可安全回收的完成、失败和已取消记录；`DELETE /api/v1/tasks/{taskId}` 删除单条终态任务，删除终态父任务时会一并删除已结束子任务。数据库递归保护活动任务及其祖先，父任务存在活动后代时返回冲突，避免留下执行中的孤立任务。
 
-当前任务类型包括 `index.file`、`index.embed`、`index.vision`、`index.rebuild`、`index.cleanup`、`index.clear_vectors`、`maintenance.daily` 和 `automation.run`。`index.cleanup` 只清理失效文档/索引记录，`index.clear_vectors` 才清空当前 owner 的 text/vision 向量。HTTP 请求只入队，不串行执行 embedding 或 vision；图片描述、向量化和 owner 级清理都由 Worker 完成。
+当前任务类型包括 `index.file`、`index.embed`、`index.vision`、`index.rebuild`、`index.cleanup`、`index.clear_vectors`、`maintenance.daily`、`automation.run` 和 `chat.run`。`index.cleanup` 只清理失效文档/索引记录，`index.clear_vectors` 才清空当前 owner 的 text/vision 向量。HTTP 请求只入队，不串行执行 embedding、vision 或后台 chat；图片描述、向量化、聊天任务和 owner 级清理都由 Worker 完成。任务模块只提供状态机、租约和执行入口，不规定 Agent 何时必须把业务请求后台化。
 
 ## 7. 前端与 Android
 
 Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、任务、会话、设置、Skill 和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
-文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 按 session key 保存活动 controller/frame/busy，切换会话只隔离 UI 写入而不中止原流，不同会话可并行；显式停止或组件卸载才 Abort。ChatPanel 的会话历史/模型目录、SettingsPage 的 LLM/视觉模型目录，以及 Onboarding 的首次模型目录请求都必须在响应提交前校验请求代次和当前配置边界。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
+文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 按 session key 保存活动 controller/frame/busy，切换会话只隔离 UI 写入而不中止原流，不同会话可并行；首次流通过 `X-Session-ID` 收养服务端会话，页面把活动 session ID 写入 localStorage，重新进入时先 `no-store` 读取最新历史并查询 active relay，运行中自动重连、跟随底部，显式停止才调用 cancel。显式停止或组件卸载只 Abort 浏览器订阅，不把普通刷新误当成取消。ChatPanel 的会话历史/模型目录、SettingsPage 的 LLM/视觉模型目录，以及 Onboarding 的首次模型目录请求都必须在响应提交前校验请求代次和当前配置边界。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 
 Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；本地文件消失/权限拒绝永久跳过，其他本地 I/O 冻结水位，线程中断保留中断位并终止本批。同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
 

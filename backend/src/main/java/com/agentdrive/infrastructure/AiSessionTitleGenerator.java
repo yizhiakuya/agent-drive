@@ -25,10 +25,10 @@ import java.util.stream.Collectors;
 /**
  * 使用当前 owner 的聊天模型为会话生成短标题。
  * <p>只把 user/assistant 消息拼成摘要输入，限制输入 6000 code point；请求使用流式模型，
- * 15 秒内收集文本，忽略 reasoning，最后去掉 Markdown/标签/标题前缀并限制为 20 code point。</p>
+ * 30 秒内收集文本，忽略 reasoning，最后去掉 Markdown/标签/标题前缀并限制为 20 code point。</p>
  */
 public final class AiSessionTitleGenerator implements SessionTitleGenerator {
-    private static final Duration TIMEOUT = Duration.ofSeconds(15);
+    private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private static final int MAX_INPUT_CODE_POINTS = 6000;
     private static final int MAX_TITLE_CODE_POINTS = 20;
     private static final String SYSTEM_PROMPT = """
@@ -55,7 +55,7 @@ public final class AiSessionTitleGenerator implements SessionTitleGenerator {
      * @param userId 会话所属 owner 的 UUID。
      * @param messages 包含 {@code role} 和 {@code content} 的消息记录；只采纳 user/assistant 角色。
      * @return 清理格式并截断到最多 20 code point 的标题，无法从消息得到内容时为空字符串。
-     * @throws IllegalStateException 模型未配置、调用失败、超过 15 秒或线程被中断时抛出。
+     * @throws IllegalStateException 模型未配置、调用失败、超过 30 秒或线程被中断时抛出。
      */
     @Override
     public String generate(UUID userId, List<Map<String, Object>> messages) {

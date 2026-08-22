@@ -18,8 +18,10 @@ export function replaceAssistantMessage(messages: Message[], content: string, re
   if (messages.at(-1)?.type === "tool_step") {
     return [...removeEmptyAssistantMessages(messages), assistant];
   }
-  if (!messages.length) return [assistant];
-  return [...messages.slice(0, -1), assistant];
+  if (messages.at(-1)?.type === "assistant") {
+    return [...messages.slice(0, -1), assistant];
+  }
+  return [...messages, assistant];
 }
 
 export function removeEmptyAssistantMessages(messages: Message[]): Message[] {

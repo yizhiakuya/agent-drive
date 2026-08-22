@@ -59,7 +59,7 @@ frontend/src/
 - 输入区权限控件支持 `请求批准`、`帮我批准`（默认）和 `完全访问` 三档，选择保存在当前浏览器并随 `/chat/stream` 的 `permission_mode` 发送。后端按读写方法和 `green/yellow/red` 风险决定确认：请求批准模式拦截所有非读取调用，帮我批准模式只拦截 red，完全访问按用户授权直接执行已登记 operation；ask/auto 下 red 仍走服务端一次性签名确认。
 - 上下文使用量紧跟输入区顶部的推理层级，以紧凑圆环、已用/总量和下拉箭头显示；默认只占一个控制位，点击原生 `<details>` 后展开窗口上限、已用、可用空间和本轮输入/输出详情。Java runtime 优先使用 Provider 返回的 `TokenUsage.inputTokenCount`，流式 Provider 未回传时按已组装消息做保守估算，不能伪报 0；点击外部区域或 Escape 会关闭浮层。颜色按 50%/80% 阈值映射 warn/danger，完整数据保留在可访问标签和悬浮提示中。
 
-解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。活动流以 session key 保存在 hook 的 Map 中；切换会话标记 detached 但保持网络读取，text/reasoning 帧用当前 session 检查隔离 UI 写入，context/tool 事件只写所属会话视图，返回原会话或结束后从持久历史收敛。当前会话 stop 与组件卸载才 Abort。流异常收尾仍先同步 flush/cancel，再清理空助手占位和追加错误消息；错误事件带服务端 session ID 时，新会话立即收养该 ID，后台会话只刷新列表而不污染当前视图。
+解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。活动流以 session key 保存在 hook 的 Map 中；切换会话标记 detached 但保持网络读取，text/reasoning 帧用当前 session 检查隔离 UI 写入，context/tool 事件只写所属会话视图，返回原会话或结束后从持久历史收敛。初始请求从 `X-Session-ID` 收养服务端 session，页面把当前 ID 持久化；重新挂载时先查询 `/chat/{sessionId}/active`，活动 relay 通过 `/chat/{sessionId}/stream` 回放并继续渲染，结束后重新读取 `no-store` 历史。当前会话 stop 才调用 cancel；组件卸载只 Abort 浏览器订阅，不能把刷新误报为用户取消。流异常收尾仍先同步 flush/cancel，再清理空助手占位和追加错误消息；错误事件带服务端 session ID 时，新会话立即收养该 ID，后台会话只刷新列表而不污染当前视图。
 
 ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即显示目标历史，但不会终止原会话；后台完成时刷新会话列表，回到原会话时重拉已持久化的 assistant/context/tool 记录。模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的请求代次规则和密钥草稿销毁规则；已存 Key 只在点击眼睛后按需读取，配置边界变化会使在途回显失效，防止迟到明文进入新地址表单。
 

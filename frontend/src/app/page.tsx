@@ -64,10 +64,32 @@ export default function Home() {
   const setModelName = useAppStore((s) => s.setModelName);
   const bumpSessions = useAppStore((s) => s.bumpSessions);
   const frontendActions = useAppStore((s) => s.frontendActions);
+  const activeSessionId = useAppStore((s) => s.sessionId);
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>(() => createDefaultWorkspaceLayout());
   const [workspaceLayoutReady, setWorkspaceLayoutReady] = useState(false);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"models" | "security" | null>(null);
+
+  useEffect(() => {
+    try {
+      const sid = window.localStorage.getItem("agent-drive-active-session");
+      if (sid) useAppStore.getState().setSessionId(sid);
+      setSessionHydrated(true);
+    } catch {
+      // 浏览器禁用存储时保持默认空会话。
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sessionHydrated) return;
+    try {
+      if (activeSessionId) window.localStorage.setItem("agent-drive-active-session", activeSessionId);
+      else window.localStorage.removeItem("agent-drive-active-session");
+    } catch {
+      // 浏览器禁用存储时保持内存会话。
+    }
+  }, [activeSessionId, sessionHydrated]);
 
   useEffect(() => {
     let storage: Storage | undefined;

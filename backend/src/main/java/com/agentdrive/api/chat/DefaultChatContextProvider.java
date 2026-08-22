@@ -99,19 +99,46 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
     }
 
     private void appendBaseContexts(UUID userId, String sessionId, List<ChatContext> result) {
-        if (!systemPrompt.isBlank()) {
-            result.add(new ChatContext("agent-drive-system-prompt", "system", systemPrompt, false));
-        }
+        result.add(new ChatContext("agent-drive-system-prompt", "system",
+                systemPrompt.isBlank() ? "(系统提示为空)" : systemPrompt, false));
         for (AgentDocument document : DOCUMENTS) {
-            readDocument(userId, document).ifPresent(result::add);
+            result.add(readDocumentOrPlaceholder(userId, document));
         }
         List<SkillSummary> catalog = readSkillCatalog(userId);
         List<String> loadedSkills = loadedSkillNames(sessionId);
         List<String> activeLoadedSkills = appendLoadedSkills(userId, loadedSkills, result);
-        if (!catalog.isEmpty()) {
-            result.add(new ChatContext("skill-catalog", "skill-catalog",
-                    renderCatalog(catalog, activeLoadedSkills), true));
+        result.add(new ChatContext("skill-catalog", "skill-catalog",
+                renderCatalog(catalog, activeLoadedSkills), true));
+    }
+
+    /**
+     * 读取一个 Agent 文档，文件不存在或为空时返回占位上下文，保证首轮始终有固定五项基线。
+     */
+    private ChatContext readDocumentOrPlaceholder(UUID userId, AgentDocument document) {
+        try {
+            Map<String, Object> value = files.content(userId, document.path(), DOCUMENT_LIMIT);
+            Object rawContent = value.get("content");
+            String text = redactor.text(rawContent == null ? "" : String.valueOf(rawContent)).trim();
+            if (text.isEmpty()) {
+                return new ChatContext(document.source(), document.kind(),
+                        placeholder(document.path()), true);
+            }
+            boolean truncated = Boolean.TRUE.equals(value.get("truncated"));
+            String framed = "<agent_context source=\"" + document.path() + "\">\n"
+                    + text + (truncated ? "\n\n[内容已截断]" : "")
+                    + "\n</agent_context>";
+            return new ChatContext(document.source(), document.kind(), framed, true);
+        } catch (FileStorageException error) {
+            if (error.status() == 404) {
+                return new ChatContext(document.source(), document.kind(),
+                        placeholder(document.path()), true);
+            }
+            throw error;
         }
+    }
+
+    private String placeholder(String path) {
+        return "<agent_context source=\"" + path + "\">\n(文件不存在或为空)\n</agent_context>";
     }
 
     /**
@@ -204,30 +231,6 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
     }
 
     /**
-     * 读取一个可选 Agent 文档。
-     * @param userId 文档 owner
-     * @param document 固定文档描述
-     * @return 文件存在且有正文时的上下文
-     */
-    private java.util.Optional<ChatContext> readDocument(UUID userId, AgentDocument document) {
-        try {
-            Map<String, Object> value = files.content(userId, document.path(), DOCUMENT_LIMIT);
-            Object rawContent = value.get("content");
-            String text = redactor.text(rawContent == null ? "" : String.valueOf(rawContent)).trim();
-            if (text.isEmpty()) return java.util.Optional.empty();
-            boolean truncated = Boolean.TRUE.equals(value.get("truncated"));
-            String framed = "<agent_context source=\"" + document.path() + "\">\n"
-                    + text + (truncated ? "\n\n[内容已截断]" : "")
-                    + "\n</agent_context>";
-            return java.util.Optional.of(new ChatContext(
-                    document.source(), document.kind(), framed, true));
-        } catch (FileStorageException error) {
-            if (error.status() == 404) return java.util.Optional.empty();
-            throw error;
-        }
-    }
-
-    /**
      * 分页读取完整启用 Skill 目录。
      * @param userId Skill owner
      * @return 稳定排序的摘要
@@ -259,9 +262,13 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
         lines.add("以下是当前会话可用的 Skill 摘要：");
         lines.add("");
         lines.add("<available_skills>");
-        for (SkillSummary skill : catalog) {
-            lines.add("- `" + skill.name() + "`: " + escapeXml(normalizeDescription(skill.description()))
-                    + (loaded.contains(skill.name()) ? " [已加载]" : ""));
+        if (catalog.isEmpty()) {
+            lines.add("(暂无可用 Skill)");
+        } else {
+            for (SkillSummary skill : catalog) {
+                lines.add("- `" + skill.name() + "`: " + escapeXml(normalizeDescription(skill.description()))
+                        + (loaded.contains(skill.name()) ? " [已加载]" : ""));
+            }
         }
         lines.add("</available_skills>");
         lines.add("");

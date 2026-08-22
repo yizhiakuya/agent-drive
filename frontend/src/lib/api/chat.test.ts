@@ -1,26 +1,55 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { EV } from "@/lib/events";
 import { ApiError } from "./client";
-import { chatStream } from "./chat";
+import { chatReconnect, chatStream } from "./chat";
 
-function sseResponse(chunks: string[]) {
+function sseResponse(chunks: string[], init?: ResponseInit) {
   const encoder = new TextEncoder();
-  return byteResponse(chunks.map((c) => encoder.encode(c)));
+  return byteResponse(chunks.map((c) => encoder.encode(c)), init);
 }
 
-function byteResponse(chunks: Uint8Array[]) {
+function byteResponse(chunks: Uint8Array[], init?: ResponseInit) {
   const stream = new ReadableStream({
     start(controller) {
       for (const c of chunks) controller.enqueue(c);
       controller.close();
     },
   });
-  return new Response(stream, { status: 200 });
+  return new Response(stream, { status: 200, ...init });
 }
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("chatStream SSE 解析", () => {
+  it("从响应头回传服务端新建的会话 ID", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: done\ndata: {"session_id":"header-session"}\n\n',
+    ], { headers: { "X-Session-ID": "header-session" } }));
+    const onSessionId = vi.fn();
+
+    await chatStream("hi", [], null, [], () => {}, new AbortController().signal,
+      "auto", [], "", [], "auto", [], onSessionId);
+
+    expect(onSessionId).toHaveBeenCalledWith("header-session");
+  });
+
+  it("重连接口复用同一套 SSE 解析器", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: text\ndata: {"text":"继续输出"}\n\n',
+      'event: done\ndata: {"session_id":"reconnected"}\n\n',
+    ]));
+    const events: string[] = [];
+
+    const result = await chatReconnect("reconnected", (event) => events.push(event), new AbortController().signal);
+
+    expect(events).toEqual(["text", "done"]);
+    expect(result).toEqual({ session_id: "reconnected" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/chat/reconnected/stream"),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it("把选定模型放入聊天请求体", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: done\ndata: {"session_id":"model-session"}\n\n',

@@ -293,6 +293,33 @@ class IndexTaskHandlerTest {
     }
 
     @Test
+    void executesChatRunThroughDurableWorkerExecutor() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        ChatTaskExecutor chat = mock(ChatTaskExecutor.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        Map<String, Object> payload = Map.of("session_id", UUID.randomUUID().toString(), "message", "整理文件");
+        when(workers.claim("worker", "index", 300)).thenReturn(null);
+        when(workers.claim("worker", "default", 300)).thenReturn(null);
+        when(workers.claim("worker", "maintenance", 300)).thenReturn(null);
+        when(workers.claim("worker", "automation", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "chat.run",
+                "payload_json", "{\"session_id\":\"" + payload.get("session_id") + "\",\"message\":\"整理文件\"}"
+        ));
+        when(chat.execute(eq(owner), eq(payload), any(TaskProgressReporter.class)))
+                .thenReturn(Map.of("ok", true, "session_id", payload.get("session_id"), "reply", "已完成"));
+        IndexTaskHandler handler = new IndexTaskHandler(
+                workers, indexing, new ObjectMapper(), null, null, null, null, null, chat);
+
+        assertThat(handler.runOnce("worker")).isTrue();
+
+        verify(chat).execute(eq(owner), eq(payload), any(TaskProgressReporter.class));
+        verify(workers).succeed(eq("worker"), eq(taskId), eq(Map.of(
+                "ok", true, "session_id", payload.get("session_id"), "reply", "已完成")));
+    }
+
+    @Test
     void executesDailyMaintenanceThroughAllOwnerScopedServices() {
         TaskWorkerStore workers = mock(TaskWorkerStore.class);
         IndexingService indexing = mock(IndexingService.class);

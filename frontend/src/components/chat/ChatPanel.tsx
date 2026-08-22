@@ -301,7 +301,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const sidRef = useRef<string | null>(sessionId);
+  const sidRef = useRef<string | null>(null);
   const sessionLoadRequestRef = useRef(0);
   const autoScrollRef = useRef(true);
 
@@ -503,11 +503,14 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
 
   useEffect(() => {
     if (sessionId !== sidRef.current) {
+      const preserveOptimisticRun = sidRef.current === null
+        && messages.some((message) => message.type === "user");
       sidRef.current = sessionId;
       autoScrollRef.current = true;
       setPending(null);
       setFileContext([]);
       closeMentionPicker();
+      if (sessionId && preserveOptimisticRun) return;
       if (sessionId) {
         setMessages([]);
         setPlan([]);
@@ -519,7 +522,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
         setContextUsage(null);
       }
     }
-  }, [sessionId]);
+  }, [sessionId, messages]);
 
   function onScroll() {
     const el = listRef.current;
