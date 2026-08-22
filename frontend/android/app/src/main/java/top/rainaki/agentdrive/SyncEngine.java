@@ -76,6 +76,12 @@ public final class SyncEngine {
         RETRY
     }
 
+    /** 单张成功处理的真实来源，用于区分网络上传与服务端已验证秒传。 */
+    private enum UploadOutcome {
+        UPLOADED,
+        DEDUPED
+    }
+
     /** 单张本地媒体读取失败的处理类别（纯函数输出）。 */
     enum LocalMediaResult {
         /** 媒体已删除或权限永久拒绝：跳过并推进连续水位。 */
@@ -342,7 +348,10 @@ public final class SyncEngine {
         // Tracker 必须在 query 之前创建：查询/Cursor 异常也要保留已有 pending 水位。
         CheckpointTracker checkpoint = new CheckpointTracker(lastSync, pendingSecond, pendingMaxId);
         int count = 0;
+        int deduped = 0;
         int failures = 0;
+        int skipped = 0;
+        int retryableFailures = 0;
         int processed = 0;
         boolean truncated = false;
         long truncatedSecond = -1;
@@ -409,40 +418,53 @@ public final class SyncEngine {
                 if (Thread.currentThread().isInterrupted()) {
                     aborted = true;
                     interruptedAbort = true;
+                    failures++;
+                    retryableFailures++;
                     checkpoint.failure();
                     break;
                 }
                 try {
-                    uploadOne(ctx, base, relFolder, name, mime, uri, deviceToken);
+                    UploadOutcome outcome = uploadOne(ctx, base, relFolder, name, mime, uri, deviceToken);
                     count++;
+                    if (outcome == UploadOutcome.DEDUPED) {
+                        // count 保持旧契约（成功处理总数），诊断统计单独区分秒传。
+                        deduped++;
+                    }
                     checkpoint.success(id);
                     uploaded = count;
                     currentFile = name;
                     emitProgress();          // JS 实时进度
                     notifyProgress(ctx);      // 通知栏进度（节流）
                 } catch (PermanentSkipException e) {
+                    skipped++;
                     checkpoint.skip(id);
                     currentFile = name;
                     emitProgress();
                 } catch (AbortBatchException e) {
                     aborted = true;           // 连接级失败：中止整批
+                    failures++;
+                    retryableFailures++;
                     checkpoint.failure();     // 当前秒挂 pending，检查点不能越过
                     break;
                 } catch (Exception error) {
                     LocalMediaResult localResult = classifyLocalMediaFailure(
                             error, Thread.currentThread().isInterrupted());
                     if (localResult == LocalMediaResult.SKIP) {
+                        skipped++;
                         checkpoint.skip(id);
                         currentFile = name;
                         emitProgress();
                     } else if (localResult == LocalMediaResult.ABORT) {
                         Thread.currentThread().interrupt();
                         aborted = true;
+                        failures++;
+                        retryableFailures++;
                         interruptedAbort = true;
                         checkpoint.failure();
                         break;
                     } else {
                         failures++;           // 普通本地 I/O：同秒冻结，下轮重试
+                        retryableFailures++;
                         checkpoint.failure();
                     }
                 }
@@ -480,6 +502,8 @@ public final class SyncEngine {
             } else {
                 ServerConfigStore.setLastError(ctx, null);
             }
+            ServerConfigStore.setSyncStats(ctx, processed, count - deduped, deduped,
+                    skipped, failures, retryableFailures, notificationsAvailable(ctx));
             return count;
         } catch (Exception error) {
             if (c != null) {
@@ -504,6 +528,13 @@ public final class SyncEngine {
                 } catch (Exception checkpointError) {
                     error.addSuppressed(checkpointError);
                 }
+            }
+            try {
+                ServerConfigStore.setSyncStats(ctx, processed, count - deduped, deduped,
+                        skipped, Math.max(1, failures), Math.max(1, retryableFailures),
+                        notificationsAvailable(ctx));
+            } catch (Exception statsError) {
+                error.addSuppressed(statsError);
             }
             try {
                 ServerConfigStore.setLastError(ctx, "相册扫描/检查点异常，将自动重试");
@@ -546,8 +577,8 @@ public final class SyncEngine {
     }
 
     /** 单张：MediaStore → 缓存临时文件（顺带算 MD5）→ multipart 上传 → 清理临时文件。 */
-    private static boolean uploadOne(Context ctx, String base, String relFolder, String name, String mime,
-                                    Uri uri, String deviceToken) throws Exception {
+    private static UploadOutcome uploadOne(Context ctx, String base, String relFolder, String name, String mime,
+                                           Uri uri, String deviceToken) throws Exception {
         File tmp = null;
         try {
             tmp = File.createTempFile("photosync-", ".tmp", ctx.getCacheDir());
@@ -559,7 +590,7 @@ public final class SyncEngine {
 
             // 先查服务端已验证索引；命中则真正免传，未命中再上传并由服务端复算 MD5。
             if (dedupeHit(base, md5, deviceToken)) {
-                return true;
+                return UploadOutcome.DEDUPED;
             }
 
             // path 走查询参数（服务端约定），md5/noclobber 走表单字段
@@ -567,11 +598,20 @@ public final class SyncEngine {
             try (InputStream in = new FileInputStream(tmp)) {
                 uploadFile(base + "/files/upload" + query, name, mime, in, md5, deviceToken);
             }
-            return true;
+            return UploadOutcome.UPLOADED;
         } finally {
             if (tmp != null) {
                 tmp.delete();
             }
+        }
+    }
+
+    /** 当前设备是否能显示同步通知；权限拒绝不影响上传本身。 */
+    private static boolean notificationsAvailable(Context ctx) {
+        try {
+            return NotificationManagerCompat.from(ctx).areNotificationsEnabled();
+        } catch (RuntimeException ignored) {
+            return false;
         }
     }
 
@@ -616,9 +656,14 @@ public final class SyncEngine {
             } catch (IOException e) {
                 throw new AbortBatchException("秒传预检网络失败", e);
             }
+            // 预检未命中、永久拒绝和可重试错误也必须消费响应实体，避免连接池丢失复用。
+            if (code >= 200 && code < 400) {
+                drainQuietly(conn.getInputStream());
+            } else {
+                drainQuietly(conn.getErrorStream());
+            }
             switch (classifySyncStatus(code, false)) {
                 case SUCCESS:
-                    drainQuietly(conn.getInputStream());
                     return true;
                 case MISS:
                     return false;

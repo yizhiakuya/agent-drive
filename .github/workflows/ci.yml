@@ -76,6 +76,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify static build boundary
+        run: npm run verify:build
+
   android:
     runs-on: ubuntu-latest
     steps:
@@ -109,6 +112,10 @@ jobs:
       - name: Make gradlew executable
         working-directory: frontend/android
         run: chmod +x gradlew
+
+      - name: Android lint (API compatibility and manifest contract)
+        working-directory: frontend/android
+        run: ./gradlew lintDebug
 
       - name: JVM unit tests (migration/checkpoint/config)
         working-directory: frontend/android

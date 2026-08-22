@@ -68,6 +68,41 @@ class MybatisScheduleStoreTest {
     }
 
     @Test
+    void recordsManualRunWithoutChangingNextSchedule() {
+        ScheduleMapper mapper = mock(ScheduleMapper.class);
+        TaskStore tasks = mock(TaskStore.class);
+        MybatisScheduleStore schedules = new MybatisScheduleStore(mapper, new ObjectMapper(), tasks);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        when(mapper.markManualRun(owner.toString(), "daily-report", taskId)).thenReturn(1);
+
+        assertThat(schedules.markManualRun(owner, " daily-report ", taskId)).isTrue();
+        verify(mapper).markManualRun(owner.toString(), "daily-report", taskId);
+        verifyNoInteractions(tasks);
+    }
+
+    @Test
+    void projectsLatestTaskFailureIntoScheduleErrorForAutomationCenter() {
+        ScheduleMapper mapper = mock(ScheduleMapper.class);
+        TaskStore tasks = mock(TaskStore.class);
+        MybatisScheduleStore schedules = new MybatisScheduleStore(mapper, new ObjectMapper(), tasks);
+        UUID owner = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        Map<String, Object> row = new java.util.LinkedHashMap<>(schedule(
+                owner, UUID.randomUUID().toString(), "daily-report", "daily", "09:00", 1_700_000_000L));
+        row.put("last_task_id", taskId.toString());
+        row.put("last_run_at", null);
+        when(mapper.selectSchedules(owner.toString())).thenReturn(List.of(row));
+        when(tasks.get(owner, taskId)).thenReturn(Map.of(
+                "status", "failed", "error", "provider timeout", "created_at", 1_750_000_000L));
+
+        Map<String, Object> listed = schedules.list(owner).get(0);
+
+        assertThat(listed).containsEntry("last_error", "provider timeout")
+                .containsEntry("last_run_at", 1_750_000_000L);
+    }
+
+    @Test
     void quarantinesLegacyInvalidScheduleAndDispatchesFollowingValidSchedule() {
         ScheduleMapper mapper = mock(ScheduleMapper.class);
         TaskStore tasks = mock(TaskStore.class);

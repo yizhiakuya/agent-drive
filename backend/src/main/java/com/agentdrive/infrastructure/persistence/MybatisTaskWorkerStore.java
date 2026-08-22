@@ -27,6 +27,12 @@ public class MybatisTaskWorkerStore implements TaskWorkerStore {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
     }
 
+    /** Return the database-backed count of Worker heartbeats observed in the last ten seconds. */
+    @Override
+    public int onlineWorkerCount() {
+        return Math.max(0, mapper.selectOnlineWorkerCount());
+    }
+
     /**
      * 把 Worker 的进程心跳写入独立登记表。
      * @param workerId 当前 Worker 的稳定进程标识。

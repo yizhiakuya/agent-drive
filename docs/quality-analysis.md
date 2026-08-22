@@ -82,7 +82,7 @@ rg -n "console\.|TODO|FIXME" frontend/src backend/src -g "*.ts" -g "*.tsx" -g "*
 > 审计基线：2026-08-19。重大架构或技术栈变更时更新此处，并同步 [`AGENTS.md`](../AGENTS.md)。
 
 - **架构**：Java 21 + Spring Boot/WebFlux API 与独立 PostgreSQL Worker；Next.js 16 静态导出前端；Capacitor 7 Android 壳。详见 [`architecture.md`](architecture.md)。
-- **技术栈**：Java 21、Spring Modulith、LangChain4j、MyBatis-Plus、Flyway、PostgreSQL/pgvector、Tika/Tesseract；TypeScript 5、React 19、Tailwind 4、shadcn/ui、Vitest；AndroidX Security Crypto/WorkManager。
+- **技术栈**：Java 21、Spring Modulith、LangChain4j、MyBatis-Plus、Flyway、PostgreSQL/pgvector、Tika、视觉模型/Jina；TypeScript 5、React 19、Tailwind 4、shadcn/ui、Vitest；AndroidX Security Crypto/WorkManager。
 - **当前达标项**：backend_api 已按 catalog/router 和领域 handler 分层；聊天流已拆出事件、状态和帧模块；前端文件页有请求代次保护；文件列表使用有界 top-k 和批量 metadata upsert；Agent 工具不捕获 JVM `Error`；锁序、原子发布、失败关闭和数据库集成测试已纳入门禁。
 - **主要复杂度热点**：文件存储、Agent runtime、文件页、聊天流和 Android `SyncEngine`。后续重构应以测试和行为不变量为前提，不在质量分析阶段直接改写。
 - **生产状态**：Java API/Worker 已运行，生产入口为 nginx `13311`；旧 Python source/unit 不属于运行时，旧资料只在 fixture/cutover backup 中保留。

@@ -76,6 +76,81 @@ public interface FileMapper {
     List<Map<String, Object>> selectByPaths(@Param("userId") String userId,
                                             @Param("paths") List<String> paths);
 
+    /** 查询 owner 在指定路径上的收藏标记。 */
+    List<Map<String, Object>> selectFavoritePaths(@Param("userId") String userId,
+                                                   @Param("paths") List<String> paths);
+
+    /** 按最近收藏时间读取 owner 的收藏路径，并附带当前 metadata（最多 limit 行）。 */
+    List<Map<String, Object>> selectFavorites(@Param("userId") String userId,
+                                               @Param("limit") int limit);
+
+    /** 按最近访问时间读取 owner 的访问路径，并附带当前 metadata（最多 limit 行）。 */
+    List<Map<String, Object>> selectRecent(@Param("userId") String userId,
+                                           @Param("limit") int limit);
+
+    /** 幂等写入或刷新 owner 对文件的最近访问时间。 */
+    int touchAccess(@Param("userId") String userId,
+                    @Param("path") String path);
+
+    /** 添加 owner 收藏；重复收藏保持幂等。 */
+    int addFavorite(@Param("userId") String userId,
+                    @Param("path") String path);
+
+    /** 删除 owner 收藏；不存在时返回 0。 */
+    int removeFavorite(@Param("userId") String userId,
+                       @Param("path") String path);
+
+    /** 删除 owner 在目标路径及其子树上的收藏，供覆盖移动前清理冲突记录。 */
+    int deleteFavoritePrefix(@Param("userId") String userId,
+                             @Param("prefix") String prefix);
+
+    /** 将 owner 的收藏路径从源前缀迁移到目标前缀。 */
+    int moveFavoritePrefix(@Param("userId") String userId,
+                           @Param("source") String source,
+                           @Param("destination") String destination);
+
+    /** 删除 owner 在目标路径及其子树上的访问记录，供覆盖移动前清理冲突记录。 */
+    int deleteAccessPrefix(@Param("userId") String userId,
+                           @Param("prefix") String prefix);
+
+    /** 将 owner 的最近访问路径从源前缀迁移到目标前缀。 */
+    int moveAccessPrefix(@Param("userId") String userId,
+                         @Param("source") String source,
+                         @Param("destination") String destination);
+
+    /** 读取 owner 指定路径的真实内容快照，按创建时间倒序分页。 */
+    List<Map<String, Object>> selectVersionSnapshots(@Param("userId") String userId,
+                                                     @Param("path") String path,
+                                                     @Param("limit") int limit);
+
+    /** 按 owner、路径和版本快照 ID 读取单个快照元数据。 */
+    Map<String, Object> selectVersionSnapshot(@Param("userId") String userId,
+                                              @Param("path") String path,
+                                              @Param("id") String id);
+
+    /** 写入一条 owner-scoped 真实内容快照元数据。 */
+    int insertVersionSnapshot(@Param("id") String id,
+                               @Param("userId") String userId,
+                               @Param("path") String path,
+                               @Param("sourceRevision") long sourceRevision,
+                               @Param("snapshotPath") String snapshotPath,
+                               @Param("size") long size,
+                               @Param("md5") String md5,
+                               @Param("sha256") String sha256);
+
+    /** 删除一条版本快照元数据，供非事务回滚清理使用。 */
+    int deleteVersionSnapshot(@Param("userId") String userId,
+                              @Param("id") String id);
+
+    /** 将版本快照路径从源前缀迁移到目标前缀。 */
+    int moveVersionSnapshotPrefix(@Param("userId") String userId,
+                                  @Param("source") String source,
+                                  @Param("destination") String destination);
+
+    /** 删除目标路径及其子树的版本快照元数据。 */
+    int deleteVersionSnapshotPrefix(@Param("userId") String userId,
+                                    @Param("prefix") String prefix);
+
     /**
      * 插入或更新 owner 在指定路径上的文件元数据。
      *

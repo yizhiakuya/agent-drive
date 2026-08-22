@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Size;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -176,9 +178,15 @@ public final class AuthController {
     public Mono<Map<String, String>> deviceToken(@Valid @RequestBody DeviceTokenRequest payload,
                                                  ServerWebExchange exchange) {
         return principalResolver.resolve(exchange)
-                .flatMap(principal -> blocking(() -> auth.issueDeviceToken(
-                        principal.userId(), payload.deviceId(), payload.name()
-                )))
+                .flatMap(principal -> {
+                    if (principal.credentialKind() != AuthenticatedPrincipal.CredentialKind.SESSION) {
+                        return Mono.error(new ResponseStatusException(
+                                HttpStatus.FORBIDDEN, "web session required to issue a device token"));
+                    }
+                    return blocking(() -> auth.issueDeviceToken(
+                            principal.userId(), payload.deviceId(), payload.name()
+                    ));
+                })
                 .map(result -> Map.of("token", result.token(), "device_id", result.deviceId()));
     }
 

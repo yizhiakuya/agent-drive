@@ -79,9 +79,15 @@ public class ChatRuntimeConfiguration {
     @Bean
     ChatContextProvider chatContextProvider(SkillRegistry skillRegistry,
                                             FileStorageService files,
+                                            PersistentChatRuntimeStateStore stateStore,
                                             AppProperties properties) {
         return new DefaultChatContextProvider(
-                skillRegistry, files, AgentSystemPrompt.normalize(properties.systemPrompt()));
+                skillRegistry,
+                files,
+                AgentSystemPrompt.normalize(properties.systemPrompt()),
+                new com.agentdrive.infrastructure.SensitiveDataRedactor(),
+                stateStore
+        );
     }
 
     /**

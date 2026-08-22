@@ -10,6 +10,10 @@ import java.util.UUID;
  * 这样文件变更或模型切换后旧向量会被视为无效，而不会混入新的检索结果。
  */
 public interface IndexStore {
+    /** 文本/文档正文向量的类型标识。 */
+    String TEXT_DOCUMENT_TYPE = "text";
+    /** 视觉模型结构化描述向量的类型标识。 */
+    String VISION_DOCUMENT_TYPE = "vision";
     /**
      * 当前 owner 文件索引的全盘统计。
      *
@@ -21,7 +25,15 @@ public interface IndexStore {
      * @param staleVectors 仍有旧 fingerprint 向量的文件数。
      */
     record Stats(int eligibleFiles, int extractedFiles, int vectorFiles,
-                 int nonVectorizableFiles, int missingVectors, int staleVectors) {
+                 int nonVectorizableFiles, int missingVectors, int staleVectors,
+                 int textVectorFiles, int visionVectorFiles,
+                 int textMissingVectors, int visionMissingVectors) {
+        /** 保留旧调用方的六字段构造方式。 */
+        public Stats(int eligibleFiles, int extractedFiles, int vectorFiles,
+                     int nonVectorizableFiles, int missingVectors, int staleVectors) {
+            this(eligibleFiles, extractedFiles, vectorFiles, nonVectorizableFiles,
+                    missingVectors, staleVectors, 0, 0, 0, 0);
+        }
         /**
          * 转为任务概览 API 使用的 snake_case 字段。
          * @return 不包含敏感信息的统计映射。
@@ -33,7 +45,11 @@ public interface IndexStore {
                     "vector_files", vectorFiles,
                     "non_vectorizable_files", nonVectorizableFiles,
                     "missing_vectors", missingVectors,
-                    "stale_vectors", staleVectors
+                    "stale_vectors", staleVectors,
+                    "text_vector_files", textVectorFiles,
+                    "vision_vector_files", visionVectorFiles,
+                    "text_missing_vectors", textMissingVectors,
+                    "vision_missing_vectors", visionMissingVectors
             );
         }
     }
@@ -92,8 +108,27 @@ public interface IndexStore {
      * @param chunks 按固定窗口切好的正文块，顺序决定 chunk 序号。
      * @param chunkVersion 切分算法版本。
      */
-    void replaceDocument(UUID userId, UUID fileId, long sourceRevision, String content,
-                         String extractorVersion, List<String> chunks, String chunkVersion);
+    default void replaceDocument(UUID userId, UUID fileId, long sourceRevision, String content,
+                                  String extractorVersion, List<String> chunks, String chunkVersion) {
+        replaceDocument(userId, fileId, sourceRevision, TEXT_DOCUMENT_TYPE, content,
+                extractorVersion, chunks, chunkVersion);
+    }
+
+    /**
+     * 用一次抽取/描述结果替换文件的某一种文档类型。
+     * 文本正文和视觉描述允许在同一文件 revision 下并存，但各自独立失效和向量化。
+     *
+     * @param userId 文件归属 owner。
+     * @param fileId 文件 UUID。
+     * @param sourceRevision 文件 revision。
+     * @param documentType {@code text} 或 {@code vision}。
+     * @param content 抽取正文或结构化视觉描述。
+     * @param extractorVersion 产生正文的抽取器/描述器版本。
+     * @param chunks 按固定窗口切好的内容块。
+     * @param chunkVersion 切分算法版本。
+     */
+    void replaceDocument(UUID userId, UUID fileId, long sourceRevision, String documentType,
+                         String content, String extractorVersion, List<String> chunks, String chunkVersion);
 
     /**
      * 删除索引中已不再对应用户现有文件的文档和 chunks。
@@ -102,6 +137,17 @@ public interface IndexStore {
      * @return 被删除的索引文件记录数量。
      */
     int cleanup(UUID userId);
+
+    /**
+     * 清空 owner 当前所有文档 chunk 的向量值，但保留文本/视觉描述正文和文件原文。
+     * 该操作只应由后台任务调用，避免把 owner 全量更新放进聊天请求。
+     *
+     * @param userId 文件归属 owner。
+     * @return 实际清空向量的 chunk 数量。
+     */
+    default int clearEmbeddings(UUID userId) {
+        return 0;
+    }
 
     /**
      * 选取仍缺少向量或向量 fingerprint 与当前配置不一致的 chunks。

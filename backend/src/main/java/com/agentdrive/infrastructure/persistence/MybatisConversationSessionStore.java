@@ -159,6 +159,8 @@ public final class MybatisConversationSessionStore implements ConversationSessio
         Map<String, Object> result = new LinkedHashMap<>(row);
         Object pending = result.remove("pending_confirmation_json");
         if (pending != null) result.put("pending_confirmation", parseJson(pending));
+        Object contextUsage = result.remove("context_usage_json");
+        if (contextUsage != null) result.put("context_usage", parseJson(contextUsage));
         return result;
     }
 

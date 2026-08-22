@@ -28,14 +28,17 @@ public final class PhotoSyncScheduler {
 
     /** 事件驱动（MediaStore 观察者）：拍照后立即排一次快速同步，沿用同步设置约束。 */
     public static void enqueueQuickSync(Context ctx) {
-        if (!ServerConfigStore.isSyncEnabled(ctx) || !ServerConfigStore.isConfigured(ctx)) {
-            return;
+        synchronized (PhotoSyncScheduler.class) {
+            // 与停用路径共用锁，避免“检查已启用”后刚好被停用、又把 quick work 排回去。
+            if (!ServerConfigStore.isSyncEnabled(ctx) || !ServerConfigStore.isConfigured(ctx)) {
+                return;
+            }
+            Constraints constraints = syncConstraints(ctx);
+            OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(PhotoSyncWorker.class)
+                    .setConstraints(constraints)
+                    .build();
+            WorkManager.getInstance(ctx).enqueueUniqueWork(UNIQUE_QUICK, ExistingWorkPolicy.KEEP, request);
         }
-        Constraints constraints = syncConstraints(ctx);
-        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(PhotoSyncWorker.class)
-                .setConstraints(constraints)
-                .build();
-        WorkManager.getInstance(ctx).enqueueUniqueWork(UNIQUE_QUICK, ExistingWorkPolicy.KEEP, request);
     }
 
     public static void ensureScheduled(Context ctx) {
@@ -63,6 +66,9 @@ public final class PhotoSyncScheduler {
     private static Operation reconcileSchedule(Context ctx) {
         WorkManager wm = WorkManager.getInstance(ctx);
         if (!ServerConfigStore.isSyncEnabled(ctx) || !ServerConfigStore.isConfigured(ctx)) {
+            // 停用必须同时取消周期和事件驱动任务；否则相册观察者留下的 quick work
+            // 仍可能在用户关闭同步后上传照片。
+            wm.cancelUniqueWork(UNIQUE_QUICK);
             return wm.cancelUniqueWork(UNIQUE_PERIODIC);
         }
         // WorkManager 周期下限 15 分钟

@@ -18,6 +18,7 @@ export function ToolStep({ step }: { step: ToolStepData }) {
   const argsBrief = fmtToolArgs(step.tool, step.arguments || {});
 
   const parsed = step.parsed as Record<string, unknown> | undefined;
+  const hasResult = Boolean(step.output) || step.parsed !== undefined;
   const isListFiles = Array.isArray(step.parsed) && step.tool === "list_files";
   const isError = parsed && parsed.ok === false;
   const isSkill = step.tool === "read_skill";
@@ -51,7 +52,7 @@ export function ToolStep({ step }: { step: ToolStepData }) {
         {statusBadge}
         <ChevronRight className={`size-3.5 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
       </Button>
-      {open && step.output && (
+      {open && hasResult && (
         <div className="max-h-64 overflow-auto border-t border-border bg-text px-3 py-3 text-panel">
           {isError ? (
             <div className="flex items-center gap-1.5 text-danger-soft"><CircleAlert className="size-3.5" /> {parsed?.error as string}</div>
@@ -75,6 +76,11 @@ export function ToolStep({ step }: { step: ToolStepData }) {
           ) : (
             <code className="whitespace-pre-wrap break-all font-mono text-[11px] text-panel/85">{step.output}</code>
           )}
+        </div>
+      )}
+      {open && !hasResult && (
+        <div className="border-t border-border bg-card/40 px-3 py-3 text-xs text-muted">
+          此步骤没有可展示的返回内容
         </div>
       )}
     </div>

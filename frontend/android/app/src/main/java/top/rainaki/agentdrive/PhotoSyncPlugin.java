@@ -2,8 +2,12 @@ package top.rainaki.agentdrive;
 
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.content.Intent;
 import android.os.Build;
+import android.provider.Settings;
+import android.net.Uri;
 
+import androidx.core.app.NotificationManagerCompat;
 import androidx.work.ExistingWorkPolicy;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkManager;
@@ -118,6 +122,13 @@ public class PhotoSyncPlugin extends Plugin {
                 call.reject("未配置服务器：请先扫码连接");
                 return;
             }
+            if (!ServerConfigStore.isSyncEnabled(getContext())) {
+                JSObject ret = new JSObject();
+                ret.put("started", false);
+                ret.put("reason", "同步未启用");
+                call.resolve(ret);
+                return;
+            }
             if (!hasMediaPermission()) {
                 call.reject("缺少相册权限");
                 return;
@@ -163,6 +174,31 @@ public class PhotoSyncPlugin extends Plugin {
         getActivity().runOnUiThread(() -> getActivity().requestPermissions(arr, MainActivity.REQ_PHOTO_PERM));
     }
 
+    /** 打开当前 App 的系统通知设置，供同步诊断在通知被拒时提供直达入口。 */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        if (getActivity() == null) {
+            call.reject("activity 不可用");
+            return;
+        }
+        try {
+            Intent intent = new Intent();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                intent.setAction(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                intent.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+            } else {
+                intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+            }
+            getActivity().startActivity(intent);
+            JSObject result = new JSObject();
+            result.put("opened", true);
+            call.resolve(result);
+        } catch (RuntimeException error) {
+            call.reject("无法打开通知设置：" + error.getMessage());
+        }
+    }
+
     private boolean hasMediaPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
             return getContext().checkSelfPermission("android.permission.READ_MEDIA_IMAGES")
@@ -175,6 +211,8 @@ public class PhotoSyncPlugin extends Plugin {
     private JSObject status() {
         Context ctx = getContext();
         JSObject ret = new JSObject();
+        ret.put("configured", ServerConfigStore.isConfigured(ctx));
+        ret.put("permissionGranted", hasMediaPermission());
         ret.put("enabled", ServerConfigStore.isSyncEnabled(ctx));
         ret.put("wifiOnly", ServerConfigStore.isWifiOnly(ctx));
         ret.put("intervalHours", ServerConfigStore.getIntervalHours(ctx));
@@ -183,6 +221,14 @@ public class PhotoSyncPlugin extends Plugin {
         ret.put("lastSyncAt", last == 0 ? JSONObject.NULL : last);
         ret.put("lastSyncedCount", ServerConfigStore.getLastCount(ctx));
         ret.put("lastError", ServerConfigStore.getLastError(ctx));
+        ret.put("lastScanned", ServerConfigStore.getLastScanned(ctx));
+        ret.put("lastUploaded", ServerConfigStore.getLastUploaded(ctx));
+        ret.put("lastDeduped", ServerConfigStore.getLastDeduped(ctx));
+        ret.put("lastSkipped", ServerConfigStore.getLastSkipped(ctx));
+        ret.put("lastFailed", ServerConfigStore.getLastFailed(ctx));
+        ret.put("lastRetryable", ServerConfigStore.getLastRetryable(ctx));
+        ret.put("notificationsEnabled", notificationsEnabled(ctx));
+        ret.put("lastNotification", ServerConfigStore.getLastNotification(ctx));
         // 实时进度（与 syncProgress 事件同构）
         ret.put("running", SyncEngine.running);
         ret.put("phase", SyncEngine.phase);
@@ -190,5 +236,13 @@ public class PhotoSyncPlugin extends Plugin {
         ret.put("uploaded", SyncEngine.uploaded);
         ret.put("total", SyncEngine.total);
         return ret;
+    }
+
+    private static boolean notificationsEnabled(Context ctx) {
+        try {
+            return NotificationManagerCompat.from(ctx).areNotificationsEnabled();
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 }

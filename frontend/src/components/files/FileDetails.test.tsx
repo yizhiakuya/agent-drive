@@ -1,7 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import type { FileInfo } from "@/lib/api/files";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { FileInfo, FileVersion } from "@/lib/api/files";
 import FileDetails from "./FileDetails";
+
+const { listVersions, restoreVersion } = vi.hoisted(() => ({
+  listVersions: vi.fn(async () => ({ path: "docs/合同.txt", items: [] as FileVersion[], has_more: false })),
+  restoreVersion: vi.fn(),
+}));
+vi.mock("@/lib/api/files", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api/files")>();
+  return { ...actual, listVersions, restoreVersion };
+});
 
 function info(indexed: FileInfo["indexed"]): FileInfo {
   return {
@@ -108,5 +117,20 @@ describe("FileDetails 向量化详情", () => {
     expect(screen.getByText("暂不可检索")).toBeInTheDocument();
     expect(screen.getByText("旧后端未提供索引详情（模型、指纹和文本段元数据）。")).toBeInTheDocument();
     expect(screen.getByText("旧后端未提供可展开的文本段内容和元数据。")).toBeInTheDocument();
+  });
+
+  it("展示真实版本并把恢复操作交给后端", async () => {
+    listVersions.mockResolvedValueOnce({
+      path: "docs/合同.txt",
+      items: [{ version_id: "version-1", source_revision: 2, size: 64, created_at: 1_750_000_000 }],
+      has_more: false,
+    });
+    const onRestored = vi.fn();
+    render(<FileDetails info={info(null)} onRestored={onRestored} />);
+
+    await waitFor(() => expect(screen.getByText("版本 2")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "恢复版本 2" }));
+    await waitFor(() => expect(restoreVersion).toHaveBeenCalledWith("docs/合同.txt", "version-1"));
+    expect(onRestored).toHaveBeenCalled();
   });
 });

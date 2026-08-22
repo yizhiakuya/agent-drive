@@ -61,6 +61,7 @@ describe("SessionList 空标题 → 标题生成与列表刷新", () => {
     render(<SessionList width={240} onResize={onResize} />);
 
     await act(async () => {});
+    expect(screen.getByTestId("session-panel")).toHaveClass("hidden", "xl:flex");
     const handle = screen.getByTestId("sessions-panel-resize-handle");
     expect(handle.className).toContain("-right-3");
     expect(handle.className).not.toContain("right-0");

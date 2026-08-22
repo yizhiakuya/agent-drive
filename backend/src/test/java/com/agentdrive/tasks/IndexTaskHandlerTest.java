@@ -160,6 +160,25 @@ class IndexTaskHandlerTest {
     }
 
     @Test
+    void clearsVectorsThroughDedicatedBackgroundTask() {
+        TaskWorkerStore workers = mock(TaskWorkerStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        UUID owner = UUID.randomUUID();
+        String taskId = UUID.randomUUID().toString();
+        when(workers.claim("worker", "index", 300)).thenReturn(Map.of(
+                "id", taskId, "user_id", owner.toString(), "type", "index.clear_vectors",
+                "payload_json", "{}"));
+        when(indexing.clearVectors(owner)).thenReturn(Map.of("cleared_vectors", 42, "status", "vectors_cleared"));
+        IndexTaskHandler handler = new IndexTaskHandler(workers, indexing, new ObjectMapper());
+
+        assertThat(handler.runOnce("worker")).isTrue();
+
+        verify(indexing).clearVectors(owner);
+        verify(workers).succeed(eq("worker"), eq(taskId), eq(Map.of(
+                "cleared_vectors", 42, "status", "vectors_cleared")));
+    }
+
+    @Test
     void failsVisionTaskWithoutCallingEmbeddingWhenEveryDescriptionFails() {
         TaskWorkerStore workers = mock(TaskWorkerStore.class);
         IndexingService indexing = mock(IndexingService.class);

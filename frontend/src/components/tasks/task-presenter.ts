@@ -6,6 +6,7 @@ export const TASK_LABELS: Record<string, string> = {
   "index.embed": "文件向量化",
   "index.vision": "图片视觉索引",
   "index.cleanup": "清理失效索引",
+  "index.clear_vectors": "清空文本和视觉向量",
   "maintenance.daily": "系统维护",
   "automation.run": "自动化规则",
 };

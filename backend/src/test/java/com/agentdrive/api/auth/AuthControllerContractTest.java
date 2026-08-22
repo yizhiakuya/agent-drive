@@ -147,6 +147,28 @@ class AuthControllerContractTest {
                         assertThat(String.valueOf(value)).contains("already been used"));
     }
 
+    @Test
+    void deviceTokenRejectsDeviceBearerEvenForTheSameOwner() {
+        FakeAccountStore store = new FakeAccountStore();
+        AuthController controller = new AuthController(
+                new AuthService(store, new PasswordHasher()),
+                new AppProperties("api", false),
+                new WebRequestPrincipalResolver(credential -> Optional.of(
+                        new AuthenticatedPrincipal(store.userId, AuthenticatedPrincipal.CredentialKind.DEVICE)
+                ))
+        );
+        WebTestClient.bindToController(controller)
+                .controllerAdvice(new ChatAuthExceptionHandler())
+                .build()
+                .post()
+                .uri("/api/v1/auth/device-token")
+                .header("Authorization", "Bearer existing-device-token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("device_id", "phone-2"))
+                .exchange()
+                .expectStatus().isForbidden();
+    }
+
     private static final class FakeAccountStore implements AuthAccountStore {
         private final UUID userId = UUID.randomUUID();
         private String passwordHash;

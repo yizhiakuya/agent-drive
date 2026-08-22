@@ -118,6 +118,44 @@ class MybatisFileStorageServiceIntegrationTest {
     }
 
     @Test
+    void snapshotsOverwrittenContentAndRestoresItAsANewRevision() throws Exception {
+        upload(owner, "", "versioned.txt", "alpha", "2c1743a391305fbf367df8e4f069f9f9", false);
+        upload(owner, "", "versioned.txt", "beta", "987bcab01b929eb2c07877b224215c92", false);
+
+        assertThat(Files.readString(root.resolve(owner.toString()).resolve("versioned.txt")))
+                .isEqualTo("beta");
+        Map<String, Object> versions = files.listVersions(owner, "versioned.txt", 20);
+        List<?> items = (List<?>) versions.get("items");
+        assertThat(items).hasSize(1);
+        Map<?, ?> first = (Map<?, ?>) items.get(0);
+        assertThat(String.valueOf(first.get("source_revision"))).isEqualTo("1");
+
+        files.restoreVersion(owner, "versioned.txt", String.valueOf(first.get("version_id")));
+
+        assertThat(Files.readString(root.resolve(owner.toString()).resolve("versioned.txt")))
+                .isEqualTo("alpha");
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM file_version_snapshots WHERE user_id = ?::uuid AND path = ?",
+                Integer.class, owner, "versioned.txt")).isEqualTo(2);
+    }
+
+    @Test
+    void expiredTrashCleansVersionSnapshotsWhenFileMetadataIsAlreadyOrphaned() throws Exception {
+        upload(owner, "", "orphaned.txt", "alpha", "2c1743a391305fbf367df8e4f069f9f9", false);
+        upload(owner, "", "orphaned.txt", "beta", "987bcab01b929eb2c07877b224215c92", false);
+        Map<String, Object> trash = files.deleteToTrash(owner, "orphaned.txt");
+        jdbc.update("DELETE FROM files WHERE user_id = ?::uuid AND path = ?", owner, "orphaned.txt");
+        jdbc.update("UPDATE trash_entries SET deleted_at = now() - interval '31 days' WHERE trash_id = ?::uuid",
+                trash.get("trash_id"));
+
+        files.cleanupTrash(owner, 30);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM file_version_snapshots WHERE user_id = ?::uuid AND path = ?",
+                Integer.class, owner, "orphaned.txt")).isZero();
+    }
+
+    @Test
     void copiesDirectoryThroughHiddenStaging() throws Exception {
         upload(owner, "source", "root.txt", "alpha", "2c1743a391305fbf367df8e4f069f9f9", false);
         upload(owner, "source/nested", "note.txt", "beta", "987bcab01b929eb2c07877b224215c92", false);

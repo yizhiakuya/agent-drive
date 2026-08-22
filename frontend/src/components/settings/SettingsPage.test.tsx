@@ -56,6 +56,10 @@ vi.mock("./ConnectAppCard", () => ({ default: () => null }));
 vi.mock("./DevicesCard", () => ({ default: () => null }));
 vi.mock("./PhotoSyncCard", () => ({ default: () => null }));
 vi.mock("./SkillsManager", () => ({ default: () => null }));
+// SettingsPage 的模型/密钥测试只覆盖设置表单；状态中心和自动化中心各自有独立的
+// API 生命周期，避免它们的后台探测请求污染这些契约测试。
+vi.mock("@/components/settings/SystemStatusCenter", () => ({ default: () => null }));
+vi.mock("@/components/tasks/AutomationCenter", () => ({ default: () => null }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

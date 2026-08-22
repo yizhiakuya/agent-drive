@@ -115,6 +115,13 @@ class MybatisChatRuntimeStateStoreIntegrationTest {
             store.updateLastTrace(sessionId, List.of(
                     Map.of("token", "trace-secret", "message", "sk-abcdefgh1234")
             ));
+            store.updateContextUsage(sessionId, Map.of(
+                    "used", 1800,
+                    "total", 262144,
+                    "percent", 0.69,
+                    "input", 1600,
+                    "output", 200
+            ));
 
             List<Map<String, Object>> messages = jdbc.queryForList(
                     "SELECT role, content, reasoning, context_source, context_kind, "
@@ -142,7 +149,11 @@ class MybatisChatRuntimeStateStoreIntegrationTest {
             assertThat(conversationSessions.listOwned(UUID.fromString(userId)))
                     .anySatisfy(meta -> assertThat(meta).containsEntry("id", sessionId));
             assertThat(conversationSessions.findOwnedDetails(UUID.fromString(userId), UUID.fromString(sessionId)))
-                    .containsEntry("id", sessionId);
+                    .containsEntry("id", sessionId)
+                    .satisfies(meta -> assertThat(meta.get("context_usage"))
+                            .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                            .containsEntry("used", 1800)
+                            .containsEntry("input", 1600));
             assertThat(conversationSessions.messagesOwned(UUID.fromString(userId), UUID.fromString(sessionId)))
                     .hasSize(5)
                     .first()

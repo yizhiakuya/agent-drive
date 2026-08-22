@@ -21,6 +21,7 @@
                title,
                summary,
                last_routed,
+               context_usage::text AS context_usage_json,
                EXTRACT(EPOCH FROM created_at) AS created_at,
                EXTRACT(EPOCH FROM updated_at) AS updated_at,
                (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count
@@ -35,6 +36,7 @@
                summary,
                last_routed,
                pending_confirmation::text AS pending_confirmation_json,
+               context_usage::text AS context_usage_json,
                EXTRACT(EPOCH FROM created_at) AS created_at,
                EXTRACT(EPOCH FROM updated_at) AS updated_at,
                (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count

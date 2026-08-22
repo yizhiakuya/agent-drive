@@ -155,7 +155,7 @@ public class IndexTaskHandler {
     /**
      * 根据任务类型执行一次已领取任务，并把异常转换为 Worker 失败迁移。
      * 支持 {@code index.file}、{@code index.rebuild}、{@code index.embed}、{@code index.vision}、
-     * {@code index.cleanup}、{@code maintenance.daily} 和 {@code automation.run}；
+     * {@code index.cleanup}、{@code index.clear_vectors}、{@code maintenance.daily} 和 {@code automation.run}；
      * 不支持的类型、坏 owner UUID 或坏 payload 都不会向调度线程继续抛出，而会调用 {@code fail}。
      *
      * @param workerId 持有该任务租约的 Worker ID。
@@ -174,10 +174,18 @@ public class IndexTaskHandler {
                 case "index.rebuild" -> {
                     Map<String, Object> rebuilt = new LinkedHashMap<>(indexing.rebuild(
                             userId, string(payload, "prefix", null), progress));
+                    List<String> visionPaths = stringList(rebuilt.get("vision_paths"));
+                    List<String> textPaths = stringList(rebuilt.get("text_paths"));
+                    if (!visionPaths.isEmpty()) {
+                        if (vision == null) throw new IllegalStateException("vision_handler_unavailable");
+                        progress.reportNow(0, 0, "图片索引：开始生成视觉描述");
+                        rebuilt.put("vision", visionFiles(userId, visionPaths,
+                                booleanValue(payload, "force"), progress));
+                    }
                     progress.reportNow(0, 0, "全文索引完成（" + rebuilt.getOrDefault("processed_files", 0)
                             + " 个文件），开始向量化");
-                    if (embeddings != null) {
-                        rebuilt.put("embedding", requireEmbeddingSuccess(embeddings.embed(userId, List.of(), 64,
+                    if (embeddings != null && !textPaths.isEmpty()) {
+                        rebuilt.put("embedding", requireEmbeddingSuccess(embeddings.embed(userId, textPaths, 64,
                                 booleanValue(payload, "force"), progress), true));
                     }
                     yield rebuilt;
@@ -189,6 +197,13 @@ public class IndexTaskHandler {
                     Map<String, Object> cleanup = indexing.cleanup(userId);
                     progress.reportNow(1, 1, "失效索引清理完成");
                     yield cleanup;
+                }
+                case "index.clear_vectors" -> {
+                    progress.report(0, 1, "正在清空全部文本和视觉向量");
+                    Map<String, Object> cleared = indexing.clearVectors(userId);
+                    if (taskStore != null) taskStore.invalidateOverview(userId);
+                    progress.reportNow(1, 1, "全部向量已清空，正文索引仍保留");
+                    yield cleared;
                 }
                 case "maintenance.daily" -> dailyMaintenance(userId, payload, progress);
                 case "automation.run" -> {
@@ -251,6 +266,9 @@ public class IndexTaskHandler {
      */
     private Map<String, Object> indexFile(UUID userId, String path, boolean force,
                                            TaskProgressReporter progress) {
+        if (IndexingService.isImagePath(path)) {
+            return visionFiles(userId, List.of(path), force, progress);
+        }
         progress.report(0, 2, "文件索引：正在抽取 " + path);
         Map<String, Object> result = new LinkedHashMap<>(indexing.indexFile(userId, path));
         if (embeddings != null && Boolean.TRUE.equals(result.get("indexed"))) {
@@ -277,6 +295,9 @@ public class IndexTaskHandler {
                                             TaskProgressReporter progress) {
         if (embeddings == null) {
             throw new IllegalStateException("embedding_failed: embedding_handler_unavailable");
+        }
+        if (paths.stream().anyMatch(IndexingService::isImagePath)) {
+            throw new IllegalStateException("vision_required");
         }
         List<Map<String, Object>> indexed = new ArrayList<>();
         int total = paths.size();
@@ -322,12 +343,17 @@ public class IndexTaskHandler {
         if (paths.isEmpty()) throw new IllegalArgumentException("vision_files_required");
         List<Map<String, Object>> results = new ArrayList<>();
         List<String> indexedPaths = new ArrayList<>();
+        String firstFailure = null;
         int processed = 0;
         for (String path : paths) {
             progress.report(processed, paths.size(), "图片索引：正在识别 " + path);
             try {
                 Map<String, Object> described = vision.describeFile(userId, path);
-                String json = objectMapper.writeValueAsString(described.get("description"));
+                Object description = described.get("description");
+                if (!(description instanceof Map<?, ?>)) {
+                    throw new IllegalStateException("vision_description_invalid");
+                }
+                String json = objectMapper.writeValueAsString(description);
                 Map<String, Object> indexed = new LinkedHashMap<>(indexing.indexDescription(userId, path, json));
                 indexed.put("model", described.get("model"));
                 results.add(indexed);
@@ -341,6 +367,7 @@ public class IndexTaskHandler {
                 skipped.put("error", error.getMessage() == null
                         ? error.getClass().getSimpleName() : error.getMessage());
                 results.add(skipped);
+                if (firstFailure == null) firstFailure = String.valueOf(skipped.get("error"));
             }
             processed++;
             progress.report(processed, paths.size(), "图片索引：已完成视觉识别 " + processed + "/" + paths.size());
@@ -348,11 +375,17 @@ public class IndexTaskHandler {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", results);
         result.put("described", indexedPaths.size());
-        if (indexedPaths.isEmpty()) throw new IllegalStateException("vision_all_files_failed");
+        if (indexedPaths.isEmpty()) {
+            if ("vision_not_configured".equals(firstFailure)) {
+                throw new IllegalStateException("vision_not_configured");
+            }
+            throw new IllegalStateException("vision_all_files_failed");
+        }
         if (embeddings == null) throw new IllegalStateException("embedding_failed: embedding_handler_unavailable");
         progress.reportNow(0, 0, "图片索引：视觉识别完成，开始生成向量");
         result.put("embedding", requireEmbeddingSuccess(
                 embeddings.embed(userId, indexedPaths, 64, force, progress), false));
+        result.put("vector_type", "vision");
         return result;
     }
 
@@ -530,5 +563,15 @@ public class IndexTaskHandler {
             throw new IllegalArgumentException("files must be a list");
         }
         return IndexTaskPaths.normalize(values);
+    }
+
+    /** 从 rebuild 结果读取受控的相对路径列表，不把任意结果对象带入后续任务。 */
+    private List<String> stringList(Object raw) {
+        if (!(raw instanceof List<?> values)) return List.of();
+        List<String> result = new ArrayList<>();
+        for (Object value : values) {
+            if (value instanceof String path && !path.isBlank()) result.add(path);
+        }
+        return List.copyOf(result);
     }
 }

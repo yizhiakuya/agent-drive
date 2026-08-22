@@ -122,6 +122,21 @@ export function apiPath(path: string): string {
   return `${V1}${path}`;
 }
 
+/** Internal upload adapters need the current API origin without exposing cache state. */
+export function requestBase(): string {
+  return V1;
+}
+
+/** Invalidate GET dedupe/cache around streamed multipart writes. */
+export function invalidateApiCache(): void {
+  clearGetState();
+}
+
+/** Prevent a late upload response from being treated as the current identity. */
+export function isCurrentRequest(base: string, token: string | null): boolean {
+  return base === V1 && token === deviceToken;
+}
+
 // GET 请求去重：同 base/凭据代次/缓存代次下并发只发一次，成功后短 TTL 缓存（15s）。
 // 任何写操作（非 GET）都会清空缓存，避免改名/删除后拿到陈旧列表。
 async function doFetch<T = unknown>(

@@ -1,7 +1,7 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listFiles, uploadFile, getFileInfo, getFileContent, renameFile, moveFile, copyFile, mkdir,
-  deleteToTrash, listTrash, restoreFromTrash, emptyTrash, FileInfo, FileItem, FileSearchMode, fileDownloadUrl } from "@/lib/api/files";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listFiles, listFavorites, listRecent, setFavorite, uploadFile, getFileInfo, getFileContent, renameFile, moveFile, copyFile, mkdir,
+  deleteToTrash, listTrash, restoreFromTrash, emptyTrash, FileInfo, FileItem, FileSearchMode, FileTypeFilter, fileDownloadUrl } from "@/lib/api/files";
 import FilePreview from "./FilePreview";
 import FileDetails, { indexStatusLabel } from "./FileDetails";
 import { fmtSize, fmtTime } from "@/lib/format";
@@ -17,6 +17,7 @@ import { enqueueEmbedIndex, enqueueVisionIndex } from "@/lib/api/tasks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   ArchiveRestore,
   ArrowLeft,
@@ -34,9 +35,12 @@ import {
   Home,
   Info,
   MoveRight,
+  MoreHorizontal,
   Pencil,
   RefreshCw,
   Search,
+  Star,
+  Clock3,
   Trash2,
   Upload,
   X,
@@ -48,11 +52,31 @@ function searchScoreLabel(score: number | null | undefined) {
   return `${Math.max(0, Math.min(100, score * 100)).toFixed(1)}%`;
 }
 
+type FileActionItem = { name: string; path: string; is_dir: boolean };
+type FileSort = "name" | "mtime" | "size";
+type UploadEntry = { id: string; name: string; status: "queued" | "uploading" | "succeeded" | "failed" | "cancelled"; progress: number; error?: string };
+
+function isCompactViewport() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(max-width: 1023px)").matches;
+}
+
+function epochBoundary(value: string, endOfDay = false) {
+  if (!value) return undefined;
+  const parsed = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00"}`);
+  const seconds = parsed.getTime() / 1000;
+  return Number.isFinite(seconds) ? seconds : undefined;
+}
+
 export default function FilePage() {
   const [path, setPath] = useState("");
+  const [collection, setCollection] = useState<"browse" | "favorites" | "recent">("browse");
   const [items, setItems] = useState<FileItem[]>([]);
   const [disk, setDisk] = useState<{ used: number; total: number; free: number } | null>(null);
   const [selected, setSelected] = useState<{ path: string; info: FileInfo | null; text: string } | null>(null);
+  // 目录点击直接进入；目录仍可通过行尾操作按钮进入批量操作态，不打开预览覆盖层。
+  const [actionSelection, setActionSelection] = useState<FileActionItem | null>(null);
   const [view, setView] = useState<"preview" | "content" | "details">("preview");
   const [contentLoading, setContentLoading] = useState(false);
   const [contentTruncated, setContentTruncated] = useState(false);
@@ -61,22 +85,36 @@ export default function FilePage() {
   const [searchMode, setSearchMode] = useState<FileSearchMode>("name");
   const [activeSearchMode, setActiveSearchMode] = useState<FileSearchMode>("name");
   const [activeQuery, setActiveQuery] = useState("");
+  const [sortBy, setSortBy] = useState<FileSort>("name");
+  const [minScore, setMinScore] = useState("");
+  const [fileType, setFileType] = useState<FileTypeFilter>("all");
+  const [modifiedAfterInput, setModifiedAfterInput] = useState("");
+  const [modifiedBeforeInput, setModifiedBeforeInput] = useState("");
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [uploading, setUploading] = useState(false);
+  const [uploadQueue, setUploadQueue] = useState<UploadEntry[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
   const [trashItems, setTrashItems] = useState<{ path: string; trash_id: string; deleted_at: number; size: number; is_dir: boolean }[]>([]);
   const [action, setAction] = useState<{ type: string; item: { name: string; path: string; is_dir: boolean } } | null>(null);
   const [actionValue, setActionValue] = useState("");
+  const [listError, setListError] = useState("");
+  const [listLoading, setListLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const pathRef = useRef("");
   const queryRef = useRef("");
   const searchModeRef = useRef<FileSearchMode>("name");
+  const filtersRef = useRef<{ type: FileTypeFilter; modifiedAfter: string; modifiedBefore: string; minScore: string }>({ type: "all", modifiedAfter: "", modifiedBefore: "", minScore: "" });
+  const cancelledUploadsRef = useRef(new Set<string>());
   const listRequestRef = useRef(0);
   const selectionRequestRef = useRef(0);
   const contentRequestRef = useRef(0);
   const indexingRequestRef = useRef(0);
   const trashRequestRef = useRef(0);
+  const uploadFilesRef = useRef(new Map<string, File>());
+  const uploadControllersRef = useRef(new Map<string, AbortController>());
   const frontendActions = useAppStore((s) => s.frontendActions);
   const consumeFrontendAction = useAppStore((s) => s.consumeFrontendAction);
   const processingFrontendActionRef = useRef<string | null>(null);
@@ -93,10 +131,27 @@ export default function FilePage() {
   const load = useCallback(async (p: string, q = queryRef.current, mode = searchModeRef.current) => {
     const request = ++listRequestRef.current;
     const requestMode = q.trim() ? mode : "name";
+    setListLoading(true);
+    setListError("");
     try {
-      const r = await listFiles(p, q, requestMode);
+      const filters = filtersRef.current;
+      const listFilters = {
+        type: filters.type,
+        modifiedAfter: epochBoundary(filters.modifiedAfter),
+        modifiedBefore: epochBoundary(filters.modifiedBefore, true),
+        minScore: requestMode === "semantic" && filters.minScore.trim() ? Number(filters.minScore) / 100 : undefined,
+      };
+      const hasFilters = listFilters.type !== "all"
+        || listFilters.modifiedAfter !== undefined
+        || listFilters.modifiedBefore !== undefined
+        || listFilters.minScore !== undefined;
+      const r = hasFilters
+        ? await listFiles(p, q, requestMode, listFilters)
+        : await listFiles(p, q, requestMode);
       if (request !== listRequestRef.current) return false;
+      setCollection("browse");
       setItems(r.items);
+      setListError("");
       setDisk(r.disk);
       setPath(r.path);
       pathRef.current = r.path;
@@ -104,12 +159,45 @@ export default function FilePage() {
       searchModeRef.current = mode;
       setActiveQuery(q);
       setActiveSearchMode(requestMode);
+      setSearchHasMore(Boolean(r.has_more ?? (q.trim() && r.items.length >= 1000)));
       return true;
     } catch (e) {
       if (request === listRequestRef.current) {
+        setListError(e instanceof Error ? e.message : String(e));
         emitToast({ kind: "error", text: `文件列表加载失败：${String(e)}` });
       }
       return false;
+    } finally {
+      if (request === listRequestRef.current) setListLoading(false);
+    }
+  }, []);
+
+  const loadCollection = useCallback(async (kind: "favorites" | "recent") => {
+    const request = ++listRequestRef.current;
+    setListLoading(true);
+    setListError("");
+    try {
+      const r = kind === "favorites" ? await listFavorites() : await listRecent();
+      if (request !== listRequestRef.current) return false;
+      setCollection(kind);
+      setItems(r.items);
+      setDisk(r.disk);
+      setPath("");
+      pathRef.current = "";
+      queryRef.current = "";
+      setActiveQuery("");
+      setActiveSearchMode("name");
+      setSearchInput("");
+      setSearchHasMore(Boolean(r.has_more));
+      return true;
+    } catch (error) {
+      if (request === listRequestRef.current) {
+        setListError(error instanceof Error ? error.message : String(error));
+        emitToast({ kind: "error", text: `文件集合加载失败：${String(error)}` });
+      }
+      return false;
+    } finally {
+      if (request === listRequestRef.current) setListLoading(false);
     }
   }, []);
 
@@ -120,6 +208,8 @@ export default function FilePage() {
     const loaded = await load(parent, "");
     if (!loaded || selectionRequest !== selectionRequestRef.current) return;
     setSearchInput("");
+    setActionSelection(null);
+    setSelectedPaths(new Set());
     setSelected({ path: filePath, info: null, text: "" });
     setView("preview");
     setContentTruncated(false);
@@ -144,6 +234,8 @@ export default function FilePage() {
     if (!loaded || selectionRequest !== selectionRequestRef.current) return;
     setSearchInput("");
     setSelected(null);
+    setActionSelection(null);
+    setSelectedPaths(new Set());
   }, [invalidateSelectionWork, load]);
 
   useEffect(() => { load(""); }, [load]);
@@ -153,12 +245,17 @@ export default function FilePage() {
     contentRequestRef.current += 1;
     indexingRequestRef.current += 1;
     trashRequestRef.current += 1;
+    uploadControllersRef.current.forEach((controller) => controller.abort());
+    uploadControllersRef.current.clear();
   }, []);
   useEffect(() => {
-    function onFilesChanged() { load(pathRef.current, queryRef.current); }
+    function onFilesChanged() {
+      if (collection === "browse") void load(pathRef.current, queryRef.current);
+      else void loadCollection(collection);
+    }
     window.addEventListener(EV.filesChanged, onFilesChanged);
     return () => window.removeEventListener(EV.filesChanged, onFilesChanged);
-  }, [load]);
+  }, [collection, load, loadCollection]);
 
   useEffect(() => {
     const handleFileAction = async (action: PendingFrontendAction) => {
@@ -196,24 +293,95 @@ export default function FilePage() {
       });
   }, [consumeFrontendAction, frontendActions]);
 
-  async function doUpload(file: File) {
+  async function uploadFiles(files: File[]) {
+    if (files.length === 0) return;
+    const entries = files.map((file, index) => ({
+      id: `${Date.now()}-${index}-${file.name}-${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name,
+      status: "queued" as const,
+      progress: 0,
+    }));
+    entries.forEach((entry, index) => uploadFilesRef.current.set(entry.id, files[index]));
+    setUploadQueue((current) => [...current, ...entries].slice(-12));
     setUploading(true);
     try {
-      const result = await uploadFile(file, path);
-      if (result.indexed?.task_id) emitTasksChanged();
-      emitToast({ kind: "ok", text: `已上传 ${file.name}，内容将在后台处理` });
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const entry = entries[index];
+        if (cancelledUploadsRef.current.has(entry.id)) {
+          setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "cancelled" } : item));
+          uploadFilesRef.current.delete(entry.id);
+          continue;
+        }
+        setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "uploading" } : item));
+        const controller = new AbortController();
+        uploadControllersRef.current.set(entry.id, controller);
+        try {
+          const result = await uploadFile(file, pathRef.current,
+            (progress) => setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, progress } : item)),
+            controller.signal);
+          if (result.indexed?.task_id) emitTasksChanged();
+          setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "succeeded", progress: 100 } : item));
+          uploadFilesRef.current.delete(entry.id);
+          emitToast({ kind: "ok", text: `已上传 ${file.name}，内容将在后台处理` });
+        } catch (error) {
+          const cancelled = controller.signal.aborted;
+          setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) } : item));
+          if (!cancelled) emitToast({ kind: "error", text: `上传 ${file.name} 失败: ${error}` });
+        }
+        finally { uploadControllersRef.current.delete(entry.id); }
+      }
       void load(pathRef.current, queryRef.current, searchModeRef.current);
-    } catch (e) {
-      emitToast({ kind: "error", text: `上传失败: ${e}` });
     } finally {
       setUploading(false);
     }
   }
 
+  async function doUpload(file: File) {
+    await uploadFiles([file]);
+  }
+
+  function cancelQueuedUpload(id: string) {
+    cancelledUploadsRef.current.add(id);
+    uploadControllersRef.current.get(id)?.abort();
+    setUploadQueue((current) => current.map((item) => item.id === id && item.status === "queued" ? { ...item, status: "cancelled" } : item));
+  }
+
+  async function retryUpload(id: string) {
+    const file = uploadFilesRef.current.get(id);
+    if (!file || uploading) return;
+    setUploading(true);
+    const controller = new AbortController();
+    uploadControllersRef.current.set(id, controller);
+    setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: "uploading", progress: 0, error: undefined } : item));
+    try {
+      const result = await uploadFile(file, pathRef.current,
+        (progress) => setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, progress } : item)),
+        controller.signal);
+      if (result.indexed?.task_id) emitTasksChanged();
+      setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: "succeeded", progress: 100 } : item));
+      uploadFilesRef.current.delete(id);
+      emitToast({ kind: "ok", text: `已重试上传 ${file.name}` });
+      void load(pathRef.current, queryRef.current, searchModeRef.current);
+    } catch (error) {
+      const cancelled = controller.signal.aborted;
+      setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) } : item));
+      if (!cancelled) emitToast({ kind: "error", text: `重试上传 ${file.name} 失败: ${error}` });
+    } finally {
+      uploadControllersRef.current.delete(id);
+      setUploading(false);
+    }
+  }
+
   async function openItem(it: FileItem) {
+    // 目录点击直接进入，避免移动端先打开预览覆盖层后无法再次触达列表。
+    if (it.is_dir) {
+      await openFolderPath(it.path);
+      return;
+    }
     const selectionRequest = invalidateSelectionWork();
-    // 单击=选中（目录也可选中用于重命名/移动）；双击=进入目录
-    setSelected({ path: it.path, info: it.is_dir ? null : null, text: "" });
+    setActionSelection(null);
+    setSelected({ path: it.path, info: null, text: "" });
     setView("preview");
     setContentTruncated(false);
     if (it.is_dir) return;
@@ -230,6 +398,19 @@ export default function FilePage() {
     }
   }
 
+  async function toggleFavorite(item: FileItem) {
+    const nextFavorite = !item.favorite;
+    try {
+      await setFavorite(item.path, nextFavorite);
+      setItems((current) => current
+        .map((entry) => entry.path === item.path ? { ...entry, favorite: nextFavorite } : entry)
+        .filter((entry) => collection !== "favorites" || entry.favorite));
+      emitToast({ kind: "ok", text: nextFavorite ? `已收藏 ${item.name}` : `已取消收藏 ${item.name}` });
+    } catch (error) {
+      emitToast({ kind: "error", text: `收藏操作失败：${String(error)}` });
+    }
+  }
+
   /**
    * 提交当前目录的递归文件搜索；空查询恢复普通目录列表。
    *
@@ -238,6 +419,13 @@ export default function FilePage() {
   function submitSearch(event?: React.FormEvent) {
     event?.preventDefault();
     const query = searchInput.trim();
+    filtersRef.current = {
+      type: fileType,
+      modifiedAfter: modifiedAfterInput,
+      modifiedBefore: modifiedBeforeInput,
+      minScore,
+    };
+    setCollection("browse");
     queryRef.current = query;
     void load(pathRef.current, query, searchMode);
   }
@@ -317,6 +505,17 @@ export default function FilePage() {
   const crumbs = path ? path.split("/").filter(Boolean) : [];
   const isMarkdown = selected?.info?.path?.toLowerCase().endsWith(".md");
 
+  async function refreshSelectedFile() {
+    if (!selected) return;
+    const filePath = selected.path;
+    const refreshed = await getFileInfo(filePath);
+    setSelected((current) => current?.path === filePath
+      ? { ...current, info: refreshed, text: refreshed.preview_kind === "text" ? (refreshed.snippet || "") : current.text }
+      : current);
+    emitFilesChanged();
+    emitToast({ kind: "ok", text: "已恢复文件版本" });
+  }
+
   async function openTrash() {
     const opening = !showTrash;
     const request = ++trashRequestRef.current;
@@ -359,7 +558,25 @@ export default function FilePage() {
     if (!action) return;
     const { type, item } = action;
     try {
-      if (type === "rename") {
+      if (type === "batch-move" || type === "batch-copy" || type === "batch-delete") {
+        const paths = Array.from(selectedPaths);
+        if (paths.length === 0) return;
+        if (type === "batch-delete") {
+          if (!window.confirm(`删除选中的 ${paths.length} 项？（移入回收站，30 天内可恢复）`)) return;
+        } else if (!actionValue.trim()) {
+          emitToast({ kind: "error", text: "请填写目标目录" });
+          return;
+        }
+        const results = await Promise.allSettled(paths.map((source) => {
+          if (type === "batch-delete") return deleteToTrash(source);
+          if (type === "batch-move") return moveFile(source, actionValue.trim());
+          const name = source.split("/").pop() || source;
+          return copyFile(source, `${actionValue.trim().replace(/\/$/, "")}/${name}`);
+        }));
+        const failed = results.filter((result) => result.status === "rejected").length;
+        setSelectedPaths(new Set());
+        emitToast({ kind: failed ? "error" : "ok", text: failed ? `${paths.length - failed} 项完成，${failed} 项失败` : `已处理 ${paths.length} 项` });
+      } else if (type === "rename") {
         await renameFile(item.path, item.is_dir ? item.path.replace(/[^/]+$/, "") + actionValue : item.path.replace(/[^/]+$/, actionValue));
         emitToast({ kind: "ok", text: "已重命名" });
       } else if (type === "mkdir") {
@@ -377,9 +594,11 @@ export default function FilePage() {
         emitToast({ kind: "ok", text: `已删除到回收站` });
         invalidateSelectionWork();
         setSelected(null);
+        setActionSelection(null);
       }
       setAction(null);
       setActionValue("");
+      setActionSelection(null);
       emitFilesChanged();
     } catch (e) {
       emitToast({ kind: "error", text: `操作失败: ${e}` });
@@ -387,10 +606,64 @@ export default function FilePage() {
   }
 
   function selectedItem() {
+    if (actionSelection) return actionSelection;
     if (!selected) return null;
     const name = selected.path.split("/").pop() || "";
     const isDir = items.find((it) => it.path === selected.path)?.is_dir ?? false;
     return { name, path: selected.path, is_dir: isDir };
+  }
+
+  function beginAction(type: string, candidate = selectedItem()) {
+    if (!candidate) return;
+    setAction({ type, item: candidate });
+    setActionValue(type === "rename" ? candidate.name : "");
+    // The mobile preview is a full-screen layer. Close it before showing the
+    // existing operation form so the form remains visible and keyboard reachable.
+    if (selected && isCompactViewport()) {
+      invalidateSelectionWork();
+      setSelected(null);
+    }
+  }
+
+  function beginBatchAction(type: "batch-move" | "batch-copy" | "batch-delete") {
+    const count = selectedPaths.size;
+    if (count === 0) return;
+    setAction({ type, item: { name: `${count} 项`, path: "", is_dir: false } });
+    setActionValue("");
+  }
+
+  const displayItems = useMemo(() => {
+    const threshold = activeSearchMode === "semantic" && minScore.trim()
+      ? Math.max(0, Number(minScore) || 0) / 100
+      : 0;
+    const filtered = items.filter((item) => item.is_dir || activeSearchMode !== "semantic"
+      || typeof item.search_score !== "number" || item.search_score >= threshold);
+    return [...filtered].sort((left, right) => {
+      if (left.is_dir !== right.is_dir) return left.is_dir ? -1 : 1;
+      if (sortBy === "size") return (left.size || 0) - (right.size || 0);
+      if (sortBy === "mtime") return (left.mtime || 0) - (right.mtime || 0);
+      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+    });
+  }, [activeSearchMode, items, minScore, sortBy]);
+
+  function togglePath(pathValue: string, checked: boolean) {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (checked) next.add(pathValue); else next.delete(pathValue);
+      return next;
+    });
+    if (selected) {
+      invalidateSelectionWork();
+      setSelected(null);
+    }
+  }
+
+  function toggleAllVisible(checked: boolean) {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      displayItems.forEach((item) => checked ? next.add(item.path) : next.delete(item.path));
+      return next;
+    });
   }
 
   return (
@@ -427,10 +700,25 @@ export default function FilePage() {
             <Button variant="outline" size="sm" className="min-w-0 whitespace-nowrap" title="回收站" aria-label="回收站"
                     onClick={openTrash}><ArchiveRestore className="size-3.5" /><span className="sm:hidden">回收站</span></Button>
           </span>
-          <input ref={fileRef} type="file" style={{ display: "none" }}
-                 onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
+          <input ref={fileRef} type="file" multiple style={{ display: "none" }}
+                 onChange={async (e) => { const files = Array.from(e.target.files || []); if (files.length) { await uploadFiles(files); e.target.value = ""; } }} />
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
                  onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1 border-b border-border pb-2" role="tablist" aria-label="文件集合">
+          <Button type="button" size="sm" variant={collection === "browse" ? "default" : "ghost"}
+                  onClick={() => { setCollection("browse"); void load(pathRef.current, queryRef.current, searchModeRef.current); }}>
+            <FolderOpen className="size-3.5" /> 全部文件
+          </Button>
+          <Button type="button" size="sm" variant={collection === "favorites" ? "default" : "ghost"}
+                  onClick={() => void loadCollection("favorites")}>
+            <Star className="size-3.5" /> 收藏
+          </Button>
+          <Button type="button" size="sm" variant={collection === "recent" ? "default" : "ghost"}
+                  onClick={() => void loadCollection("recent")}>
+            <Clock3 className="size-3.5" /> 最近访问
+          </Button>
         </div>
 
         <form className="flex flex-col gap-2 sm:flex-row sm:items-center" onSubmit={submitSearch} role="search">
@@ -460,36 +748,106 @@ export default function FilePage() {
             <Search className="size-4" />
           </Button>
         </form>
-        {activeQuery && <div className="text-xs text-muted">
-          {activeSearchMode === "semantic" ? "语义搜索" : "名称/路径搜索"}“{activeQuery}”，结果包含当前目录子树
-        </div>}
+         <div className="flex flex-wrap items-center gap-2">
+           <label className="flex items-center gap-1.5 text-xs text-muted">
+             <span>排序</span>
+             <Select value={sortBy} onValueChange={(value) => { if (value === "name" || value === "mtime" || value === "size") setSortBy(value); }}>
+               <SelectTrigger size="sm" aria-label="文件排序" className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
+               <SelectContent>
+                 <SelectItem value="name">名称</SelectItem>
+                 <SelectItem value="mtime">修改时间</SelectItem>
+                 <SelectItem value="size">大小</SelectItem>
+               </SelectContent>
+             </Select>
+           </label>
+           {activeSearchMode === "semantic" && (
+             <label className="flex items-center gap-1.5 text-xs text-muted">
+               <span>最低相关度</span>
+               <Input aria-label="最低相关度" inputMode="numeric" value={minScore} onChange={(event) => setMinScore(event.target.value.replace(/[^0-9]/g, ""))} className="h-7 w-16 px-2 text-xs" placeholder="0" />
+               <span>%</span>
+             </label>
+           )}
+           <label className="flex items-center gap-1.5 text-xs text-muted">
+             <span>类型</span>
+             <Select value={fileType} onValueChange={(value) => {
+               if (["all", "file", "folder", "image", "video", "audio", "pdf", "text"].includes(value)) {
+                 setFileType(value as FileTypeFilter);
+               }
+             }}>
+               <SelectTrigger size="sm" aria-label="文件类型筛选" className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
+               <SelectContent>
+                 <SelectItem value="all">全部类型</SelectItem>
+                 <SelectItem value="file">普通文件</SelectItem>
+                 <SelectItem value="folder">文件夹</SelectItem>
+                 <SelectItem value="image">图片</SelectItem>
+                 <SelectItem value="video">视频</SelectItem>
+                 <SelectItem value="audio">音频</SelectItem>
+                 <SelectItem value="pdf">PDF</SelectItem>
+                 <SelectItem value="text">文本</SelectItem>
+               </SelectContent>
+             </Select>
+           </label>
+           <label className="flex items-center gap-1.5 text-xs text-muted">
+             <span>修改自</span>
+             <Input type="date" aria-label="修改时间起点" value={modifiedAfterInput} onChange={(event) => setModifiedAfterInput(event.target.value)} className="h-7 w-32 px-2 text-xs" />
+           </label>
+           <label className="flex items-center gap-1.5 text-xs text-muted">
+             <span>至</span>
+             <Input type="date" aria-label="修改时间终点" value={modifiedBeforeInput} onChange={(event) => setModifiedBeforeInput(event.target.value)} className="h-7 w-32 px-2 text-xs" />
+           </label>
+         </div>
+         {activeQuery && <div className="text-xs text-muted">
+           {activeSearchMode === "semantic" ? "语义搜索" : "名称/路径搜索"}“{activeQuery}”，结果包含当前目录子树
+           {searchHasMore && <span className="ml-2 text-warn">结果已截断，缩小范围以查看更准确匹配</span>}
+         </div>}
 
         <div
           data-testid="file-selection-toolbar"
-          className={`h-12 shrink-0 overflow-hidden border-b text-xs sm:h-9 ${selected ? "border-border" : "border-transparent"}`}
+          className={`h-12 shrink-0 overflow-hidden border-b text-xs sm:h-9 ${selected || actionSelection ? "border-border" : "border-transparent"}`}
         >
-          {selected && (
+          {(selected || actionSelection) && (
             <div className="flex h-full items-center gap-1.5 overflow-x-auto whitespace-nowrap">
-              <span className="mr-1 max-w-40 truncate font-medium text-text" title={selected.path}>已选: {selected.path.split("/").pop()}</span>
-              {selected.info && <Button variant="outline" size="sm" disabled={indexing !== null}
+              <span className="mr-1 max-w-40 truncate font-medium text-text" title={selectedItem()!.path}>已选: {selectedItem()!.path.split("/").pop()}</span>
+              {selected?.info && <Button variant="outline" size="sm" disabled={indexing !== null}
                       onClick={() => void enqueueSelectedIndex("embed")} title="为当前文件创建文本向量索引">
                 <RefreshCw className={`size-3.5 ${indexing === "embed" ? "animate-spin" : ""}`} /> 向量化
               </Button>}
-              {selected.info?.preview_kind === "image" && <Button variant="outline" size="sm" disabled={indexing !== null}
+              {selected?.info?.preview_kind === "image" && <Button variant="outline" size="sm" disabled={indexing !== null}
                       onClick={() => void enqueueSelectedIndex("vision")} title="为当前图片创建视觉索引">
                 <Eye className={`size-3.5 ${indexing === "vision" ? "animate-pulse" : ""}`} /> 视觉索引
               </Button>}
-              <Button variant="outline" size="sm"
-                      onClick={() => { setAction({ type: "rename", item: selectedItem()! }); setActionValue(selectedItem()!.name); }}><Pencil className="size-3.5" /> 重命名</Button>
-              <Button variant="outline" size="sm"
-                      onClick={() => { setAction({ type: "move", item: selectedItem()! }); setActionValue(""); }}><MoveRight className="size-3.5" /> 移动</Button>
-              <Button variant="outline" size="sm"
-                      onClick={() => { setAction({ type: "copy", item: selectedItem()! }); setActionValue(""); }}><Copy className="size-3.5" /> 复制到</Button>
+              <Button variant="outline" size="sm" onClick={() => beginAction("rename")}><Pencil className="size-3.5" /> 重命名</Button>
+              <Button variant="outline" size="sm" onClick={() => beginAction("move")}><MoveRight className="size-3.5" /> 移动</Button>
+              <Button variant="outline" size="sm" onClick={() => beginAction("copy")}><Copy className="size-3.5" /> 复制到</Button>
               <Button variant="destructive" size="sm"
-                      onClick={() => { setAction({ type: "delete", item: selectedItem()! }); setActionValue(""); }}><Trash2 className="size-3.5" /> 删除</Button>
+                      onClick={() => beginAction("delete")}><Trash2 className="size-3.5" /> 删除</Button>
             </div>
           )}
         </div>
+        {selectedPaths.size > 0 && (
+          <div data-testid="file-batch-toolbar" className="flex h-9 shrink-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap border-b border-border text-xs">
+            <span className="mr-1 font-medium text-text">已选 {selectedPaths.size} 项</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => beginBatchAction("batch-move")}><MoveRight className="size-3.5" /> 移动</Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => beginBatchAction("batch-copy")}><Copy className="size-3.5" /> 复制</Button>
+            <Button type="button" variant="destructive" size="sm" onClick={() => beginBatchAction("batch-delete")}><Trash2 className="size-3.5" /> 删除</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedPaths(new Set())}>清除选择</Button>
+          </div>
+        )}
+        {uploadQueue.length > 0 && (
+          <div className="flex max-h-20 shrink-0 items-center gap-2 overflow-x-auto border-b border-border text-[11px] text-muted" aria-label="上传队列">
+            <span className="shrink-0 px-1">完成 {uploadQueue.filter((entry) => entry.status === "succeeded" || entry.status === "cancelled").length}/{uploadQueue.length}</span>
+            {uploadQueue.map((entry) => (
+              <div key={entry.id} className="flex shrink-0 items-center gap-1 rounded border border-border bg-card/50 px-2 py-1">
+                <span className="max-w-28 truncate" title={entry.name}>{entry.name}</span>
+                <span className={entry.status === "failed" ? "text-danger" : entry.status === "succeeded" ? "text-success" : "text-muted"}>
+                  {entry.status === "queued" ? "排队" : entry.status === "uploading" ? `上传中 ${entry.progress}%` : entry.status === "succeeded" ? "完成" : entry.status === "cancelled" ? "已取消" : "失败"}
+                </span>
+                {(entry.status === "queued" || entry.status === "uploading") && <button type="button" className="text-muted hover:text-danger" aria-label={"取消上传 " + entry.name} onClick={() => cancelQueuedUpload(entry.id)}><X className="size-3" /></button>}
+                {entry.status === "failed" && <button type="button" className="text-muted hover:text-text" aria-label={"重试上传 " + entry.name} onClick={() => void retryUpload(entry.id)} disabled={uploading}><RefreshCw className="size-3" /></button>}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-0.5 text-xs flex-wrap" aria-label="当前位置">
           <Button variant="ghost" size="sm" className={`px-1.5 ${!path ? "font-semibold text-text" : "text-muted"}`} onClick={() => load("")}><Home className="size-3.5" /> 根目录</Button>
           {crumbs.map((c, i) => (
@@ -504,22 +862,35 @@ export default function FilePage() {
         <div className="flex-1 overflow-auto border-y border-border bg-panel">
           <table className="w-full text-xs border-collapse">
             <thead>
-              <tr><th className="sticky top-0 border-b border-border bg-card/80 p-3 text-left font-semibold">名称</th><th className="sticky top-0 w-20 border-b border-border bg-card/80 p-3 text-left font-semibold sm:w-24">大小</th><th className="sticky top-0 w-28 border-b border-border bg-card/80 p-3 text-left font-semibold">索引</th><th className="hidden sticky top-0 w-44 border-b border-border bg-card/80 p-3 text-left font-semibold sm:table-cell">修改时间</th></tr>
+              <tr><th className="sticky top-0 w-10 border-b border-border bg-card/80 p-3 text-left font-semibold"><input type="checkbox" aria-label="全选当前文件" checked={displayItems.length > 0 && displayItems.every((item) => selectedPaths.has(item.path))} onChange={(event) => toggleAllVisible(event.target.checked)} /></th><th className="sticky top-0 border-b border-border bg-card/80 p-3 text-left font-semibold">名称</th><th className="sticky top-0 w-20 border-b border-border bg-card/80 p-3 text-left font-semibold sm:w-24">大小</th><th className="sticky top-0 w-28 border-b border-border bg-card/80 p-3 text-left font-semibold">索引</th><th className="hidden sticky top-0 w-44 border-b border-border bg-card/80 p-3 text-left font-semibold sm:table-cell">修改时间</th><th className="sticky top-0 w-10 border-b border-border bg-card/80 p-3 text-right font-semibold" aria-label="操作" /></tr>
             </thead>
             <tbody>
-              {items.length === 0 && (
-                <tr><td colSpan={4} className="p-8">
+              {listLoading && items.length === 0 && (
+                <tr><td colSpan={6} className="p-8"><div className="text-center text-sm text-muted" role="status">正在读取文件列表…</div></td></tr>
+              )}
+              {!listLoading && displayItems.length === 0 && (
+                <tr><td colSpan={6} className="p-8">
                   <div className="text-center text-muted text-sm">
-                    {dragOver ? <Upload className="mx-auto mb-2 size-7" /> : <FolderOpen className="mx-auto mb-2 size-7" />}
-                    {dragOver ? "松开鼠标上传文件" : "目录为空 — 拖文件到这里，或点「上传」"}
+                    {listError ? (
+                      <>
+                        <p className="text-danger">文件列表加载失败：{listError}</p>
+                        <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void load(pathRef.current, queryRef.current, searchModeRef.current)}>重试</Button>
+                      </>
+                    ) : <>
+                      {dragOver ? <Upload className="mx-auto mb-2 size-7" /> : <FolderOpen className="mx-auto mb-2 size-7" />}
+                      {dragOver ? "松开鼠标上传文件" : "目录为空 — 拖文件到这里，或点「上传」"}
+                    </>}
                   </div>
                 </td></tr>
               )}
-              {items.map((it) => (
+              {displayItems.map((it) => (
                 <tr key={it.path}
-                    className={`cursor-pointer border-b border-border/60 transition-colors hover:bg-card/60 ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
+                    className={`cursor-pointer border-b border-border/60 transition-colors hover:bg-card/60 ${selected?.path === it.path || actionSelection?.path === it.path ? "bg-accent-soft" : ""}`}
                     onClick={() => openItem(it)}
-                    onDoubleClick={() => it.is_dir && openFolderPath(it.path)}>
+                    onDoubleClick={() => it.is_dir && void openFolderPath(it.path)}>
+                  <td className="w-10 px-3 py-2.5">
+                    <input type="checkbox" aria-label={`选择 ${it.name}`} checked={selectedPaths.has(it.path)} onClick={(event) => event.stopPropagation()} onChange={(event) => togglePath(it.path, event.target.checked)} />
+                  </td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2"><span className={it.is_dir ? "text-text" : "text-muted"}>{it.is_dir ? <FolderOpen className="size-4" /> : <File className="size-4" />}</span> <span className="min-w-0 break-words">{it.name}</span></div>
                     {activeSearchMode === "semantic" && !it.is_dir && (it.search_snippet || searchScoreLabel(it.search_score)) && (
@@ -536,6 +907,35 @@ export default function FilePage() {
                       : <Badge variant={it.index?.vectorized ? "default" : "outline"}>{indexStatusLabel(it.index)}</Badge>
                   )}</td>
                   <td className="hidden px-3 py-2.5 text-muted sm:table-cell">{fmtTime(it.mtime)}</td>
+                  <td className="w-20 px-1.5 py-2.5 text-right">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className={it.favorite ? "text-warn" : "text-muted hover:text-warn"}
+                      aria-label={it.favorite ? `取消收藏 ${it.name}` : `收藏 ${it.name}`}
+                      title={it.favorite ? "取消收藏" : "收藏"}
+                      onClick={(event) => { event.stopPropagation(); void toggleFavorite(it); }}
+                    >
+                      <Star className={`size-4 ${it.favorite ? "fill-current" : ""}`} aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-muted hover:text-text"
+                      aria-label={`选择 ${it.name} 的操作`}
+                      title="文件操作"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        invalidateSelectionWork();
+                        setSelected(null);
+                        setActionSelection({ name: it.name, path: it.path, is_dir: it.is_dir });
+                      }}
+                    >
+                      <MoreHorizontal className="size-4" aria-hidden="true" />
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -553,8 +953,11 @@ export default function FilePage() {
               {action.type === "move" && `移动: ${action.item.name} → 目标目录`}
               {action.type === "copy" && `复制: ${action.item.name} → 目标目录`}
               {action.type === "delete" && `确认删除: ${action.item.name}（移入回收站）`}
+              {action.type === "batch-move" && `移动选中的 ${selectedPaths.size} 项 → 目标目录`}
+              {action.type === "batch-copy" && `复制选中的 ${selectedPaths.size} 项 → 目标目录`}
+              {action.type === "batch-delete" && `确认删除选中的 ${selectedPaths.size} 项（移入回收站）`}
             </div>
-            {action.type !== "delete" ? (
+            {action.type !== "delete" && action.type !== "batch-delete" ? (
               <div className="flex gap-2">
                 <Input autoFocus value={actionValue}
                        onChange={(e) => setActionValue(e.target.value)}
@@ -615,10 +1018,16 @@ export default function FilePage() {
           <>
             <div className="flex justify-between items-center gap-2 px-3 py-2.5 border-b border-border">
               <b className="text-sm truncate flex-1" title={selected.path}>{selected.path.split("/").pop()}</b>
-              <span className="flex items-center gap-1">
+              <span className="flex min-w-0 items-center gap-1 overflow-x-auto">
                 {selected.info && <Button variant={view === "preview" ? "default" : "ghost"} size="sm" onClick={() => setView("preview")} aria-label="预览" title="预览"><Eye className="size-4" /></Button>}
                 {selected.info?.preview_kind === "text" && <Button variant={view === "content" ? "default" : "ghost"} size="sm" onClick={viewContent} aria-label="查看内容" title="查看内容"><FileText className="size-4" /></Button>}
                 {selected.info && <Button variant={view === "details" ? "default" : "ghost"} size="sm" onClick={() => setView("details")} aria-label="文件详情" title="文件详情"><Info className="size-4" /></Button>}
+                {selected.info && <Button variant="ghost" size="sm" className="lg:hidden" disabled={indexing !== null} onClick={() => void enqueueSelectedIndex("embed")} aria-label="预览文件向量化" title="向量化"><RefreshCw className={`size-4 ${indexing === "embed" ? "animate-spin" : ""}`} /></Button>}
+                {selected.info?.preview_kind === "image" && <Button variant="ghost" size="sm" className="lg:hidden" disabled={indexing !== null} onClick={() => void enqueueSelectedIndex("vision")} aria-label="预览文件图片索引" title="视觉索引"><Eye className={`size-4 ${indexing === "vision" ? "animate-pulse" : ""}`} /></Button>}
+                <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => beginAction("rename")} aria-label="预览文件重命名" title="重命名"><Pencil className="size-4" /></Button>
+                <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => beginAction("move")} aria-label="预览文件移动" title="移动"><MoveRight className="size-4" /></Button>
+                <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => beginAction("copy")} aria-label="预览文件复制" title="复制到"><Copy className="size-4" /></Button>
+                <Button variant="ghost" size="sm" className="lg:hidden text-danger" onClick={() => beginAction("delete")} aria-label="预览文件删除" title="删除"><Trash2 className="size-4" /></Button>
                 <Button variant="default" size="sm" asChild aria-label="下载" title="下载"><a href={fileDownloadUrl(selected.path)} download><Download className="size-4" /></a></Button>
                  <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => { invalidateSelectionWork(); setSelected(null); }} aria-label="关闭文件面板" title="关闭"><X className="size-4" /></Button>
               </span>
@@ -631,7 +1040,7 @@ export default function FilePage() {
             )}
             <div className="flex-1 overflow-auto">
               {contentLoading && <div className="p-5 text-sm text-muted">正在读取文件内容…</div>}
-              {!contentLoading && view === "details" && selected.info && <FileDetails info={selected.info} />}
+              {!contentLoading && view === "details" && selected.info && <FileDetails info={selected.info} onRestored={refreshSelectedFile} />}
               {!contentLoading && view !== "details" && selected.info && (
                 <>
                   {view === "content" && contentTruncated && <div className="px-3 py-2 text-xs text-warn border-b border-border">文件较大，仅显示前 2 MiB。</div>}

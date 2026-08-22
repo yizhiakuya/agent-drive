@@ -35,14 +35,18 @@ public class MybatisIndexStore implements IndexStore {
     public Stats statistics(UUID userId, String fingerprint) {
         requireUser(userId);
         Map<String, Object> row = mapper.selectStats(userId.toString(), fingerprint);
-        if (row == null) return new Stats(0, 0, 0, 0, 0, 0);
+        if (row == null) return new Stats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         return new Stats(
                 intValue(row.get("eligible_files")),
                 intValue(row.get("extracted_files")),
                 intValue(row.get("vector_files")),
                 intValue(row.get("non_vectorizable_files")),
                 intValue(row.get("missing_vectors")),
-                intValue(row.get("stale_vectors"))
+                intValue(row.get("stale_vectors")),
+                intValue(row.get("text_vector_files")),
+                intValue(row.get("vision_vector_files")),
+                intValue(row.get("text_missing_vectors")),
+                intValue(row.get("vision_missing_vectors"))
         );
     }
 
@@ -104,14 +108,18 @@ public class MybatisIndexStore implements IndexStore {
      */
     @Override
     @Transactional
-    public void replaceDocument(UUID userId, UUID fileId, long sourceRevision, String content,
-                                String extractorVersion, List<String> chunks, String chunkVersion) {
+    public void replaceDocument(UUID userId, UUID fileId, long sourceRevision, String documentType,
+                                String content, String extractorVersion, List<String> chunks, String chunkVersion) {
         requireUser(userId);
+        if (!IndexStore.TEXT_DOCUMENT_TYPE.equals(documentType)
+                && !IndexStore.VISION_DOCUMENT_TYPE.equals(documentType)) {
+            throw new IllegalArgumentException("unsupported document type");
+        }
         Map<String, Object> document = mapper.upsertDocument(userId.toString(), fileId.toString(), sourceRevision,
-                content == null ? "" : content, extractorVersion);
+                documentType, content == null ? "" : content, extractorVersion);
         if (document == null) throw new IllegalArgumentException("file is not owned by current user");
         String documentId = String.valueOf(document.get("id"));
-        mapper.deleteOtherDocuments(userId.toString(), fileId.toString(), sourceRevision, extractorVersion);
+        mapper.deleteOtherDocuments(userId.toString(), fileId.toString(), sourceRevision, documentType, extractorVersion);
         mapper.deleteChunks(documentId);
         for (int index = 0; index < chunks.size(); index++) {
             mapper.insertChunk(documentId, index, sourceRevision, chunkVersion, chunks.get(index));
@@ -128,6 +136,14 @@ public class MybatisIndexStore implements IndexStore {
     public int cleanup(UUID userId) {
         requireUser(userId);
         return mapper.cleanup(userId.toString());
+    }
+
+    /** 清空 owner 全部向量，但保留可重新向量化的文本和视觉描述正文。 */
+    @Override
+    @Transactional
+    public int clearEmbeddings(UUID userId) {
+        requireUser(userId);
+        return mapper.clearEmbeddings(userId.toString());
     }
 
     /**

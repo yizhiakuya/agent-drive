@@ -50,6 +50,11 @@ public interface ScheduleStore {
      */
     boolean delete(UUID userId, String name);
 
+    /** 记录一次立即运行的任务和时间；默认适配器保持兼容。 */
+    default boolean markManualRun(UUID userId, String name, String taskId) {
+        return false;
+    }
+
     /**
      * 查找一个用户已经到期的 enabled schedule，并将每条规则转换为待入队任务，同时推进其下次执行时间。
      * 该方法只负责调度派发，不执行任务 payload。

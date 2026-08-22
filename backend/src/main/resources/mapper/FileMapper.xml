@@ -13,9 +13,22 @@
 
     <select id="selectIndexStatus" resultType="map">
         SELECT f.revision,
-               CASE WHEN d.id IS NULL THEN false ELSE true END AS text_indexed,
+               COALESCE(bool_or(d.document_type = 'text'), false) AS text_indexed,
+               COALESCE(bool_or(d.document_type = 'vision'), false) AS vision_indexed,
+               COUNT(c.id) FILTER (WHERE d.document_type = 'text')::int AS text_chunk_count,
+               COUNT(c.id) FILTER (WHERE d.document_type = 'vision')::int AS vision_chunk_count,
                COUNT(c.id)::int AS chunk_count,
+               COUNT(c.id) FILTER (WHERE d.document_type = 'text' AND c.embedding IS NOT NULL)::int AS text_stored_vector_chunks,
+               COUNT(c.id) FILTER (WHERE d.document_type = 'vision' AND c.embedding IS NOT NULL)::int AS vision_stored_vector_chunks,
                COUNT(c.id) FILTER (WHERE c.embedding IS NOT NULL)::int AS stored_vector_chunks,
+               COUNT(c.id) FILTER (WHERE d.document_type = 'text'
+                                      AND c.embedding IS NOT NULL
+                                      AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
+                                      AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR})::int AS text_vector_chunks,
+               COUNT(c.id) FILTER (WHERE d.document_type = 'vision'
+                                      AND c.embedding IS NOT NULL
+                                      AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
+                                      AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR})::int AS vision_vector_chunks,
                COUNT(c.id) FILTER (
                    WHERE c.embedding IS NOT NULL
                      AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
@@ -31,11 +44,12 @@
         WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND f.path = #{path, jdbcType=VARCHAR}
           AND f.is_dir = false
-        GROUP BY f.id, f.revision, d.id
+        GROUP BY f.id, f.revision
     </select>
 
     <select id="selectIndexDetails" resultType="map">
         SELECT d.id::text AS document_id,
+               d.document_type AS vector_type,
                d.source_revision,
                d.extractor_version,
                EXTRACT(EPOCH FROM d.updated_at) AS updated,
@@ -60,16 +74,18 @@
         WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND f.path = #{path, jdbcType=VARCHAR}
           AND f.is_dir = false
-        ORDER BY c.chunk_index ASC NULLS LAST
+        ORDER BY d.document_type ASC NULLS LAST, c.chunk_index ASC NULLS LAST
         LIMIT #{limit}
     </select>
 
     <select id="selectChildren" resultType="map">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
         SELECT id, path, is_dir, size_bytes, revision, content_md5, content_sha256,
                created_at, updated_at
         FROM files
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
-          AND path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '%')
+          AND path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '%') ESCAPE CHR(92)
         ORDER BY is_dir DESC, lower(path)
     </select>
 
@@ -80,8 +96,193 @@
           AND path IN
           <foreach collection="paths" item="path" open="(" separator="," close=")">
               #{path, jdbcType=VARCHAR}
+        </foreach>
+    </select>
+
+    <select id="selectFavoritePaths" resultType="map">
+        SELECT path, created_at
+        FROM file_favorites
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path IN
+          <foreach collection="paths" item="path" open="(" separator="," close=")">
+              #{path, jdbcType=VARCHAR}
           </foreach>
     </select>
+
+    <select id="selectFavorites" resultType="map">
+        SELECT fav.path,
+               fav.created_at AS favorite_created_at,
+               f.is_dir,
+               f.size_bytes,
+               f.revision,
+               f.updated_at
+        FROM file_favorites fav
+        LEFT JOIN files f
+          ON f.user_id = fav.user_id
+         AND f.path = fav.path
+        WHERE fav.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY fav.created_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectRecent" resultType="map">
+        SELECT a.path,
+               a.last_accessed_at,
+               a.access_count,
+               f.is_dir,
+               f.size_bytes,
+               f.revision,
+               f.updated_at
+        FROM file_accesses a
+        LEFT JOIN files f
+          ON f.user_id = a.user_id
+         AND f.path = a.path
+        WHERE a.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY a.last_accessed_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <insert id="touchAccess">
+        INSERT INTO file_accesses(user_id, path, last_accessed_at, access_count)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{path, jdbcType=VARCHAR}, now(), 1)
+        ON CONFLICT (user_id, path) DO UPDATE SET
+            last_accessed_at = now(),
+            access_count = file_accesses.access_count + 1
+    </insert>
+
+    <insert id="addFavorite">
+        INSERT INTO file_favorites(user_id, path)
+        VALUES (CAST(#{userId, jdbcType=VARCHAR} AS uuid), #{path, jdbcType=VARCHAR})
+        ON CONFLICT (user_id, path) DO NOTHING
+    </insert>
+
+    <delete id="removeFavorite">
+        DELETE FROM file_favorites
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+    </delete>
+
+    <delete id="deleteFavoritePrefix">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
+        DELETE FROM file_favorites
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{prefix, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+    </delete>
+
+    <update id="moveFavoritePrefix">
+        <bind name="escapedSource"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(source)" />
+        UPDATE file_favorites
+        SET path = CASE WHEN path = #{source, jdbcType=VARCHAR}
+                        THEN #{destination, jdbcType=VARCHAR}
+                        ELSE CONCAT(#{destination, jdbcType=VARCHAR},
+                                    SUBSTRING(path FROM LENGTH(#{source, jdbcType=VARCHAR}) + 1))
+                   END
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{source, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedSource, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+    </update>
+
+    <delete id="deleteAccessPrefix">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
+        DELETE FROM file_accesses
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{prefix, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+    </delete>
+
+    <update id="moveAccessPrefix">
+        <bind name="escapedSource"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(source)" />
+        UPDATE file_accesses
+        SET path = CASE WHEN path = #{source, jdbcType=VARCHAR}
+                        THEN #{destination, jdbcType=VARCHAR}
+                        ELSE CONCAT(#{destination, jdbcType=VARCHAR},
+                                    SUBSTRING(path FROM LENGTH(#{source, jdbcType=VARCHAR}) + 1))
+                   END
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{source, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedSource, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+    </update>
+
+    <select id="selectVersionSnapshots" resultType="map">
+        SELECT id::text AS version_id,
+               path,
+               source_revision,
+               snapshot_path,
+               size_bytes,
+               content_md5,
+               content_sha256,
+               created_at
+        FROM file_version_snapshots
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectVersionSnapshot" resultType="map">
+        SELECT id::text AS version_id,
+               path,
+               source_revision,
+               snapshot_path,
+               size_bytes,
+               content_md5,
+               content_sha256,
+               created_at
+        FROM file_version_snapshots
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND path = #{path, jdbcType=VARCHAR}
+          AND id = CAST(#{id, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <insert id="insertVersionSnapshot">
+        INSERT INTO file_version_snapshots(
+            id, user_id, path, source_revision, snapshot_path, size_bytes,
+            content_md5, content_sha256
+        ) VALUES (
+            CAST(#{id, jdbcType=VARCHAR} AS uuid),
+            CAST(#{userId, jdbcType=VARCHAR} AS uuid),
+            #{path, jdbcType=VARCHAR},
+            #{sourceRevision},
+            #{snapshotPath, jdbcType=VARCHAR},
+            #{size},
+            #{md5, jdbcType=VARCHAR},
+            #{sha256, jdbcType=VARCHAR}
+        )
+    </insert>
+
+    <delete id="deleteVersionSnapshot">
+        DELETE FROM file_version_snapshots
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND id = CAST(#{id, jdbcType=VARCHAR} AS uuid)
+    </delete>
+
+    <update id="moveVersionSnapshotPrefix">
+        <bind name="escapedSource"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(source)" />
+        UPDATE file_version_snapshots
+        SET path = CASE WHEN path = #{source, jdbcType=VARCHAR}
+                        THEN #{destination, jdbcType=VARCHAR}
+                        ELSE CONCAT(#{destination, jdbcType=VARCHAR},
+                                    SUBSTRING(path FROM LENGTH(#{source, jdbcType=VARCHAR}) + 1))
+                   END
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{source, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedSource, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+    </update>
+
+    <delete id="deleteVersionSnapshotPrefix">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
+        DELETE FROM file_version_snapshots
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND (path = #{prefix, jdbcType=VARCHAR}
+               OR path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+    </delete>
 
     <insert id="upsertMetadata">
         INSERT INTO files(user_id, path, is_dir, size_bytes)
@@ -141,10 +342,12 @@
     </delete>
 
     <delete id="deletePrefix">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
         DELETE FROM files
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND (path = #{prefix, jdbcType=VARCHAR}
-               OR path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+               OR path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
     </delete>
 
     <select id="selectDedupe" resultType="map">

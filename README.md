@@ -2,19 +2,21 @@
 
 Agent-first 的私人网盘：文件管理、检索、配置和自动化都可以通过 Agent 完成，同时保留直接操作文件页和设置页的能力。
 
-> 当前事实（2026-08-19）：生产使用 Java 21 + Spring Boot/WebFlux API、独立 Java Worker、PostgreSQL/pgvector、Next.js 16 静态前端和 Capacitor 7 Android 壳。Python 后端已经从运行时和仓库中移除；旧数据只保存在本地 fixture 和生产 cutover backup 中用于人工恢复。
+> 当前事实（2026-08-21）：生产使用 Java 21 + Spring Boot/WebFlux API、独立 Java Worker、PostgreSQL/pgvector、Next.js 16 静态前端和 Capacitor 7 Android 壳。Python 后端已经从运行时和仓库中移除；旧数据只保存在本地 fixture 和生产 cutover backup 中用于人工恢复。
 
 ## 能力
 
 - Agent 通过统一的 `backend_api` / `frontend_api` discover/call envelope 操作后端和当前浏览器能力；每轮自动注入 owner Agent 文档和启用 Skill 目录，再通过 `read_skill` 按需加载匹配 Skill 正文。
 - 支持 OpenAI 兼容、OpenAI Responses 和 Anthropic provider；支持独立的 embedding 与 vision 配置。
 - Chat 使用 JSON object SSE，支持 reasoning、可展开上下文注入、工具轨迹、确认、确定性 replay 和会话摘要；切换会话不会中止仍在生成或执行工具的会话。
-- 文件页支持名称/路径搜索、Jina + pgvector 语义搜索、文本预览/全文查看、回收站和 revision 状态。
-- 上传服务端复算 MD5；文件写入、复制、覆盖、去重和回收站使用原子发布与路径安全边界。
+- 文件页支持多选批量移动/复制/删除、上传队列（进度、取消、失败重试）、排序、收藏/最近访问集合、类型/修改时间筛选和名称/路径搜索；Jina + pgvector 语义搜索提供相关度阈值、分页和截断提示，文件可预览、全文查看、回收站、revision 状态和真实内容版本恢复。
+- Agent 支持 `@文件/文件夹`、聊天附件和 owner-scoped 文件上下文；回答中的 `[[file:path]]` / `[[folder:path]]` 引用可直接打开文件页目标。
+- 设置页提供统一系统状态中心（数据库、Worker、Provider、索引、相册同步、备份、存储、设备）和自动化中心（计划启停、立即执行、下次/上次运行、失败原因）；状态行可跳转到对应设置/任务入口，状态请求局部失败时保留其余检查结果。
+- 上传服务端复算 MD5；文件写入、复制、覆盖、去重和回收站使用原子发布与路径安全边界，覆盖写入会在 owner 私有版本区保留可恢复快照。
 - PostgreSQL 保存认证、会话、设备、Skill、文件 metadata、任务、schedule、outbox、全文和向量状态；实际文件仍在 owner-scoped 本地文件系统。
-- 独立 Worker 异步执行 Tika/Tesseract 抽取、全文/embedding/vision 索引、计划任务和维护任务。
+- 独立 Worker 异步执行 Tika 文档抽取、Jina 文本向量、视觉模型描述 + Jina 视觉向量、计划任务和维护任务；图片不走 OCR。
 - Web 使用密码登录和 HttpOnly Cookie；Android 使用扫码配对得到的 Bearer 设备令牌。
-- Android App 提供扫码连接、后台相册同步、服务端去重、断点续传、进度通知和设备登记。
+- Android App 提供扫码连接、后台相册同步、服务端去重、断点续传、进度通知、设备登记和同步诊断（权限、扫描、上传、去重、跳过、失败、可重试计数）；通知被拒时可直达系统通知设置。
 
 ## 快速开始
 
@@ -59,7 +61,7 @@ pwsh -File scripts/deploy.ps1 -Target frontend
 pwsh -File scripts/deploy.ps1 -Target all
 ```
 
-脚本会执行门禁、构建、递增 Service Worker cache、全量打包静态目录，并在服务器原子替换前端；`all` 还会安装 Java artifact 和 systemd units，按 API → Worker 顺序重启并检查 health。脚本不会自动 `commit` 或 `push`，发布前应先整理并提交工作区。日常前端迭代不构建 APK，部署时会保留服务器已有的 `out/app/agent-drive.apk`。
+脚本会执行门禁、构建、递增 Service Worker cache、全量打包静态目录，并在服务器原子替换前端；`all` 还会安装 Java artifact 和 systemd units，按 API → Worker 顺序重启，并在 Worker 心跳出现后要求 `/api/v1/ready` 通过，失败会触发发布回滚。脚本不会自动 `commit` 或 `push`，发布前应先整理并提交工作区。日常前端迭代不构建 APK，部署时会保留服务器已有的 `out/app/agent-drive.apk`。
 
 生产入口：[https://home.rainaki.top:13311/](https://home.rainaki.top:13311/)
 

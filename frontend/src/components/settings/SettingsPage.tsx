@@ -17,6 +17,8 @@ import ConnectAppCard from "./ConnectAppCard";
 import DevicesCard from "./DevicesCard";
 import PhotoSyncCard from "./PhotoSyncCard";
 import SkillsManager from "./SkillsManager";
+import AutomationCenter from "@/components/tasks/AutomationCenter";
+import SystemStatusCenter from "./SystemStatusCenter";
 import { Capacitor } from "@capacitor/core";
 import { apiErrorMessage, authenticatedFetch, setDeviceToken } from "@/lib/api/client";
 import { ServerConfig } from "@/lib/native/server-config";
@@ -64,7 +66,12 @@ function SettingsField({ label, value, onChange, placeholder, type = "text", ste
   );
 }
 
-export default function SettingsPage() {
+interface SettingsPageProps {
+  /** 从工作区导航进入设置时定位到对应 section。 */
+  initialSection?: "models" | "security" | null;
+}
+
+export default function SettingsPage({ initialSection = null }: SettingsPageProps = {}) {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof getConfig>> | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [llmMsg, setLlmMsg] = useState<{ kind: string; text: string } | null>(null);
@@ -75,6 +82,8 @@ export default function SettingsPage() {
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
   const [visionForm, setVisionForm] = useState({ provider: "openai_compat", base_url: "https://api.openai.com/v1", model: "", api_key: "" });
   const [saving, setSaving] = useState<"llm" | "emb" | "vision" | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsLoadError, setSettingsLoadError] = useState("");
   const [modelList, setModelList] = useState<string[] | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -82,6 +91,7 @@ export default function SettingsPage() {
   const [visionModelsLoading, setVisionModelsLoading] = useState(false);
   const [visionModelsOpen, setVisionModelsOpen] = useState(false);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
+  const setTab = useAppStore((s) => s.setTab);
   const isNative = Capacitor.isNativePlatform();
   const loadRequestRef = useRef(0);
   const modelRequestRef = useRef(0);
@@ -89,6 +99,16 @@ export default function SettingsPage() {
   const llmKeyRevealRef = useRef(0);
   const embeddingKeyRevealRef = useRef(0);
   const visionKeyRevealRef = useRef(0);
+
+  useEffect(() => {
+    if (!initialSection) return;
+    const target = document.getElementById(`settings-${initialSection}`);
+    if (target && typeof target.scrollIntoView === "function") {
+      const scroll = () => target.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(scroll);
+      else window.setTimeout(scroll, 0);
+    }
+  }, [initialSection, cfg]);
 
   async function logout() {
     const native = Capacitor.isNativePlatform();
@@ -137,6 +157,8 @@ export default function SettingsPage() {
     llmKeyRevealRef.current += 1;
     embeddingKeyRevealRef.current += 1;
     visionKeyRevealRef.current += 1;
+    setSettingsLoading(true);
+    setSettingsLoadError("");
     try {
       const [d, vision] = await Promise.all([getConfig(), getVisionConfig()]);
       if (request !== loadRequestRef.current) return;
@@ -161,7 +183,12 @@ export default function SettingsPage() {
         api_key: "",
       } : { ...current, api_key: "" });
     } catch (e) {
-      if (request === loadRequestRef.current) setMsg({ kind: "error", text: String(e) });
+      if (request === loadRequestRef.current) {
+        setSettingsLoadError(e instanceof Error ? e.message : String(e));
+        setMsg({ kind: "error", text: String(e) });
+      }
+    } finally {
+      if (request === loadRequestRef.current) setSettingsLoading(false);
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -460,12 +487,21 @@ export default function SettingsPage() {
         </div>
         <span className="hidden font-mono text-[10px] uppercase tracking-[0.12em] text-muted sm:block">workspace config</span>
       </div>
+      {settingsLoading && !cfg && <div className="mb-3 text-xs text-muted" role="status">正在读取设置…</div>}
+      {settingsLoadError && !cfg && (
+        <Alert variant="destructive" className="mb-3 text-xs bg-danger-soft text-danger border-danger/30" role="alert">
+          <div className="flex items-center justify-between gap-3">
+            <span>设置加载失败：{settingsLoadError}</span>
+            <Button type="button" variant="outline" size="sm" className="h-8 shrink-0" onClick={() => void load()}>重试</Button>
+          </div>
+        </Alert>
+      )}
       {msg && msg.kind === "error" && (
         <Alert variant="destructive" className="mb-3 text-xs bg-danger-soft text-danger border-danger/30">{msg.text}</Alert>
       )}
 
       {!isNative && (<>
-      <section className="border-b border-border py-5 first:pt-0">
+      <section id="settings-models" className="border-b border-border py-5 first:pt-0">
         <h3 className="flex items-center gap-2 text-sm font-bold"><Bot className="size-4 text-muted" /> LLM 模型</h3>
         <p className="text-muted text-xs mb-3">Agent 的大脑。选择协议后可一键获取该服务商的可用模型。</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
@@ -639,10 +675,21 @@ export default function SettingsPage() {
         </section>
       )}
 
+      <div id="settings-status" data-settings-section="status" className="mb-4 overflow-hidden border border-border">
+        <SystemStatusCenter
+          onOpenTasks={() => setTab("tasks")}
+          onOpenSettings={() => document.getElementById("settings-model")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          onOpenSync={() => document.getElementById("settings-sync")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          onOpenBackup={() => document.getElementById("settings-status")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          onOpenDevices={() => document.getElementById("settings-security")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        />
+        <AutomationCenter onViewTasks={() => setTab("tasks")} />
+      </div>
+
       <SkillsManager />
       <ConnectAppCard />
-      <DevicesCard />
-      <PhotoSyncCard />
+      <div id="settings-security" data-settings-section="security"><DevicesCard /></div>
+      <div id="settings-sync"><PhotoSyncCard /></div>
 
       <section className="border-b border-border py-5">
         <h3 className="flex items-center gap-2 text-sm font-bold"><SlidersHorizontal className="size-4 text-muted" /> 偏好与规则</h3>

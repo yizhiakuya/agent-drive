@@ -107,7 +107,7 @@ export default function PanelResizeHandle({
       tabIndex={0}
       title="拖动调整宽度，按 Enter 收起"
       className={cn(
-        "group absolute inset-y-0 z-20 hidden w-3 -translate-x-1/2 cursor-col-resize touch-none outline-none md:block",
+        "group absolute inset-y-0 z-20 hidden w-3 -translate-x-1/2 cursor-col-resize touch-none outline-none xl:block",
         // Keep the hit area centered on the panel's outer edge. The right-anchored
         // session handle needs a full-handle offset because it is translated left.
         isLeftPanel ? "-right-3" : "left-0",

@@ -7,7 +7,19 @@ set -euo pipefail
 cd "$(dirname "$0")/../frontend"
 
 # 1. 快照旧 out 到 rollbacks（含手工拷入的 app/agent-drive.apk）
-SNAP="/root/agent-drive-rollbacks/out-$(date +%Y%m%d%H%M%S)"
+SNAP="/root/agent-drive-rollbacks/out-$(date +%Y%m%d%H%M%S)-$$"
+RESTORED=0
+restore_on_failure() {
+  local rc=$?
+  if [[ "$rc" -ne 0 && "$RESTORED" -eq 0 && -d "$SNAP" ]]; then
+    echo "build failed; restoring previous static output from $SNAP" >&2
+    rm -rf out
+    cp -a "$SNAP" out
+    RESTORED=1
+  fi
+  exit "$rc"
+}
+trap restore_on_failure EXIT
 if [[ -d out ]]; then
   mkdir -p /root/agent-drive-rollbacks
   cp -a out "$SNAP"
@@ -32,4 +44,6 @@ fi
 
 # 4. 权限（build 产物默认 0600）
 chmod -R a+rX out
+RESTORED=1
+trap - EXIT
 echo "OK: out/ 重建完成"

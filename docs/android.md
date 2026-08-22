@@ -1,6 +1,6 @@
 # Android 客户端
 
-> 现行方案（2026-08-21）：Capacitor 7 原生壳复用 Next.js 静态前端。PWA 是日常主用形态，App 只承载 PWA 无法可靠提供的扫码配对、后台同步、MediaStore、通知和设备集成。当前版本号为 `1.0.29`（versionCode `29`）。
+> 现行方案（2026-08-21）：Capacitor 7 原生壳复用 Next.js 静态前端。PWA 是日常主用形态，App 只承载 PWA 无法可靠提供的扫码配对、后台同步、MediaStore、通知和设备集成。当前版本号为 `1.0.31`（versionCode `31`）。
 
 ## 1. 工程与职责
 
@@ -19,8 +19,10 @@ frontend/out ──Capacitor──▶ APK 本地 web 资源
 
 1. 打开 App，进入原生扫码页。
 2. 扫描 Web 设置页“连接手机 App”生成的 `agentdrive://connect?server=...&pair=...` 二维码。
-3. App 调用 pair-exchange 兑换一次性设备令牌，并写入独立的加密 prefs。
-4. 令牌存在时加载本地 web 资源；令牌缺失或吊销时回到重扫码页，密码登录作为逃生口。
+3. App 只接受无用户凭据、无查询/片段的 HTTPS 服务器地址，并限制兑换响应体为 64 KiB；不安全地址会在本地拒绝，不会发送配对码。
+   已注册的 `ServerConfig.setServer` bridge 也复用同一地址校验，不能从 WebView 绕过扫码边界写入 HTTP 或带凭据地址；相机权限拒绝会保留可重试提示。
+4. App 调用 pair-exchange 兑换一次性设备令牌，并写入独立的加密 prefs。
+5. 令牌存在时加载本地 web 资源；令牌缺失或吊销时回到重扫码页，密码登录作为逃生口。切换到不同服务器会原子清空旧服务器的同步检查点，避免跳过新服务器文件。
 
 配对码有效期 5 分钟且只能使用一次；重扫或移除设备会吊销旧令牌。服务端只保存设备令牌 hash，App 不把令牌传给 JavaScript 页面之外的模型或日志。
 
@@ -52,7 +54,13 @@ frontend/out ──Capacitor──▶ APK 本地 web 资源
 
 - enabled、wifiOnly、interval、folder 一次加密提交；多个 configure 调用进入专用后台执行器，从 prefs 写入到 WorkManager 入库全程串行。
 - 调度失败保留已提交的期望状态并明确 reject，由下次启动的 `ensureScheduled` 收敛，不伪造 WorkManager 回滚。
-- 只检查图片读取权限；通知权限拒绝只影响通知，不使同步失败。
+- 只检查图片读取权限；通知权限拒绝只影响通知，不使同步失败。状态接口同时返回
+  `permissionGranted`、`configured`、`lastError` 和实时 `phase/uploaded/total`，设置页应优先
+  展示权限引导和可操作的错误重试入口；`started=false` 表示同步开关未启用，不应显示为已启动。
+- 通知权限被拒时，诊断卡提供 `打开通知设置` 直达当前 App 的系统通知设置；通知权限仍不是相册同步的必要条件。
+- 设置页同步诊断还展示目标目录、上次扫描/上传/去重/跳过/失败/可重试计数和通知开关；旧版本原生状态缺少这些字段时前端按零值/允许通知兼容，不显示 `NaN`。
+- 停用同步会同时取消周期和相册观察者触发的 quick work；目标文件夹通过 `targetFolder` 配置并
+  与 enabled/wifiOnly/interval 在同一次加密提交中保存。Android 与服务端共同拒绝 `.index`、`.trash`、`.versions`、`.storage.lock` 及 upload/copy staging 内部路径，避免配置保存成功后才在上传阶段失败。
 - Activity 销毁时注销 ContentObserver、清除 debounce callback、替换或 reject 挂起权限回调。
 
 ## 5. 构建与发布
@@ -64,6 +72,7 @@ cd frontend
 npm run build
 npx cap sync android
 cd android
+gradlew.bat lintDebug
 gradlew.bat testDebugUnitTest
 gradlew.bat assembleRelease
 ```

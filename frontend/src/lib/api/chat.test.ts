@@ -33,6 +33,32 @@ describe("chatStream SSE 解析", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ model: "fast-model" });
   });
 
+  it("把权限模式放入聊天请求体", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: done\ndata: {"session_id":"permission-session"}\n\n',
+    ]));
+
+    await chatStream("执行", [], null, [], () => {}, new AbortController().signal,
+      "auto", [], "", [], "ask");
+
+    const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toMatchObject({ permission_mode: "ask" });
+  });
+
+  it("把 owner 文件上下文路径放入聊天请求体", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: done\ndata: {"session_id":"file-session"}\n\n',
+    ]));
+
+    await chatStream("总结附件", [], null, [], () => {}, new AbortController().signal,
+      "auto", [], "", ["notes/today.md", "photos"]);
+
+    const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      file_context: ["notes/today.md", "photos"],
+    });
+  });
+
   it("解析 text 事件并流式回调", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: text\ndata: {"text":"你好"}\n\n',

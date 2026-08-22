@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -74,8 +75,39 @@ public final class FileController {
     public Mono<Map<String, Object>> list(@RequestParam(defaultValue = "") String path,
                                           @RequestParam(defaultValue = "") String q,
                                           @RequestParam(defaultValue = "name") String mode,
+                                          @RequestParam(defaultValue = "1000") int limit,
+                                          @RequestParam(name = "min_score", required = false) Double minScore,
+                                          @RequestParam(defaultValue = "all") String type,
+                                          @RequestParam(name = "modified_after", required = false) Double modifiedAfter,
+                                          @RequestParam(name = "modified_before", required = false) Double modifiedBefore,
                                           ServerWebExchange exchange) {
-        return authenticated(exchange, owner -> files.list(owner, path, q, mode));
+        if (limit < 1 || limit > 1000) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "limit must be between 1 and 1000");
+        }
+        if (minScore != null && (!Double.isFinite(minScore) || minScore < -1.0 || minScore > 1.0)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "min_score must be between -1 and 1");
+        }
+        String normalizedType = type == null ? "all" : type.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("all", "file", "folder", "image", "video", "audio", "pdf", "text").contains(normalizedType)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "unsupported file type filter");
+        }
+        if (modifiedAfter != null && (!Double.isFinite(modifiedAfter) || modifiedAfter < 0)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "modified_after must be a non-negative timestamp");
+        }
+        if (modifiedBefore != null && (!Double.isFinite(modifiedBefore) || modifiedBefore < 0)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "modified_before must be a non-negative timestamp");
+        }
+        if (modifiedAfter != null && modifiedBefore != null && modifiedAfter > modifiedBefore) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "modified_after must not exceed modified_before");
+        }
+        return authenticated(exchange, owner -> files.list(owner, path, q, mode, limit, minScore,
+                normalizedType, modifiedAfter, modifiedBefore));
     }
 
     /**
@@ -128,6 +160,56 @@ public final class FileController {
         return authenticated(exchange, files::listTrash);
     }
 
+    /** 列出当前 owner 最近收藏的可见文件和目录。 */
+    @GetMapping("/favorites")
+    public Mono<Map<String, Object>> favorites(@RequestParam(defaultValue = "100") int limit,
+                                               ServerWebExchange exchange) {
+        validateTrackingLimit(limit);
+        return authenticated(exchange, owner -> files.listFavorites(owner, limit));
+    }
+
+    /** 添加当前 owner 的文件/目录收藏标记。 */
+    @PostMapping("/favorites")
+    public Mono<Map<String, Object>> addFavorite(@RequestParam String path,
+                                                 ServerWebExchange exchange) {
+        return authenticated(exchange, owner -> files.setFavorite(owner, path, true));
+    }
+
+    /** 删除当前 owner 的文件/目录收藏标记。 */
+    @DeleteMapping("/favorites")
+    public Mono<Map<String, Object>> removeFavorite(@RequestParam String path,
+                                                    ServerWebExchange exchange) {
+        return authenticated(exchange, owner -> files.setFavorite(owner, path, false));
+    }
+
+    /** 列出当前 owner 最近访问且仍然存在的普通文件。 */
+    @GetMapping("/recent")
+    public Mono<Map<String, Object>> recent(@RequestParam(defaultValue = "100") int limit,
+                                            ServerWebExchange exchange) {
+        validateTrackingLimit(limit);
+        return authenticated(exchange, owner -> files.listRecent(owner, limit));
+    }
+
+    /** 列出当前 owner 文件的真实内容版本快照。 */
+    @GetMapping("/versions")
+    public Mono<Map<String, Object>> versions(@RequestParam String path,
+                                              @RequestParam(defaultValue = "20") int limit,
+                                              ServerWebExchange exchange) {
+        if (limit < 1 || limit > 50) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "limit must be between 1 and 50");
+        }
+        return authenticated(exchange, owner -> files.listVersions(owner, path, limit));
+    }
+
+    /** 将指定真实内容版本作为新 revision 恢复到原路径。 */
+    @PostMapping("/versions/restore")
+    public Mono<Map<String, Object>> restoreVersion(@RequestParam String path,
+                                                    @RequestParam String version_id,
+                                                    ServerWebExchange exchange) {
+        return authenticated(exchange, owner -> files.restoreVersion(owner, path, version_id));
+    }
+
     /**
      * 响应 {@code GET /api/v1/files/raw}，以内联资源形式读取文件。
      *
@@ -150,6 +232,13 @@ public final class FileController {
     @GetMapping("/download")
     public Mono<ResponseEntity<Resource>> download(@RequestParam String path, ServerWebExchange exchange) {
         return media(exchange, path, true);
+    }
+
+    private void validateTrackingLimit(int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "limit must be between 1 and 100");
+        }
     }
 
     /**
@@ -334,6 +423,7 @@ public final class FileController {
         return principalResolver.resolveMedia(exchange)
                 .flatMap(principal -> Mono.fromCallable(() -> {
                     Path file = files.fileForRead(principal.userId(), path);
+                    files.touchAccess(principal.userId(), path);
                     String contentType = Files.probeContentType(file);
                     String normalizedType = contentType == null ? ""
                             : contentType.toLowerCase(Locale.ROOT).trim();

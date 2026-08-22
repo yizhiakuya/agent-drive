@@ -34,8 +34,13 @@ public class ServerConfigPlugin extends Plugin {
             call.reject("server 不能为空");
             return;
         }
+        String normalized = ScanActivity.validateServer(server);
+        if (normalized == null) {
+            call.reject("server 必须是无凭据、无查询参数的 HTTPS 地址");
+            return;
+        }
         try {
-            ServerConfigStore.setServer(getContext(), server.trim());
+            ServerConfigStore.setServer(getContext(), normalized);
             JSObject ret = new JSObject();
             ret.put("server", ServerConfigStore.getServer(getContext()));
             call.resolve(ret);

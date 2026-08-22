@@ -179,6 +179,78 @@ public class ServerConfigStoreTest {
     }
 
     @Test
+    public void switchingServerAtomicallyResetsCheckpointAndSyncSummary() {
+        MemoryPreferences prefs = new MemoryPreferences();
+        prefs.values.put("server", "https://old.example");
+        prefs.values.put("device_token", "old-token");
+        prefs.values.put("sync_last_at", 1234L);
+        prefs.values.put("sync_pending_second", 1234L);
+        prefs.values.put("sync_pending_max_id", 88L);
+        prefs.values.put("sync_last_count", 7);
+        prefs.values.put("sync_last_error", "old failure");
+
+        ServerConfigStore.updateConnection(prefs, "https://new.example", "new-token");
+
+        assertEquals(1, prefs.commitCount);
+        assertEquals("https://new.example", prefs.getString("server", null));
+        assertEquals("new-token", prefs.getString("device_token", null));
+        assertEquals(0L, prefs.getLong("sync_last_at", -1L));
+        assertFalse(prefs.contains("sync_pending_second"));
+        assertFalse(prefs.contains("sync_pending_max_id"));
+        assertEquals(0, prefs.getInt("sync_last_count", -1));
+        assertFalse(prefs.contains("sync_last_error"));
+    }
+
+    @Test
+    public void reconnectingSameServerKeepsCheckpoint() {
+        MemoryPreferences prefs = new MemoryPreferences();
+        prefs.values.put("server", "https://same.example");
+        prefs.values.put("sync_last_at", 1234L);
+        prefs.values.put("sync_pending_second", 1234L);
+        prefs.values.put("sync_pending_max_id", 88L);
+        prefs.values.put("sync_last_count", 7);
+        prefs.values.put("sync_last_error", "old failure");
+
+        ServerConfigStore.updateConnection(prefs, "https://same.example", "new-token");
+
+        assertEquals(1234L, prefs.getLong("sync_last_at", -1L));
+        assertEquals(1234L, prefs.getLong("sync_pending_second", -1L));
+        assertEquals(88L, prefs.getLong("sync_pending_max_id", -1L));
+        assertEquals(7, prefs.getInt("sync_last_count", -1));
+        assertEquals("old failure", prefs.getString("sync_last_error", null));
+    }
+
+    @Test
+    public void syncDiagnosticsAreWrittenAsOneCommit() {
+        MemoryPreferences prefs = new MemoryPreferences();
+        ServerConfigStore.setSyncStats(prefs, 10, 6, 3, 1, 2, 2, false);
+
+        assertEquals(1, prefs.commitCount);
+        assertEquals(10, prefs.getInt("sync_last_scanned", -1));
+        assertEquals(6, prefs.getInt("sync_last_uploaded", -1));
+        assertEquals(3, prefs.getInt("sync_last_deduped", -1));
+        assertEquals(1, prefs.getInt("sync_last_skipped", -1));
+        assertEquals(2, prefs.getInt("sync_last_failed", -1));
+        assertEquals(2, prefs.getInt("sync_last_retryable", -1));
+        assertFalse(prefs.getBoolean("sync_last_notification", true));
+    }
+
+    @Test
+    public void targetFolderRejectsTraversalAndNormalizesSeparators() {
+        assertEquals("手机照片/2026", ServerConfigStore.normalizeTargetFolder(" 手机照片\\2026 "));
+        assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigStore.normalizeTargetFolder("../outside"));
+        assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigStore.normalizeTargetFolder("/absolute"));
+        assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigStore.normalizeTargetFolder(".trash"));
+        assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigStore.normalizeTargetFolder(".versions"));
+        assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigStore.normalizeTargetFolder(".copy.staging"));
+    }
+
+    @Test
     public void activityObserverHasLifecycleCleanupHook() throws Exception {
         assertEquals(android.database.ContentObserver.class,
                 MainActivity.class.getDeclaredField("mediaObserver").getType());
@@ -186,6 +258,13 @@ public class ServerConfigStoreTest {
                 MainActivity.class.getDeclaredMethod("onDestroy").getModifiers()));
         assertTrue(java.lang.reflect.Modifier.isStatic(
                 PhotoSyncPlugin.class.getDeclaredField("CONFIGURE_EXECUTOR").getModifiers()));
+    }
+
+    @Test
+    public void photoSyncExposesNotificationSettingsAction() {
+        boolean found = java.util.Arrays.stream(PhotoSyncPlugin.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("openNotificationSettings"));
+        assertTrue(found);
     }
 
     private static final class MemoryPreferences implements SharedPreferences {

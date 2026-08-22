@@ -48,6 +48,10 @@ export interface TaskOverview {
     non_vectorizable_files: number;
     missing_vectors: number;
     stale_vectors: number;
+    text_vector_files?: number;
+    vision_vector_files?: number;
+    text_missing_vectors?: number;
+    vision_missing_vectors?: number;
     embedding_configured: boolean;
     model: string;
   };
@@ -152,6 +156,12 @@ export const enqueueVisionIndex = (files: string[], force = false) =>
   api<{ queued: boolean; task: TaskRecord }>("/tasks/vision-index", {
     method: "POST",
     body: JSON.stringify({ files, force }),
+  });
+
+/** 后台清空当前 owner 的文本/视觉向量，不删除原文件或正文索引。 */
+export const clearVectors = () =>
+  api<{ queued: boolean; execution_mode: "background"; message: string; task: TaskRecord }>("/tasks/clear-vectors", {
+    method: "POST",
   });
 
 export const taskEventsUrl = () => apiPath("/tasks/events");

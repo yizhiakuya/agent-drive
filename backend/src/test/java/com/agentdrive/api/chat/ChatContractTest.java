@@ -19,6 +19,8 @@ class ChatContractTest {
         assertThat(request.history()).isEmpty();
         assertThat(request.confirmations()).isEmpty();
         assertThat(request.model()).isEmpty();
+        assertThat(request.permissionMode()).isEqualTo("auto");
+        assertThat(request.inlineImages()).isEmpty();
     }
 
     @Test
@@ -27,6 +29,50 @@ class ChatContractTest {
                 "hello", null, null, null, null, null, null, null, "  fast-model  ");
 
         assertThat(request.model()).isEqualTo("fast-model");
+    }
+
+    @Test
+    void requestAcceptsPermissionModeAndKeepsItAcrossServerCopies() {
+        ChatRequest request = new ChatRequest(
+                "hello", null, null, "00000000-0000-0000-0000-000000000001", "auto",
+                null, null, null, "", null, "ask");
+
+        assertThat(request.permissionMode()).isEqualTo("ask");
+        assertThat(request.withSessionId(request.sessionId()).permissionMode()).isEqualTo("ask");
+        assertThat(request.withAuthenticatedUserId(null).permissionMode()).isEqualTo("ask");
+        assertThat(request.withRequestId("request").permissionMode()).isEqualTo("ask");
+    }
+
+    @Test
+    void acceptsBase64InlineImageAndKeepsItAcrossServerCopies() {
+        ChatRequest.InlineImage image = new ChatRequest.InlineImage("paste.png", "image/png", "aGVsbG8=");
+        ChatRequest request = new ChatRequest(
+                "describe", null, null, "00000000-0000-0000-0000-000000000001", "auto",
+                null, null, null, "gpt-5.6-luna", null, "auto", java.util.List.of(image));
+
+        assertThat(request.inlineImages()).containsExactly(image);
+        assertThat(request.inlineImagesValid()).isTrue();
+        assertThat(request.withSessionId(request.sessionId()).inlineImages()).containsExactly(image);
+        assertThat(request.withRequestId("request").inlineImages()).containsExactly(image);
+    }
+
+    @Test
+    void rejectsInvalidInlineImagePayload() {
+        ChatRequest request = new ChatRequest(
+                "describe", null, null, null, "auto", null, null, null, "gpt-5.6-luna", null,
+                "auto", java.util.List.of(new ChatRequest.InlineImage("x", "text/plain", "not image")));
+
+        assertThat(request.inlineImagesValid()).isFalse();
+    }
+
+    @Test
+    void fileContextOnlyAcceptsOwnerRelativePosixPaths() {
+        ChatRequest request = new ChatRequest(
+                "hello", null, null, null, null, null, null, null, "",
+                java.util.List.of("docs/readme.md", "../outside"));
+
+        assertThat(request.fileContext()).containsExactly("docs/readme.md", "../outside");
+        assertThat(request.fileContextPathsValid()).isFalse();
     }
 
     @Test

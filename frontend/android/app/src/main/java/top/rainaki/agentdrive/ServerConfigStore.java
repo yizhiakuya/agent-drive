@@ -29,7 +29,9 @@ public final class ServerConfigStore {
     private static final String[] CONFIG_KEYS = {
             "server", "device_id", "device_token", "sync_enabled", "sync_wifi_only",
             "sync_interval_bits", "sync_folder", "sync_last_at", "sync_pending_second",
-            "sync_pending_max_id", "sync_last_count", "sync_last_error"
+            "sync_pending_max_id", "sync_last_count", "sync_last_error", "sync_last_scanned",
+            "sync_last_uploaded", "sync_last_deduped", "sync_last_skipped", "sync_last_failed",
+            "sync_last_retryable", "sync_last_notification"
     };
     private static volatile SharedPreferences cached;
 
@@ -187,6 +189,15 @@ public final class ServerConfigStore {
                 return source.getLong(key, 0L);
             case "sync_last_count":
                 return source.getInt(key, 0);
+            case "sync_last_scanned":
+            case "sync_last_uploaded":
+            case "sync_last_deduped":
+            case "sync_last_skipped":
+            case "sync_last_failed":
+            case "sync_last_retryable":
+                return source.getInt(key, 0);
+            case "sync_last_notification":
+                return source.getBoolean(key, false);
             default:
                 throw new IllegalArgumentException("未知配置键: " + key);
         }
@@ -215,6 +226,17 @@ public final class ServerConfigStore {
                 break;
             case "sync_last_count":
                 if (value instanceof Integer) return value;
+                break;
+            case "sync_last_scanned":
+            case "sync_last_uploaded":
+            case "sync_last_deduped":
+            case "sync_last_skipped":
+            case "sync_last_failed":
+            case "sync_last_retryable":
+                if (value instanceof Integer) return value;
+                break;
+            case "sync_last_notification":
+                if (value instanceof Boolean) return value;
                 break;
             default:
                 throw new IllegalArgumentException("未知配置键: " + key);
@@ -247,6 +269,17 @@ public final class ServerConfigStore {
             case "sync_last_count":
                 destination.putInt(key, (Integer) value);
                 return;
+            case "sync_last_scanned":
+            case "sync_last_uploaded":
+            case "sync_last_deduped":
+            case "sync_last_skipped":
+            case "sync_last_failed":
+            case "sync_last_retryable":
+                destination.putInt(key, (Integer) value);
+                return;
+            case "sync_last_notification":
+                destination.putBoolean(key, (Boolean) value);
+                return;
             default:
                 throw new IllegalArgumentException("未知配置键: " + key);
         }
@@ -264,14 +297,65 @@ public final class ServerConfigStore {
     }
 
     public static void setServer(Context ctx, String server) {
-        commitOrThrow(prefs(ctx).edit().putString("server", server));
+        updateServer(prefs(ctx), server);
     }
 
     /** 扫码成功后原子保存连接地址与设备令牌，避免只写入一半。 */
     public static void setConnection(Context ctx, String server, String token) {
-        commitOrThrow(prefs(ctx).edit()
-                .putString("server", server)
-                .putString("device_token", token));
+        updateConnection(prefs(ctx), server, token);
+    }
+
+    /**
+     * 保存服务器地址；地址切换时同时清空旧服务器的相册同步检查点。
+     *
+     * <p>检查点是服务器语义的一部分，跨服务器复用会导致跳过新服务器上的照片；
+     * 清理与地址写入共用一个 commit，避免只更新一半。</p>
+     */
+    static void updateServer(SharedPreferences p, String server) {
+        if (server == null || server.trim().isEmpty()) {
+            throw new IllegalArgumentException("服务器地址不能为空");
+        }
+        String normalized = server.trim();
+        String previous = p.getString("server", null);
+        SharedPreferences.Editor editor = p.edit().putString("server", normalized);
+        if (!Objects.equals(previous, normalized)) {
+            resetSyncCheckpoint(editor);
+        }
+        commitOrThrow(editor);
+    }
+
+    /** 纯 SharedPreferences 连接更新逻辑，供 JVM 回归测试验证切换时的检查点语义。 */
+    static void updateConnection(SharedPreferences p, String server, String token) {
+        if (server == null || server.trim().isEmpty()) {
+            throw new IllegalArgumentException("服务器地址不能为空");
+        }
+        if (token == null || token.trim().isEmpty()) {
+            throw new IllegalArgumentException("设备令牌不能为空");
+        }
+        String normalized = server.trim();
+        String previous = p.getString("server", null);
+        SharedPreferences.Editor editor = p.edit()
+                .putString("server", normalized)
+                .putString("device_token", token.trim());
+        if (!Objects.equals(previous, normalized)) {
+            resetSyncCheckpoint(editor);
+        }
+        commitOrThrow(editor);
+    }
+
+    private static void resetSyncCheckpoint(SharedPreferences.Editor editor) {
+        editor.putLong("sync_last_at", 0L)
+                .remove("sync_pending_second")
+                .remove("sync_pending_max_id")
+                .putInt("sync_last_count", 0)
+                .putInt("sync_last_scanned", 0)
+                .putInt("sync_last_uploaded", 0)
+                .putInt("sync_last_deduped", 0)
+                .putInt("sync_last_skipped", 0)
+                .putInt("sync_last_failed", 0)
+                .putInt("sync_last_retryable", 0)
+                .putBoolean("sync_last_notification", false)
+                .remove("sync_last_error");
     }
 
     public static boolean isConfigured(Context ctx) {
@@ -317,7 +401,13 @@ public final class ServerConfigStore {
     }
 
     public static String getTargetFolder(Context ctx) {
-        return prefs(ctx).getString("sync_folder", "相册同步");
+        String configured = prefs(ctx).getString("sync_folder", "相册同步");
+        try {
+            return normalizeTargetFolder(configured);
+        } catch (IllegalArgumentException ignored) {
+            // 旧版本/手工篡改的配置不能把路径穿越带入上传请求；下次 configure 可修正它。
+            return "相册同步";
+        }
     }
 
     /** 单次 commit 保存本次 configure 的全部字段。持久设置是调度的期望状态源。 */
@@ -338,13 +428,41 @@ public final class ServerConfigStore {
             editor.putLong("sync_interval_bits", Double.doubleToLongBits(intervalHours));
         }
         if (folder != null) {
-            String normalized = folder.trim();
-            if (normalized.isEmpty()) {
-                throw new IllegalArgumentException("同步目录不能为空");
-            }
-            editor.putString("sync_folder", normalized);
+            editor.putString("sync_folder", normalizeTargetFolder(folder));
         }
         commitOrThrow(editor);
+    }
+
+    /** 校验相册目标目录为 owner 根下的相对 POSIX 路径，避免配置保存后每次同步才失败。 */
+    static String normalizeTargetFolder(String folder) {
+        if (folder == null) throw new IllegalArgumentException("同步目录不能为空");
+        String normalized = folder.trim().replace('\\', '/');
+        if (normalized.isEmpty() || normalized.length() > 240 || normalized.startsWith("/")) {
+            throw new IllegalArgumentException("同步目录必须是 1-240 字符的相对路径");
+        }
+        for (String segment : normalized.split("/", -1)) {
+            if (segment.isEmpty() || segment.equals(".") || segment.equals("..")
+                    || isInternalPathSegment(segment) || segment.indexOf(0) >= 0
+                    || containsControlCharacter(segment)) {
+                throw new IllegalArgumentException("同步目录包含非法路径段");
+            }
+        }
+        return normalized;
+    }
+
+    /** 与服务端公共路径边界保持一致，阻止同步把照片写入内部目录或 staging。 */
+    private static boolean isInternalPathSegment(String segment) {
+        return segment.equals(".index") || segment.equals(".trash")
+                || segment.equals(".versions") || segment.equals(".storage.lock")
+                || segment.startsWith(".upload.") || segment.startsWith(".copy.")
+                || segment.startsWith(".copy-old.");
+    }
+
+    private static boolean containsControlCharacter(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            if (Character.isISOControl(value.charAt(i))) return true;
+        }
+        return false;
     }
 
     /** 上次同步截至时间（epoch 秒）——只推进到「整秒全部成功」的秒。 */
@@ -388,5 +506,54 @@ public final class ServerConfigStore {
 
     public static void setLastError(Context ctx, String e) {
         commitOrThrow(prefs(ctx).edit().putString("sync_last_error", e));
+    }
+
+    /**
+     * 原子保存最近一次同步的可观测统计；数值来自真实扫描/上传分支，不是估算值。
+     */
+    public static void setSyncStats(Context ctx, int scanned, int uploaded, int deduped,
+                                    int skipped, int failed, int retryable, boolean notification) {
+        setSyncStats(prefs(ctx), scanned, uploaded, deduped, skipped, failed, retryable, notification);
+    }
+
+    /** 纯 SharedPreferences 统计写入，便于 JVM 验证单次 commit 语义。 */
+    static void setSyncStats(SharedPreferences p, int scanned, int uploaded, int deduped,
+                             int skipped, int failed, int retryable, boolean notification) {
+        commitOrThrow(p.edit()
+                .putInt("sync_last_scanned", Math.max(0, scanned))
+                .putInt("sync_last_uploaded", Math.max(0, uploaded))
+                .putInt("sync_last_deduped", Math.max(0, deduped))
+                .putInt("sync_last_skipped", Math.max(0, skipped))
+                .putInt("sync_last_failed", Math.max(0, failed))
+                .putInt("sync_last_retryable", Math.max(0, retryable))
+                .putBoolean("sync_last_notification", notification));
+    }
+
+    public static int getLastScanned(Context ctx) {
+        return prefs(ctx).getInt("sync_last_scanned", 0);
+    }
+
+    public static int getLastUploaded(Context ctx) {
+        return prefs(ctx).getInt("sync_last_uploaded", 0);
+    }
+
+    public static int getLastDeduped(Context ctx) {
+        return prefs(ctx).getInt("sync_last_deduped", 0);
+    }
+
+    public static int getLastSkipped(Context ctx) {
+        return prefs(ctx).getInt("sync_last_skipped", 0);
+    }
+
+    public static int getLastFailed(Context ctx) {
+        return prefs(ctx).getInt("sync_last_failed", 0);
+    }
+
+    public static int getLastRetryable(Context ctx) {
+        return prefs(ctx).getInt("sync_last_retryable", 0);
+    }
+
+    public static boolean getLastNotification(Context ctx) {
+        return prefs(ctx).getBoolean("sync_last_notification", false);
     }
 }

@@ -5,9 +5,9 @@
 ## 技术栈
 
 - Java 21、Spring Boot 3.5.x、WebFlux、Spring Modulith 1.4.x
-- LangChain4j 1.19.x、MyBatis-Plus、Flyway V1-V10
+- LangChain4j 1.19.x、MyBatis-Plus、Flyway V1-V19
 - PostgreSQL 16 + pgvector
-- Apache Tika + Tesseract/Tess4J
+- Apache Tika、视觉模型和 Jina embedding（图片不走 OCR）
 - Maven
 
 ## 本地运行
@@ -52,10 +52,10 @@ java scripts/SessionView.java <SESSION_ID> --full
 - Cookie/Bearer 认证、设备登记/撤销、会话；
 - provider、embedding、vision 配置和模型 probe；
 - 文件列表、上传、预览、全文、回收站、dedupe 和 semantic search；
-- tasks/schedules、SSE、取消/重试、index/embed/vision/rebuild/cleanup enqueue；
+- tasks/schedules、SSE、取消/重试、index/embed/vision/rebuild/cleanup/clear-vectors enqueue；
 - Chat SSE、reasoning、工具轨迹、确认、replay 和自动化报告。
 
-向量和视觉接口只负责校验参数并创建 owner-scoped 任务；Tika/OCR、chunk、Jina embedding 和图片描述均由 Worker 执行。Chat SSE 每个 `data` 都是 JSON object，模型只使用统一的 `backend_api`/`frontend_api` catalog。
+向量和视觉接口只负责校验参数并创建 owner-scoped 任务；普通文档 Tika、chunk、Jina 文本向量，以及图片视觉描述 + Jina 视觉向量均由 Worker 执行，图片不走 OCR。`cleanup-index` 只清理失效索引，`clear-vectors` 才清空向量。Chat SSE 每个 `data` 都是 JSON object，模型只使用统一的 `backend_api`/`frontend_api` catalog。
 
 ## 迁移资料
 

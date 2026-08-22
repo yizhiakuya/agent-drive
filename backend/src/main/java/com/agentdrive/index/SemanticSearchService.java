@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -27,6 +28,21 @@ public interface SemanticSearchService {
      * @return 与普通文件列表兼容的语义搜索结果
      */
     Map<String, Object> search(UUID ownerId, String path, String query);
+
+    /**
+     * 分页/最低相关度版搜索入口；旧实现默认回退到原始上限行为。
+     */
+    default Map<String, Object> search(UUID ownerId, String path, String query,
+                                        int limit, Double minScore) {
+        return search(ownerId, path, query);
+    }
+
+    /** 语义搜索附带文件类型和修改时间边界；旧实现默认忽略筛选以保持兼容。 */
+    default Map<String, Object> search(UUID ownerId, String path, String query,
+                                       int limit, Double minScore, String type,
+                                       Double modifiedAfter, Double modifiedBefore) {
+        return search(ownerId, path, query, limit, minScore);
+    }
 
     /**
      * 基于当前 owner embedding 配置的 Jina 语义检索实现。
@@ -62,6 +78,19 @@ public interface SemanticSearchService {
          */
         @Override
         public Map<String, Object> search(UUID ownerId, String path, String query) {
+            return search(ownerId, path, query, MAX_RESULTS, null);
+        }
+
+        @Override
+        public Map<String, Object> search(UUID ownerId, String path, String query,
+                                          int limit, Double minScore) {
+            return search(ownerId, path, query, limit, minScore, "all", null, null);
+        }
+
+        @Override
+        public Map<String, Object> search(UUID ownerId, String path, String query,
+                                          int limit, Double minScore, String type,
+                                          Double modifiedAfter, Double modifiedBefore) {
             if (ownerId == null) throw new FileStorageException(401, "authentication required");
             String normalizedQuery = query == null ? "" : query.trim();
             if (normalizedQuery.isBlank()) {
@@ -81,16 +110,26 @@ public interface SemanticSearchService {
                 throw new FileStorageException(502, "语义搜索向量服务暂时不可用");
             }
 
+            int requestedLimit = Math.max(1, Math.min(limit, 100));
+            double threshold = minScore == null ? Double.NEGATIVE_INFINITY : minScore;
+            if (minScore != null && (!Double.isFinite(threshold) || threshold < -1.0 || threshold > 1.0)) {
+                throw new FileStorageException(400, "最低相关度必须在 -1 到 1 之间");
+            }
             List<Map<String, Object>> rows;
             try {
                 rows = index.semanticSearch(ownerId, queryEmbedding.fingerprint(), queryEmbedding.vector(),
-                        path == null || path.isBlank() ? null : path, MAX_RESULTS);
+                        path == null || path.isBlank() ? null : path,
+                        Math.min(100, requestedLimit + 1));
             } catch (RuntimeException error) {
                 throw new FileStorageException(502, "语义搜索索引暂时不可用");
             }
 
             List<Map<String, Object>> items = new ArrayList<>();
             for (Map<String, Object> row : rows) {
+                Object rawScore = row.get("search_score");
+                double score = rawScore instanceof Number number
+                        ? number.doubleValue() : parseScore(rawScore);
+                if (score < threshold) continue;
                 String filePath = String.valueOf(row.getOrDefault("path", ""));
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("name", fileName(filePath));
@@ -101,14 +140,58 @@ public interface SemanticSearchService {
                 item.put("search_score", row.get("search_score"));
                 item.put("search_snippet", row.get("search_snippet"));
                 item.put("search_chunk_index", row.get("chunk_index"));
+                item.put("vector_type", row.get("vector_type"));
+                if (!matchesFilter(item, type, modifiedAfter, modifiedBefore)) continue;
                 items.add(item);
             }
-            return Map.of(
-                    "path", path == null ? "" : path,
-                    "query", normalizedQuery,
-                    "mode", "semantic",
-                    "items", items
-            );
+            boolean hasMore = items.size() > requestedLimit;
+            if (hasMore) items = new ArrayList<>(items.subList(0, requestedLimit));
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("path", path == null ? "" : path);
+            response.put("query", normalizedQuery);
+            response.put("mode", "semantic");
+            response.put("items", items);
+            response.put("limit", requestedLimit);
+            response.put("has_more", hasMore);
+            if (minScore != null) response.put("min_score", minScore);
+            response.put("type", type == null || type.isBlank() ? "all" : type);
+            response.put("modified_after", modifiedAfter);
+            response.put("modified_before", modifiedBefore);
+            return response;
+        }
+
+        private boolean matchesFilter(Map<String, Object> item, String type,
+                                      Double modifiedAfter, Double modifiedBefore) {
+            String normalized = type == null || type.isBlank() ? "all" : type.toLowerCase(java.util.Locale.ROOT);
+            if ("folder".equals(normalized)) return false;
+            if (!"all".equals(normalized) && !"file".equals(normalized)) {
+                String path = String.valueOf(item.getOrDefault("path", "")).toLowerCase(java.util.Locale.ROOT);
+                String kind = kindFor(path);
+                if (!normalized.equals(kind)) return false;
+            }
+            double modified = item.get("mtime") instanceof Number number
+                    ? number.doubleValue() : parseScore(item.get("mtime"));
+            return (modifiedAfter == null || modified >= modifiedAfter)
+                    && (modifiedBefore == null || modified <= modifiedBefore);
+        }
+
+        private String kindFor(String path) {
+            int dot = path.lastIndexOf('.');
+            String suffix = dot < 0 ? "" : path.substring(dot);
+            if (Set.of(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp").contains(suffix)) return "image";
+            if (Set.of(".mp4", ".webm", ".ogg", ".mov", ".m4v").contains(suffix)) return "video";
+            if (Set.of(".mp3", ".wav", ".m4a", ".flac").contains(suffix)) return "audio";
+            if (".pdf".equals(suffix)) return "pdf";
+            return "text";
+        }
+
+        private double parseScore(Object value) {
+            if (value == null) return Double.NEGATIVE_INFINITY;
+            try {
+                return Double.parseDouble(String.valueOf(value));
+            } catch (NumberFormatException ignored) {
+                return Double.NEGATIVE_INFINITY;
+            }
         }
 
         /**

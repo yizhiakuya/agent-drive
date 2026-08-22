@@ -12,13 +12,31 @@ vi.mock("@/lib/api/chat", () => ({
 
 const getConfig = vi.fn(async () => ({
   configured: true,
-  llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "default-model", api_key_masked: "sk-..." },
+  llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "default-model", api_key_masked: "sk-...", supports_images: true },
   embeddings: null,
 }));
 const listModels = vi.fn(async () => ({ ok: true, models: ["default-model", "fast-model"] }));
 vi.mock("@/lib/api/config", () => ({
   getConfig: () => getConfig(),
   listModels: () => listModels(),
+}));
+
+const listFiles = vi.fn(async (path = "", query = "", mode = "name") => {
+  void query;
+  void mode;
+  return {
+    path,
+    items: [{ name: "today.md", path: "notes/today.md", is_dir: false, size: 12 }],
+    disk: null,
+  };
+});
+const uploadFile = vi.fn(async (file?: File, path?: string) => {
+  void path;
+  return { uploaded: { path: `聊天附件/${file?.name || "photo.jpg"}`, size: file?.size || 12 }, indexed: null };
+});
+vi.mock("@/lib/api/files", () => ({
+  listFiles: (...args: [string?, string?, string?]) => listFiles(...args),
+  uploadFile: (...args: [File?, string?]) => uploadFile(...args),
 }));
 
 const api = vi.fn(async (path: string, options?: RequestInit) => { void path; void options; return { report: null }; });
@@ -57,6 +75,7 @@ describe("ChatPanel 主流程", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAppStore.getState().setSessionId(null);
+    localStorage.removeItem("agent-drive-permission-mode");
     getSession.mockReset();
     getSession.mockResolvedValue({ messages: [] });
     // jsdom 未实现 scrollIntoView，组件在发送/结束时调用它。
@@ -65,10 +84,16 @@ describe("ChatPanel 主流程", () => {
     api.mockResolvedValue({ report: null });
     getConfig.mockResolvedValue({
       configured: true,
-      llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "default-model", api_key_masked: "sk-..." },
+      llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "default-model", api_key_masked: "sk-...", supports_images: true },
       embeddings: null,
     });
     listModels.mockResolvedValue({ ok: true, models: ["default-model", "fast-model"] });
+    listFiles.mockResolvedValue({
+      path: "",
+      items: [{ name: "today.md", path: "notes/today.md", is_dir: false, size: 12 }],
+      disk: null,
+    });
+    useAppStore.setState({ frontendActions: [] });
   });
 
   afterEach(() => {
@@ -104,6 +129,57 @@ describe("ChatPanel 主流程", () => {
     await act(async () => { await first.promise; });
     expect(screen.getByText("B 会话历史")).toBeInTheDocument();
     expect(screen.queryByText("A 会话历史")).not.toBeInTheDocument();
+  });
+
+  it("进入会话后默认滚动到最新历史", async () => {
+    getSession.mockResolvedValue({ messages: [{ role: "assistant", content: "最新历史回复" }] });
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-latest"); });
+    expect(await screen.findByText("最新历史回复")).toBeInTheDocument();
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("Agent 运行期间流式内容更新会持续跟随底部", async () => {
+    vi.useFakeTimers();
+    try {
+      let emit!: (event: string, data: Record<string, unknown>) => void;
+      chatStream.mockImplementation((_msg, _history, _sid, _confirmations, onEvent) => {
+        emit = onEvent;
+        return new Promise(() => {});
+      });
+      render(<ChatPanel />);
+      await act(async () => {});
+      await typeAndSend("持续任务");
+      const before = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.calls.length;
+      await act(async () => {
+        emit("text", { text: "实时更新" });
+        vi.advanceTimersByTime(80);
+      });
+      expect(screen.getByText("实时更新")).toBeInTheDocument();
+      expect((Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("重新进入会话时恢复持久化的上下文用量", async () => {
+    getSession.mockResolvedValue({
+      meta: { context_usage: { used: 1800, total: 262144, percent: 0.69, input: 1600, output: 200 } },
+      messages: [{ role: "assistant", content: "之前的回复" }],
+    } as never);
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-persisted-usage"); });
+    await waitFor(() => expect(screen.getByTestId("context-usage-summary")).toHaveTextContent("1.8K / 262.1K"));
+  });
+
+  it("旧会话没有用量记录时显示消息估算而不是零", async () => {
+    getSession.mockResolvedValue({
+      messages: [{ role: "assistant", content: "这是一段已有历史消息，用于估算上下文窗口。" }],
+    } as never);
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-legacy-usage"); });
+    await waitFor(() => expect(screen.getByTestId("context-usage-summary")).toHaveTextContent("估算"));
+    expect(screen.getByTestId("context-usage-summary")).not.toHaveTextContent("估算 0 / 262.1K");
   });
 
   it("切换会话不会中止原会话流，返回后从持久历史收敛", async () => {
@@ -204,7 +280,7 @@ describe("ChatPanel 主流程", () => {
     render(<ChatPanel />);
     await act(async () => { useAppStore.getState().setSessionId("session-pending"); });
 
-    expect(await screen.findByText("高风险操作确认")).toBeInTheDocument();
+    expect(await screen.findByText("需要你的批准")).toBeInTheDocument();
   });
 
   it("聊天输入区保持紧凑并提供稳定的聚焦反馈", async () => {
@@ -223,6 +299,77 @@ describe("ChatPanel 主流程", () => {
 
     textarea.focus();
     expect(textarea).toHaveFocus();
+  });
+
+  it("权限控件可切换模式、保存选择并随请求发送", async () => {
+    chatStream.mockResolvedValue(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+
+    const summary = screen.getByTestId("permission-summary");
+    expect(summary).toHaveAccessibleName("权限模式：帮我批准");
+    fireEvent.click(summary);
+    expect(screen.getByRole("dialog", { name: "权限模式" })).toHaveTextContent("请求批准");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "请求批准" }));
+    expect(summary).toHaveAccessibleName("权限模式：请求批准");
+    expect(localStorage.getItem("agent-drive-permission-mode")).toBe("ask");
+
+    fireEvent.click(summary);
+    expect(screen.getByRole("dialog", { name: "权限模式" })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByTestId("permission-control")).not.toHaveAttribute("open");
+
+    await typeAndSend("执行操作");
+    expect(chatStream.mock.calls[0][10]).toBe("ask");
+  });
+
+  it("权限控件从本地设置恢复完全访问模式", async () => {
+    localStorage.setItem("agent-drive-permission-mode", "full");
+    render(<ChatPanel />);
+    await act(async () => {});
+    expect(screen.getByTestId("permission-summary")).toHaveAccessibleName("权限模式：完全访问");
+  });
+
+  it("切换到完全访问时收起上一轮遗留的确认卡", async () => {
+    chatStream.mockResolvedValue({
+      pending_confirmation: {
+        tool: "delete_file",
+        arguments: { path: "a.txt" },
+        nonce: "n1",
+        ts: 1,
+        signature: "sig",
+      },
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("删除 a.txt");
+    await waitFor(() => expect(screen.getByText("需要你的批准")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("permission-summary"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "完全访问" }));
+    await waitFor(() => expect(screen.queryByText("需要你的批准")).not.toBeInTheDocument());
+  });
+
+  it("不在输入框下方显示旧的快捷操作按钮", async () => {
+    render(<ChatPanel />);
+    await act(async () => {});
+    expect(screen.getAllByRole("button", { name: "看看网盘里有什么" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "按内容找文件" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "整理文件" })).toHaveLength(1);
+  });
+
+  it("滚离底部时显示居中的圆形回到最新按钮", async () => {
+    render(<ChatPanel />);
+    await act(async () => {});
+    const list = screen.getByTestId("chat-message-list");
+    Object.defineProperties(list, {
+      scrollHeight: { configurable: true, value: 1200 },
+      scrollTop: { configurable: true, value: 0 },
+      clientHeight: { configurable: true, value: 500 },
+    });
+    fireEvent.scroll(list);
+    const button = screen.getByRole("button", { name: "回到最新消息" });
+    expect(button).toHaveClass("size-8", "rounded-full");
+    expect(screen.queryByText("最新")).not.toBeInTheDocument();
   });
 
   it("text 事件累积为助手消息", async () => {
@@ -337,9 +484,22 @@ describe("ChatPanel 主流程", () => {
     await act(async () => {});
     await typeAndSend("删除 a.txt");
     await waitFor(() => {
-      expect(screen.getByText("高风险操作确认")).toBeInTheDocument();
+      expect(screen.getByText("需要你的批准")).toBeInTheDocument();
     });
     expect(screen.getByText("delete_file")).toBeInTheDocument();
+  });
+
+  it("完成响应的真实上下文用量替换默认零值", async () => {
+    chatStream.mockResolvedValue({
+      context_usage: { used: 1800, total: 262144, percent: 0.69, input: 1600, output: 200 },
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("你好");
+    expect(screen.getByTestId("context-usage-summary")).toHaveTextContent("1.8K / 262.1K");
+    fireEvent.click(screen.getByTestId("context-usage-summary"));
+    expect(screen.getByTestId("context-usage-details")).toHaveTextContent("本轮输入");
+    expect(screen.getByTestId("context-usage-details")).toHaveTextContent("200");
   });
 
   it("流错误显示错误文案", async () => {
@@ -488,5 +648,120 @@ describe("ChatPanel 主流程", () => {
 
     await typeAndSend("用快速模型回答");
     expect(chatStream.mock.calls[0][8]).toBe("fast-model");
+  });
+
+  it("@ 选择文件后随请求发送 owner 文件上下文", async () => {
+    chatStream.mockResolvedValue(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    fireEvent.change(textarea, { target: { value: "请总结 @" } });
+    expect(await screen.findByRole("option", { name: /notes\/today\.md/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /notes\/today\.md/ }));
+    expect(screen.getByLabelText("已附加文件")).toHaveTextContent("notes/today.md");
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await act(async () => {});
+    expect(chatStream.mock.calls[0][9]).toEqual(["notes/today.md"]);
+  });
+
+  it("@ 文件夹默认进入浏览，点击子文件后才引用", async () => {
+    chatStream.mockResolvedValue(null);
+    listFiles.mockImplementation(async (path = "") => path === "projects"
+      ? {
+          path,
+          items: [{ name: "readme.md", path: "projects/readme.md", is_dir: false, size: 20 }],
+          disk: null,
+        }
+      : {
+          path,
+          items: [{ name: "projects", path: "projects", is_dir: true, size: 0 }],
+          disk: null,
+        });
+    render(<ChatPanel />);
+    await act(async () => {});
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    fireEvent.change(textarea, { target: { value: "查看 @" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "进入文件夹 projects" }));
+    await waitFor(() => expect(listFiles).toHaveBeenCalledWith("projects", "", "name"));
+    expect(screen.queryByLabelText("已附加文件")).not.toBeInTheDocument();
+    expect(textarea).toHaveValue("查看 @projects/");
+
+    fireEvent.click(await screen.findByRole("option", { name: /projects\/readme\.md/ }));
+    expect(screen.getByLabelText("已附加文件")).toHaveTextContent("projects/readme.md");
+  });
+
+  it("@ 文件夹提供显式的引用整个文件夹动作", async () => {
+    listFiles.mockResolvedValue({
+      path: "",
+      items: [{ name: "projects", path: "projects", is_dir: true, size: 0 }],
+      disk: null,
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    fireEvent.change(textarea, { target: { value: "总结 @" } });
+    fireEvent.click(await screen.findByRole("button", { name: "引用文件夹 projects" }));
+    expect(screen.getByLabelText("已附加文件")).toHaveTextContent("projects");
+    expect(textarea).toHaveValue("总结 @projects ");
+  });
+
+  it("可直接粘贴图片作为本轮 Base64 内联内容且不上传到聊天附件目录", async () => {
+    const image = new File(["png"], "截图.png", { type: "image/png" });
+    render(<ChatPanel />);
+    await act(async () => {});
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        files: [image],
+        getData: () => "",
+      },
+    });
+    await waitFor(() => expect(screen.getByLabelText("已附加图片")).toHaveTextContent("截图.png"));
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("已附加文件")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(chatStream).toHaveBeenCalled());
+    expect(chatStream.mock.calls[0][11]).toEqual([
+      expect.objectContaining({ name: "截图.png", mediaType: "image/png", data: expect.any(String) }),
+    ]);
+  });
+
+  it("当前模型不支持图片时阻止粘贴图片进入请求", async () => {
+    getConfig.mockResolvedValueOnce({
+      configured: true,
+      llm: { type: "openai_compat", base_url: "https://example.com/v1", model: "deepseek-v3", api_key_masked: "sk-...", supports_images: false },
+      embeddings: null,
+    });
+    const image = new File(["png"], "截图.png", { type: "image/png" });
+    render(<ChatPanel />);
+    await act(async () => {});
+    fireEvent.paste(screen.getByPlaceholderText("和你的 Agent 对话…"), {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        files: [image],
+        getData: () => "",
+      },
+    });
+    await act(async () => {});
+    expect(screen.queryByLabelText("已附加图片")).not.toBeInTheDocument();
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("回答中的文件引用转换为可打开的前端动作", async () => {
+    chatStream.mockImplementation((_msg, _history, _sid, _confirmations, onEvent: (event: string, data: Record<string, unknown>) => void) => {
+      onEvent("text", { text: "请查看 [[file:notes/today.md]]" });
+      return Promise.resolve(null);
+    });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("给我文件");
+    const reference = screen.getByRole("button", { name: /打开文件 notes\/today\.md/ });
+    fireEvent.click(reference);
+    expect(useAppStore.getState().frontendActions[0]).toMatchObject({
+      operation: "files.open",
+      arguments: { path: "notes/today.md" },
+    });
   });
 });

@@ -86,6 +86,9 @@ public final class VisionDescriptionService {
     public Map<String, Object> describeFile(UUID userId, String path) {
         VisionRuntimeConfig.Config config = configs.find(userId)
                 .orElseThrow(() -> new IllegalStateException("vision_not_configured"));
+        if (config.apiKey() == null || config.apiKey().isBlank()) {
+            throw new IllegalStateException("vision_not_configured");
+        }
         return describeFile(userId, path, config);
     }
 

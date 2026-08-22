@@ -60,7 +60,7 @@ public class MybatisScheduleStore implements ScheduleStore {
     @Override
     public List<Map<String, Object>> list(UUID userId) {
         requireUser(userId);
-        return mapper.selectSchedules(userId.toString()).stream().map(this::normalize).toList();
+        return mapper.selectSchedules(userId.toString()).stream().map(row -> normalize(userId, row)).toList();
     }
 
     /**
@@ -93,7 +93,7 @@ public class MybatisScheduleStore implements ScheduleStore {
         String normalizedLane = lane == null || lane.isBlank() ? "default" : lane.trim();
         ScheduleDefinition definition = definition(cron, scheduleKind, scheduleValue, timezone);
         double nextRunAt = nextRun(definition, Instant.now().getEpochSecond());
-        return normalize(mapper.upsert(
+        return normalize(userId, mapper.upsert(
                 userId.toString(), name.trim(), definition.cron(), definition.kind(), definition.value(),
                 normalizedTaskType, normalizedLane, json(payload == null ? Map.of() : payload),
                 enabled, Math.max(0, priority), Math.max(1, maxAttempts),
@@ -112,6 +112,15 @@ public class MybatisScheduleStore implements ScheduleStore {
     public boolean delete(UUID userId, String name) {
         requireUser(userId);
         return mapper.delete(userId.toString(), name) > 0;
+    }
+
+    /** 记录 owner 计划的一次立即运行，供自动化中心显示上次执行时间。 */
+    @Override
+    @Transactional
+    public boolean markManualRun(UUID userId, String name, String taskId) {
+        requireUser(userId);
+        if (name == null || name.isBlank() || taskId == null || taskId.isBlank()) return false;
+        return mapper.markManualRun(userId.toString(), name.trim(), taskId) > 0;
     }
 
     /**
@@ -303,7 +312,7 @@ public class MybatisScheduleStore implements ScheduleStore {
      * @param row Mapper 返回的计划行；空行返回 {@code null}。
      * @return 包含计划配置、下次运行和最近任务 ID 的有序 Map。
      */
-    private Map<String, Object> normalize(Map<String, Object> row) {
+    private Map<String, Object> normalize(UUID userId, Map<String, Object> row) {
         if (row == null) return null;
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", row.get("id"));
@@ -321,9 +330,31 @@ public class MybatisScheduleStore implements ScheduleStore {
         result.put("next_run_at", row.get("next_run_at"));
         result.put("last_task_id", row.get("last_task_id"));
         result.put("last_error", row.get("last_error"));
+        enrichTaskFailure(userId, result);
         result.put("created_at", row.get("created_at"));
         result.put("updated_at", row.get("updated_at"));
         return result;
+    }
+
+    /** 从最近任务读取运行时失败原因，让计划卡与任务中心保持同一事实口径。 */
+    private void enrichTaskFailure(UUID userId, Map<String, Object> schedule) {
+        if (tasks == null || schedule.get("last_task_id") == null) return;
+        try {
+            UUID taskId = UUID.fromString(String.valueOf(schedule.get("last_task_id")));
+            Map<String, Object> task = tasks.get(userId, taskId);
+            if (task == null) return;
+            Object error = task.get("error");
+            Object status = task.get("status");
+            if (error != null && !String.valueOf(error).isBlank()
+                    && ("failed".equals(status) || "retry_wait".equals(status) || "cancelled".equals(status))) {
+                schedule.put("last_error", String.valueOf(error));
+            }
+            if (schedule.get("last_run_at") == null && task.get("created_at") != null) {
+                schedule.put("last_run_at", task.get("created_at"));
+            }
+        } catch (RuntimeException ignored) {
+            // A deleted/invalid historical task must not make schedule listing fail.
+        }
     }
 
     /**

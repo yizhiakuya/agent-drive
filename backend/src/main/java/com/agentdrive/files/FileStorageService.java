@@ -57,6 +57,63 @@ public interface FileStorageService {
     }
 
     /**
+     * 分页/阈值版列表入口。旧存储适配器可继续使用默认实现；生产实现应返回
+     * {@code limit}、{@code has_more}，语义模式还可应用 {@code minScore}。
+     */
+    default Map<String, Object> list(UUID ownerId, String path, String query, String mode,
+                                     int limit, Double minScore) {
+        return list(ownerId, path, query, mode);
+    }
+
+    /**
+     * 带类型和修改时间边界的文件列表入口。
+     * {@code type} 支持 all/file/folder/image/video/audio/pdf/text；时间使用 Unix 秒。
+     */
+    default Map<String, Object> list(UUID ownerId, String path, String query, String mode,
+                                     int limit, Double minScore, String type,
+                                     Double modifiedAfter, Double modifiedBefore) {
+        return list(ownerId, path, query, mode, limit, minScore);
+    }
+
+    /**
+     * 列出当前 owner 最近收藏的可见文件/目录。
+     * 失效或已删除的收藏由实现过滤，不把孤儿路径返回给客户端。
+     */
+    default Map<String, Object> listFavorites(UUID ownerId, int limit) {
+        throw new UnsupportedOperationException("favorite listing is not supported");
+    }
+
+    /**
+     * 列出当前 owner 最近访问的可见文件。
+     * 访问记录只作为排序线索，物理路径和 owner metadata 仍由实现重新校验。
+     */
+    default Map<String, Object> listRecent(UUID ownerId, int limit) {
+        throw new UnsupportedOperationException("recent listing is not supported");
+    }
+
+    /** 列出当前 owner 指定文件的真实内容版本快照。 */
+    default Map<String, Object> listVersions(UUID ownerId, String path, int limit) {
+        throw new UnsupportedOperationException("file versions are not supported");
+    }
+
+    /** 将指定真实内容版本作为新 revision 原子恢复到当前文件路径。 */
+    default Map<String, Object> restoreVersion(UUID ownerId, String path, String versionId) {
+        throw new UnsupportedOperationException("file version restore is not supported");
+    }
+
+    /** 添加或移除 owner 对可见路径的收藏标记。 */
+    default Map<String, Object> setFavorite(UUID ownerId, String path, boolean favorite) {
+        throw new UnsupportedOperationException("favorites are not supported");
+    }
+
+    /**
+     * 记录一次用户可见文件访问。该方法是 best-effort 观察记录，不能让预览或下载失败。
+     */
+    default void touchAccess(UUID ownerId, String path) {
+        // Older storage test doubles do not persist access telemetry.
+    }
+
+    /**
      * 返回一个用户路径的详细元数据，包括文件或目录类型、大小、修改时间、revision 和可预览类型。
      * 该查询不会读取完整文件内容，也不会改变索引或文件 revision。
      *

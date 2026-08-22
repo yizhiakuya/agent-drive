@@ -119,6 +119,71 @@ class FileControllerContractTest {
         assertThat(files.lastListMode).isEqualTo("semantic");
     }
 
+    @Test
+    void authenticatedListPassesProductivityFiltersAndCollections() {
+        UUID owner = UUID.randomUUID();
+        StubFiles files = new StubFiles(owner);
+        WebTestClient client = client(owner, files);
+
+        client.get()
+                .uri("/api/v1/files?path=documents&type=pdf&modified_after=10&modified_before=20&min_score=0.7&limit=25")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk();
+        assertThat(files.lastListLimit).isEqualTo(25);
+        assertThat(files.lastListType).isEqualTo("pdf");
+        assertThat(files.lastMinScore).isEqualTo(0.7);
+        assertThat(files.lastModifiedAfter).isEqualTo(10.0);
+        assertThat(files.lastModifiedBefore).isEqualTo(20.0);
+
+        client.get()
+                .uri("/api/v1/files/favorites?limit=20")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.mode").isEqualTo("favorites");
+        assertThat(files.lastTrackingLimit).isEqualTo(20);
+
+        client.get()
+                .uri("/api/v1/files/recent?limit=15")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.mode").isEqualTo("recent");
+        assertThat(files.lastTrackingLimit).isEqualTo(15);
+
+        client.post()
+                .uri("/api/v1/files/favorites?path=documents/note.txt")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk();
+        assertThat(files.favoritePath).isEqualTo("documents/note.txt");
+        assertThat(files.favoriteValue).isTrue();
+
+        client.delete()
+                .uri("/api/v1/files/favorites?path=documents/note.txt")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk();
+        assertThat(files.favoriteValue).isFalse();
+
+        client.get()
+                .uri("/api/v1/files/versions?path=documents/note.txt&limit=10")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.path").isEqualTo("documents/note.txt");
+
+        client.post()
+                .uri("/api/v1/files/versions/restore?path=documents/note.txt&version_id=v1")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.version_id").isEqualTo("v1");
+        assertThat(files.versionPath).isEqualTo("documents/note.txt");
+        assertThat(files.versionId).isEqualTo("v1");
+    }
+
     private WebTestClient client(UUID owner, StubFiles files) {
         CredentialAuthenticator authenticator = credential -> {
             if ("session-token".equals(credential)) {
@@ -139,6 +204,16 @@ class FileControllerContractTest {
         private final UUID owner;
         private String lastListPath;
         private String lastListMode;
+        private int lastListLimit;
+        private String lastListType;
+        private Double lastMinScore;
+        private Double lastModifiedAfter;
+        private Double lastModifiedBefore;
+        private int lastTrackingLimit;
+        private String favoritePath;
+        private boolean favoriteValue;
+        private String versionPath;
+        private String versionId;
         private Path media;
 
         private StubFiles(UUID owner) {
@@ -158,6 +233,55 @@ class FileControllerContractTest {
         public Map<String, Object> list(UUID userId, String path, String query, String mode) {
             lastListMode = mode;
             return list(userId, path);
+        }
+
+        @Override
+        public Map<String, Object> list(UUID userId, String path, String query, String mode,
+                                        int limit, Double minScore, String type,
+                                        Double modifiedAfter, Double modifiedBefore) {
+            lastListLimit = limit;
+            lastListType = type;
+            lastMinScore = minScore;
+            lastModifiedAfter = modifiedAfter;
+            lastModifiedBefore = modifiedBefore;
+            return list(userId, path, query, mode);
+        }
+
+        @Override
+        public Map<String, Object> listFavorites(UUID userId, int limit) {
+            assertThat(userId).isEqualTo(owner);
+            lastTrackingLimit = limit;
+            return Map.of("mode", "favorites", "items", java.util.List.of(), "disk", Map.of());
+        }
+
+        @Override
+        public Map<String, Object> listRecent(UUID userId, int limit) {
+            assertThat(userId).isEqualTo(owner);
+            lastTrackingLimit = limit;
+            return Map.of("mode", "recent", "items", java.util.List.of(), "disk", Map.of());
+        }
+
+        @Override
+        public Map<String, Object> setFavorite(UUID userId, String path, boolean favorite) {
+            assertThat(userId).isEqualTo(owner);
+            favoritePath = path;
+            favoriteValue = favorite;
+            return Map.of("path", path, "favorite", favorite);
+        }
+
+        @Override
+        public Map<String, Object> listVersions(UUID userId, String path, int limit) {
+            assertThat(userId).isEqualTo(owner);
+            versionPath = path;
+            return Map.of("path", path, "items", java.util.List.of(), "has_more", false);
+        }
+
+        @Override
+        public Map<String, Object> restoreVersion(UUID userId, String path, String versionId) {
+            assertThat(userId).isEqualTo(owner);
+            versionPath = path;
+            this.versionId = versionId;
+            return Map.of("restored", Map.of("path", path, "size", 5), "version_id", versionId);
         }
 
         @Override public Map<String, Object> info(UUID userId, String path) { return Map.of(); }

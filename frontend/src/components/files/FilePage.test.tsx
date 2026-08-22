@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import FilePage from "./FilePage";
 
 const listFiles = vi.fn();
+const listFavorites = vi.fn();
+const listRecent = vi.fn();
+const listVersions = vi.fn();
+const restoreVersion = vi.fn();
+const setFavorite = vi.fn();
 const uploadFile = vi.fn();
 const getFileInfo = vi.fn();
 const getFileContent = vi.fn();
@@ -17,6 +22,11 @@ const emptyTrash = vi.fn();
 
 vi.mock("@/lib/api/files", () => ({
   listFiles: (...a: unknown[]) => listFiles(...a),
+  listFavorites: (...a: unknown[]) => listFavorites(...a),
+  listRecent: (...a: unknown[]) => listRecent(...a),
+  listVersions: (...a: unknown[]) => listVersions(...a),
+  restoreVersion: (...a: unknown[]) => restoreVersion(...a),
+  setFavorite: (...a: unknown[]) => setFavorite(...a),
   uploadFile: (...a: unknown[]) => uploadFile(...a),
   getFileInfo: (...a: unknown[]) => getFileInfo(...a),
   getFileContent: (...a: unknown[]) => getFileContent(...a),
@@ -77,6 +87,11 @@ describe("FilePage 核心操作", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listFiles.mockResolvedValue(rootListing);
+    listFavorites.mockResolvedValue({ ...rootListing, mode: "favorites", items: [] });
+    listRecent.mockResolvedValue({ ...rootListing, mode: "recent", items: [] });
+    listVersions.mockResolvedValue({ path: "合同.txt", items: [], has_more: false });
+    restoreVersion.mockResolvedValue({ restored: { path: "合同.txt", size: 75 }, version_id: "v1" });
+    setFavorite.mockResolvedValue({ path: "合同.txt", favorite: true });
     listTrash.mockResolvedValue({
       items: [{ path: "旧文件.txt", trash_id: "t1", deleted_at: 1750000000, size: 10, is_dir: false }],
     });
@@ -97,6 +112,63 @@ describe("FilePage 核心操作", () => {
     await waitFor(() => expect(screen.getByText("资料")).toBeInTheDocument());
     expect(screen.getByText("合同.txt")).toBeInTheDocument();
     expect(screen.getByText(/已用/)).toBeInTheDocument();
+  });
+
+  it("切换收藏集合并支持取消收藏", async () => {
+    listFavorites.mockResolvedValue({
+      ...rootListing,
+      mode: "favorites",
+      items: [{ ...rootListing.items[1], favorite: true }],
+    });
+    setFavorite.mockResolvedValue({ path: "合同.txt", favorite: false });
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^收藏$/ }));
+    await waitFor(() => expect(listFavorites).toHaveBeenCalledWith());
+    expect(screen.getByRole("button", { name: "取消收藏 合同.txt" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "取消收藏 合同.txt" }));
+    await waitFor(() => expect(setFavorite).toHaveBeenCalledWith("合同.txt", false));
+    await waitFor(() => expect(screen.queryByText("合同.txt")).not.toBeInTheDocument());
+  });
+
+  it("显示最近访问集合并按访问记录加载", async () => {
+    listRecent.mockResolvedValue({
+      ...rootListing,
+      mode: "recent",
+      items: [{ ...rootListing.items[1], last_accessed: 1750000100, access_count: 3 }],
+    });
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^最近访问$/ }));
+    await waitFor(() => expect(listRecent).toHaveBeenCalledWith());
+    expect(screen.getByText("合同.txt")).toBeInTheDocument();
+  });
+
+  it("目录单击直接进入，文件单击才打开预览", async () => {
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("资料")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("资料"));
+    await waitFor(() => expect(listFiles).toHaveBeenLastCalledWith("资料", "", "name"));
+    expect(screen.getByTestId("file-selection-toolbar")).not.toHaveTextContent("已选");
+  });
+
+  it("支持多选并批量移入回收站", async () => {
+    deleteToTrash.mockResolvedValue({});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("选择 合同.txt"));
+    expect(screen.getByTestId("file-batch-toolbar")).toHaveTextContent("已选 1 项");
+    fireEvent.click(screen.getByRole("button", { name: "删除", hidden: true }));
+    fireEvent.click(screen.getByText("确认删除"));
+    await waitFor(() => expect(deleteToTrash).toHaveBeenCalledWith("合同.txt"));
+    expect(confirm).toHaveBeenCalled();
+    confirm.mockRestore();
   });
 
   it("选择文件时操作栏保留固定高度占位", async () => {
@@ -301,6 +373,38 @@ describe("FilePage 核心操作", () => {
     expect(uploadFile.mock.calls[0][0].name).toBe("新文件.txt");
   });
 
+  it("失败上传保留原文件并支持重试", async () => {
+    const file = new File(["x"], "重试.txt", { type: "text/plain" });
+    uploadFile
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce({ uploaded: { path: "重试.txt", size: 1 }, indexed: null });
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByText("失败")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "重试上传 重试.txt" }));
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("完成 1/1")).toBeInTheDocument();
+  });
+
+  it("上传队列显示真实进度并可取消正在上传的请求", async () => {
+    const file = new File(["x"], "进度.txt", { type: "text/plain" });
+    uploadFile.mockImplementationOnce((_: File, __: string, onProgress?: (value: number) => void, signal?: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        onProgress?.(42);
+        signal?.addEventListener("abort", () => reject(new DOMException("上传已取消", "AbortError")), { once: true });
+      }));
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByText("上传中 42%")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "取消上传 进度.txt" }));
+    await waitFor(() => expect(screen.getByText("已取消")).toBeInTheDocument());
+  });
+
   it("回收站恢复", async () => {
     restoreFromTrash.mockResolvedValue({});
     render(<FilePage />);
@@ -423,6 +527,22 @@ describe("FilePage 核心操作", () => {
     expect(screen.getByText("合同付款节点和验收条件")).toBeInTheDocument();
     expect(screen.getByText("相关度 92.3%")).toBeInTheDocument();
     expect(screen.getByText("已向量化")).toBeInTheDocument();
+  });
+
+  it("提交修改日期筛选时把时间范围传给列表 API", async () => {
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("修改时间起点"), { target: { value: "2026-08-01" } });
+    fireEvent.change(screen.getByLabelText("修改时间终点"), { target: { value: "2026-08-20" } });
+    fireEvent.submit(screen.getByRole("search"));
+
+    await waitFor(() => expect(listFiles).toHaveBeenLastCalledWith(
+      "", "", "name", expect.objectContaining({ type: "all" }),
+    ));
+    const filters = listFiles.mock.calls.at(-1)?.[3] as { modifiedAfter?: number; modifiedBefore?: number };
+    expect(filters.modifiedAfter).toBeGreaterThan(0);
+    expect(filters.modifiedBefore).toBeGreaterThan(filters.modifiedAfter ?? 0);
   });
 
   it("为图片创建视觉索引任务", async () => {

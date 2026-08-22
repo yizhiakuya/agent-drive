@@ -6,10 +6,12 @@ import com.agentdrive.api.chat.LangChainAgentRuntime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ImageContent;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.TokenUsage;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -61,6 +63,42 @@ class LangChainAgentRuntimeTest {
     }
 
     @Test
+    void sendsInlineImageAsCurrentUserMessageContentWithoutPersistence() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of()), (operation, request) -> Map.of(), mapper);
+        StubStreamingModel model = new StubStreamingModel();
+        ChatRequestFactory factory = (messages, specifications, thinkingLevel) ->
+                dev.langchain4j.model.chat.request.ChatRequest.builder()
+                        .messages(messages)
+                        .toolSpecifications(specifications)
+                        .build();
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new FixedProviderRuntimeResolver(new ConfiguredChatModel(
+                        model, factory, "openai_compat", "gpt-5.6-luna")),
+                List.of(backendApiTool), mapper, ConfirmationService.random(mapper),
+                new InMemoryToolReplayStore(mapper), new NoopChatTranscriptStore(), "", 4);
+
+        ChatRequest.InlineImage image = new ChatRequest.InlineImage(
+                "clipboard.png", "image/png", "aGVsbG8=");
+        runtime.stream(new ChatRequest("请描述图片", List.of(), List.of(), null, "auto",
+                        null, null, null, "", List.of(), "auto", List.of(image)))
+                .collectList().block(Duration.ofSeconds(2));
+
+        UserMessage user = model.requests.get(0).messages().stream()
+                .filter(UserMessage.class::isInstance)
+                .map(UserMessage.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+        assertThat(user.contents()).anySatisfy(content -> {
+            assertThat(content).isInstanceOf(ImageContent.class);
+            ImageContent imageContent = (ImageContent) content;
+            assertThat(imageContent.image().base64Data()).isEqualTo("aGVsbG8=");
+            assertThat(imageContent.image().mimeType()).isEqualTo("image/png");
+        });
+    }
+
+    @Test
     void streamsReasoningToolTraceAndFinalDoneWhilePassingThinkingLevel() {
         ObjectMapper mapper = new ObjectMapper();
         BackendApiTool backendApiTool = new BackendApiTool(
@@ -94,6 +132,12 @@ class LangChainAgentRuntimeTest {
         assertThat(events.get(2).data().get("parsed")).isInstanceOf(Map.class);
         assertThat(events.get(4).data()).containsEntry("session_id", "session-1");
         assertThat(events.get(4).data()).containsEntry("routed", "task");
+        assertThat(events.get(4).data().get("context_usage"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("used", 180)
+                .containsEntry("input", 180)
+                .containsEntry("output", 40)
+                .containsEntry("total", 262144);
         assertThat(model.requests).hasSize(2);
         assertThat(model.requests.get(0).messages()).anyMatch(message -> message instanceof UserMessage);
         assertThat(model.requests.get(1).messages()).anyMatch(message -> message.type().name().equals("TOOL_EXECUTION_RESULT"));
@@ -117,6 +161,47 @@ class LangChainAgentRuntimeTest {
                 .collectList().block(Duration.ofSeconds(2)))
                 .hasRootCauseInstanceOf(AssertionError.class)
                 .hasRootCauseMessage("fatal tool failure");
+    }
+
+    @Test
+    void askPermissionModePausesYellowOperationForApproval() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.http("POST", "/api/v1/files/test", "Test upload"))),
+                (operation, request) -> Map.of("ok", true),
+                mapper
+        );
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new YellowStreamingModel(), backendApiTool, mapper, new OpenAiChatRequestFactory(), "", 4
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest(
+                "测试", null, null, "permission-session", "auto", null, null, null, "", null, "ask"))
+                .collectList().block(Duration.ofSeconds(2));
+
+        assertThat(events).extracting(ChatSseEvent::event).containsExactly("done");
+        assertThat(events.get(0).data()).containsKey("pending_confirmation");
+    }
+
+    @Test
+    void fullPermissionModeExecutesDestructiveOperationWithoutConfirmation() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.internal("delete_file", "Delete file", "red"))),
+                (operation, request) -> Map.of("deleted", true),
+                mapper
+        );
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new RedStreamingModel(), backendApiTool, mapper, new OpenAiChatRequestFactory(), "", 4
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest(
+                "删除", null, null, "full-permission-session", "auto", null, null, null, "", null, "full"))
+                .collectList().block(Duration.ofSeconds(2));
+
+        assertThat(events).extracting(ChatSseEvent::event)
+                .contains("tool_start", "tool_trace", "text", "done");
+        assertThat(events).noneMatch(event -> event.data().containsKey("pending_confirmation"));
     }
 
     @Test
@@ -171,6 +256,30 @@ class LangChainAgentRuntimeTest {
         assertThat(response.reply()).isEqualTo("完成");
         assertThat(response.toolTrace()).hasSize(1);
         assertThat(response.steps()).isEqualTo(1);
+    }
+
+    @Test
+    void contextUsageFallsBackToMessageEstimateWhenProviderOmitsUsage() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of()),
+                (operation, request) -> Map.of(),
+                mapper
+        );
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new NoUsageStreamingModel(), backendApiTool, mapper, new OpenAiChatRequestFactory()
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest("请回答", null, null, "usage-fallback", "auto"))
+                .collectList().block(Duration.ofSeconds(2));
+
+        assertThat(events).isNotEmpty();
+        assertThat(events.get(events.size() - 1).event()).isEqualTo("done");
+        assertThat(events.get(events.size() - 1).data().get("context_usage"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .extractingByKey("used")
+                .isInstanceOf(Integer.class)
+                .isNotEqualTo(0);
     }
 
     /**
@@ -311,6 +420,7 @@ class LangChainAgentRuntimeTest {
                 handler.onPartialResponse("完成");
                 handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
                         .aiMessage(AiMessage.from("完成"))
+                        .tokenUsage(new TokenUsage(180, 40, 220))
                         .build());
             }
         }
@@ -327,6 +437,36 @@ class LangChainAgentRuntimeTest {
                     .build();
             handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
                     .aiMessage(AiMessage.from(List.of(tool)))
+                    .build());
+        }
+    }
+
+    /** 黄色 operation 模型桩，用于验证请求批准模式不会自动执行。 */
+    private static final class YellowStreamingModel implements StreamingChatModel {
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            ToolExecutionRequest tool = ToolExecutionRequest.builder()
+                    .id("yellow-call")
+                    .name("backend_api")
+                    .arguments("{\"action\":\"call\",\"operation\":\"POST /api/v1/files/test\"}")
+                    .build();
+            handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                    .aiMessage(AiMessage.from(List.of(tool)))
+                    .build());
+        }
+    }
+
+    /**
+     * 不返回 Provider token usage 的模型桩，用于验证上下文估算兜底。
+     */
+    private static final class NoUsageStreamingModel implements StreamingChatModel {
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            handler.onPartialResponse("完成");
+            handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                    .aiMessage(AiMessage.from("完成"))
                     .build());
         }
     }

@@ -11,7 +11,8 @@ WorkingDirectory=/opt/agent-drive-java
 ExecStart=/usr/bin/java -jar /opt/agent-drive-java/agent-drive-backend.jar --spring.profiles.active=db,java-chat --app.mode=worker
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=45
+TimeoutStartSec=120
+TimeoutStopSec=90
 SuccessExitStatus=143
 EnvironmentFile=-/etc/agent-drive-java/java.env
 Environment=AGENT_DRIVE_MODE=worker
@@ -22,6 +23,7 @@ UMask=077
 NoNewPrivileges=true
 ProtectSystem=full
 PrivateTmp=true
+ProtectHome=read-only
 MemoryMax=1G
 
 [Install]

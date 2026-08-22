@@ -43,15 +43,36 @@ describe("fmtToolArgs 工具参数人类可读", () => {
   });
 });
 
-describe("ContextBar 上下文进度条", () => {
+describe("ContextBar 上下文圆环", () => {
   it("显示已用/总量", () => {
     render(<ContextBar usage={{ used: 2400, total: 262144, percent: 0.9 }} />);
-    expect(screen.getByText(/2.4K \/ 262.1K/)).toBeInTheDocument();
+    expect(screen.getByTestId("context-usage-summary")).toHaveTextContent(/2.4K \/ 262.1K/);
+    expect(screen.getByRole("img", { name: /上下文窗口 1%/ })).toBeInTheDocument();
   });
   it("超过 100% 时封顶", () => {
     render(<ContextBar usage={{ used: 999999, total: 262144, percent: 381 }} />);
-    const fill = document.querySelector(".h-full");
-    expect((fill as HTMLElement).style.width).toBe("100%");
+    const ring = screen.getByTestId("context-progress-ring");
+    expect((ring as unknown as SVGCircleElement).style.strokeDashoffset).toBe("0");
+    expect(screen.getByText("100%")).toBeInTheDocument();
+  });
+  it("默认收起，点击顶部控件后展开详情", () => {
+    render(<ContextBar usage={{ used: 333000, total: 967000, percent: 34 }} />);
+    const details = screen.getByTestId("context-usage");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByTestId("context-usage-summary"));
+    expect(details).toHaveAttribute("open");
+    expect(screen.getByTestId("context-usage-details")).toHaveTextContent("可用空间");
+  });
+  it("点击外部或按 Escape 会自动收起", () => {
+    render(<ContextBar usage={{ used: 333000, total: 967000, percent: 34 }} />);
+    const details = screen.getByTestId("context-usage");
+    fireEvent.click(screen.getByTestId("context-usage-summary"));
+    expect(details).toHaveAttribute("open");
+    fireEvent.pointerDown(document.body);
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByTestId("context-usage-summary"));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(details).not.toHaveAttribute("open");
   });
 });
 
@@ -90,6 +111,21 @@ describe("ToolStep 工具步骤", () => {
     fireEvent.click(screen.getByText("get_system_status"));
     expect(screen.getByText(/"configured": false/)).toBeInTheDocument();
     expect(screen.getByText(/"model": ""/)).toBeInTheDocument();
+  });
+  it("只有结构化 parsed、没有 output 时也能展开工具结果", () => {
+    render(<ToolStep step={{
+      tool: "backend_api",
+      arguments: { action: "discover" },
+      status: "done",
+      parsed: { ok: true, returned: 0, has_more: false },
+    }} />);
+    fireEvent.click(screen.getByText("backend_api"));
+    expect(screen.getByText(/\"returned\": 0/)).toBeInTheDocument();
+  });
+  it("没有 output 或 parsed 时展开后给出空结果提示", () => {
+    render(<ToolStep step={{ tool: "backend_api", status: "done" }} />);
+    fireEvent.click(screen.getByText("backend_api"));
+    expect(screen.getByText("此步骤没有可展示的返回内容")).toBeInTheDocument();
   });
   it("read_skill 直接显示加载的 Skill 名称", () => {
     render(<ToolStep step={{

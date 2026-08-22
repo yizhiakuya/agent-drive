@@ -14,6 +14,7 @@ import com.agentdrive.agent.FixedProviderRuntimeResolver;
 import com.agentdrive.agent.FrontendActionTool;
 import com.agentdrive.agent.ProviderRuntimeResolver;
 import com.agentdrive.agent.ChatRequestFactory;
+import com.agentdrive.agent.ChatModelCapabilities;
 import com.agentdrive.agent.ThinkingLevel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -24,12 +25,15 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.Content;
+import dev.langchain4j.data.message.ImageContent;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.TokenUsage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
@@ -49,14 +53,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>runtime 从 {@link ProviderRuntimeResolver} 按 owner 取得模型和请求工厂，把系统提示、
  * 客户端历史、当前消息和 {@link ChatContextProvider} 快照组装成模型上下文；后端读写工具经过 {@link BackendApiTool}，
- * 浏览器交互经过 {@link FrontendActionTool}，red 操作需要确认，非 red 操作按 session、
- * 工具名和参数执行确定性重放。会话消息和来源化上下文通过 transcript store 脱敏持久化，超过
+ * 浏览器交互经过 {@link FrontendActionTool}，ask/auto 模式下 red 操作需要确认，full 模式
+ * 按用户明确授权直接执行；非 red 操作按 session、工具名和参数执行确定性重放。会话消息和来源化上下文通过 transcript store 脱敏持久化，超过
  * {@code maxSteps} 时结束流并标记 truncated。
  */
 public final class LangChainAgentRuntime implements ChatRuntime {
     private static final Logger LOGGER = LoggerFactory.getLogger(LangChainAgentRuntime.class);
     private static final String TRUNCATION_MESSAGE = "工具步骤已达到上限，请继续发送消息。";
     private static final int DEFAULT_MAX_STEPS = 100;
+    private static final int DEFAULT_CONTEXT_WINDOW = 262_144;
 
     private final ProviderRuntimeResolver providerRuntimeResolver;
     private final Map<String, AgentTool> agentTools;
@@ -369,6 +374,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
         private int steps;
         private int modelSteps;
         private Map<String, Object> pendingConfirmation;
+        private TokenUsage latestTokenUsage;
 
         /**
          * 创建一次流式 Agent 会话并注册取消处理。
@@ -400,6 +406,10 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                         input.authenticatedUserId(), input.model());
                 model = configured.model();
                 requestFactory = configured.requestFactory();
+                if (!input.inlineImages().isEmpty()
+                        && !ChatModelCapabilities.supportsImages(configured.provider(), configured.modelName())) {
+                    throw new IllegalStateException("model_does_not_support_images");
+                }
                 LOGGER.info("chat_provider_resolved request_id={} session_id={} owner={} route={} provider={} model={} model_impl={}",
                         requestId(), safeId(input.sessionId()), ownerId(), route(), safeId(configured.provider()),
                         safeId(configured.modelName()), configured.model().getClass().getSimpleName());
@@ -433,8 +443,18 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     messages.add(UserMessage.from(content));
                 }
             }
-            messages.add(UserMessage.from(input.message()));
-            for (ChatContext context : contextProvider.contexts(input.authenticatedUserId())) {
+            if (input.inlineImages().isEmpty()) {
+                messages.add(UserMessage.from(input.message()));
+            } else {
+                List<Content> contents = new ArrayList<>();
+                contents.add(dev.langchain4j.data.message.TextContent.from(input.message()));
+                for (ChatRequest.InlineImage image : input.inlineImages()) {
+                    contents.add(ImageContent.from(image.data(), image.mediaType(), ImageContent.DetailLevel.AUTO));
+                }
+                messages.add(UserMessage.from(contents));
+            }
+            for (ChatContext context : contextProvider.contexts(
+                    input.authenticatedUserId(), input.sessionId(), input.fileContext())) {
                 if (context.userMessage()) {
                     messages.add(UserMessage.from(context.content()));
                 }
@@ -570,11 +590,34 @@ public final class LangChainAgentRuntime implements ChatRuntime {
          *
          * @param request 模型产生的工具请求。
          * @param arguments 已解析的工具参数，用于查找 operation 定义。
-         * @return operation 存在且风险为 red 时为 {@code true}。
+         * @return 按当前权限模式需要一次性用户批准时为 {@code true}。
          */
         private boolean needsConfirmation(ToolExecutionRequest request, Map<String, Object> arguments) {
             OperationDefinition definition = definitionFor(request, arguments);
-            return definition != null && "red".equalsIgnoreCase(definition.risk());
+            if (definition == null) {
+                return false;
+            }
+            String risk = definition.risk();
+            if ("full".equalsIgnoreCase(input.permissionMode())) {
+                return false;
+            }
+            if ("red".equalsIgnoreCase(risk)) {
+                // ask/auto 模式保留服务端签名确认；full 模式已在上面明确放行。
+                return true;
+            }
+            return "ask".equalsIgnoreCase(input.permissionMode())
+                    && !isReadOnlyOperation(definition);
+        }
+
+        /**
+         * 判断 operation 是否只读；请求批准模式会对所有其他调用先询问用户。
+         * @param definition 已登记的 operation 定义
+         * @return GET/HEAD/OPTIONS 只读调用为 true
+         */
+        private boolean isReadOnlyOperation(OperationDefinition definition) {
+            return "GET".equalsIgnoreCase(definition.method())
+                    || "HEAD".equalsIgnoreCase(definition.method())
+                    || "OPTIONS".equalsIgnoreCase(definition.method());
         }
 
         /**
@@ -719,6 +762,13 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             transcriptStore.updateLastTrace(input.sessionId(), List.copyOf(traces));
             boolean needsSummary = input.sessionId() != null && !input.sessionId().isBlank()
                     && !truncated && pendingConfirmation == null && !reply.toString().isBlank();
+            Map<String, Object> contextUsage = contextUsageData();
+            try {
+                transcriptStore.updateContextUsage(input.sessionId(), contextUsage);
+            } catch (RuntimeException error) {
+                LOGGER.warn("chat_context_usage_persist_failed request_id={} session_id={} owner={}",
+                        requestId(), safeId(input.sessionId()), ownerId(), ChatLogSupport.safeThrowable(error));
+            }
             ChatResponse response = new ChatResponse(
                     reply.toString(),
                     List.copyOf(traces),
@@ -729,8 +779,8 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     needsSummary,
                     traces.isEmpty() ? "chat" : "task",
                     List.of(),
-                    Map.of(),
-                    Map.of(),
+                    tokenUsageData(),
+                    contextUsage,
                     truncated
             );
             sink.next(ChatSseEvents.done(response));
@@ -738,6 +788,78 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     requestId(), safeId(input.sessionId()), ownerId(), traces.isEmpty() ? "chat" : "task", steps,
                     modelSteps, traces.size(), truncated, elapsedMillis());
             sink.complete();
+        }
+
+        /**
+         * 返回当前流最后一次模型响应报告的 token 用量。
+         *
+         * @return 脱离正文和凭据的输入、输出及总 token 数；Provider 未提供时为空映射
+         */
+        private Map<String, Object> tokenUsageData() {
+            if (latestTokenUsage == null) {
+                return Map.of();
+            }
+            Map<String, Object> usage = new LinkedHashMap<>();
+            putTokenCount(usage, "input", latestTokenUsage.inputTokenCount());
+            putTokenCount(usage, "output", latestTokenUsage.outputTokenCount());
+            putTokenCount(usage, "total", latestTokenUsage.totalTokenCount());
+            return Map.copyOf(usage);
+        }
+
+        /**
+         * 构造前端上下文窗口摘要；上下文使用优先采用 Provider 的输入 token，
+         * 没有 usage 的流式网关则按已组装消息字符数做保守估算。
+         *
+         * @return 前端圆环所需的已用、上限、百分比和可选本轮输入/输出 token
+         */
+        private Map<String, Object> contextUsageData() {
+            Integer inputCount = latestTokenUsage == null ? null : latestTokenUsage.inputTokenCount();
+            Integer totalCount = latestTokenUsage == null ? null : latestTokenUsage.totalTokenCount();
+            int used = inputCount != null ? inputCount : totalCount != null ? totalCount : estimatedContextTokens();
+            int input = latestTokenUsage == null || latestTokenUsage.inputTokenCount() == null
+                    ? 0
+                    : latestTokenUsage.inputTokenCount();
+            int output = latestTokenUsage == null || latestTokenUsage.outputTokenCount() == null
+                    ? 0
+                    : latestTokenUsage.outputTokenCount();
+            double percent = DEFAULT_CONTEXT_WINDOW == 0 ? 0d : used * 100d / DEFAULT_CONTEXT_WINDOW;
+            Map<String, Object> usage = new LinkedHashMap<>();
+            usage.put("used", used);
+            usage.put("total", DEFAULT_CONTEXT_WINDOW);
+            usage.put("percent", percent);
+            if (input > 0) {
+                usage.put("input", input);
+            }
+            if (output > 0) {
+                usage.put("output", output);
+            }
+            return Map.copyOf(usage);
+        }
+
+        /**
+         * 在 Provider 未回传 usage 时估算当前消息窗口，避免 UI 伪报零值。
+         *
+         * @return 至少为 1 的估算 token 数
+         */
+        private int estimatedContextTokens() {
+            int characters = systemPrompt.length();
+            for (ChatMessage message : messages) {
+                characters += String.valueOf(message).length();
+            }
+            return Math.max(1, (characters + 3) / 4);
+        }
+
+        /**
+         * 把非空 token 计数写入响应映射。
+         *
+         * @param target 目标映射
+         * @param key 输出字段名
+         * @param value token 计数
+         */
+        private void putTokenCount(Map<String, Object> target, String key, Integer value) {
+            if (value != null && value >= 0) {
+                target.put(key, value);
+            }
         }
 
         /**
@@ -829,6 +951,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             public void onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse response) {
                 if (terminal.get()) {
                     return;
+                }
+                if (response != null && response.tokenUsage() != null) {
+                    latestTokenUsage = response.tokenUsage();
                 }
                 AiMessage aiMessage = response == null ? null : response.aiMessage();
                 if (aiMessage == null) {

@@ -14,6 +14,30 @@ public interface ChatContextProvider {
     List<ChatContext> contexts(UUID userId);
 
     /**
+     * 读取基础上下文并追加本轮由用户选择的文件/目录上下文。旧 provider 可以只实现
+     * {@link #contexts(UUID)}，这样不会改变兼容测试和无文件请求的行为。
+     *
+     * @param userId 已认证 owner
+     * @param filePaths owner 根下的相对路径
+     * @return 基础上下文和本轮文件上下文
+     */
+    default List<ChatContext> contexts(UUID userId, List<String> filePaths) {
+        return contexts(userId);
+    }
+
+    /**
+     * 读取带会话状态的上下文。默认委托到旧签名，兼容不需要 Skill 历史的实现。
+     *
+     * @param userId 已认证 owner
+     * @param sessionId 当前会话 UUID 文本，可为空
+     * @param filePaths owner 根下的相对路径
+     * @return 基础上下文、会话已加载 Skill 和本轮文件上下文
+     */
+    default List<ChatContext> contexts(UUID userId, String sessionId, List<String> filePaths) {
+        return contexts(userId, filePaths);
+    }
+
+    /**
      * 返回不提供额外上下文的实现。
      * @return 空上下文 provider
      */

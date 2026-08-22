@@ -1,5 +1,6 @@
 package com.agentdrive.tasks;
 
+import com.agentdrive.index.IndexingService;
 import com.agentdrive.outbox.OutboxStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,6 +8,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -89,11 +91,13 @@ public class IndexOutboxConsumer {
             String type = switch (action) {
                 case "delete" -> "index.cleanup";
                 case "move", "copy" -> "index.rebuild";
-                case "upsert" -> "index.file";
+                case "upsert" -> IndexingService.isImagePath(paths.get(0)) ? "index.vision" : "index.file";
                 default -> throw new IllegalStateException("validated action became unsupported");
             };
             String path = "move".equals(action) ? paths.get(paths.size() - 1) : paths.get(0);
-            Map<String, Object> taskPayload = "index.file".equals(type) ? Map.of("path", path) : Map.of();
+            Map<String, Object> taskPayload = "index.file".equals(type)
+                    ? Map.of("path", path)
+                    : "index.vision".equals(type) ? Map.of("files", List.of(path)) : Map.of();
             try {
                 tasks.enqueue(userId, type, "index", taskPayload,
                         "outbox-index:" + eventId, "outbox.file.changed", null);

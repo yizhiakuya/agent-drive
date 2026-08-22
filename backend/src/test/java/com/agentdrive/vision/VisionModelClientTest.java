@@ -47,4 +47,37 @@ class VisionModelClientTest {
             server.stop(0);
         }
     }
+
+    /** 视觉描述只返回可检索的结构化场景信息，不再启用独立 OCR 字段。 */
+    @Test
+    void describesImageWithoutOcrField() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = "{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"receipt\\\"}\"}}]}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (var output = exchange.getResponseBody()) {
+                output.write(body);
+            }
+        });
+        server.start();
+        try {
+            Map<String, Object> result = new VisionModelClient(new ObjectMapper()).describe(
+                    new VisionRuntimeConfig.Config(
+                            "openai_compat",
+                            "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                            "vision-model-a",
+                            "vision-secret-value"),
+                    new byte[]{1, 2, 3}, "image/png", "photo.png");
+
+            assertThat(result).containsEntry("schema_version", "image-description-v1")
+                    .containsEntry("summary", "receipt")
+                    .doesNotContainKey("text_in_image");
+            assertThat(requestBody).hasValueSatisfying(body -> assertThat(body).doesNotContain("text_in_image"));
+        } finally {
+            server.stop(0);
+        }
+    }
 }

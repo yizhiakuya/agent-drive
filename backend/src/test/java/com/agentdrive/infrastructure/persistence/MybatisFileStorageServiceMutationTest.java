@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MybatisFileStorageServiceMutationTest {
@@ -85,6 +86,20 @@ class MybatisFileStorageServiceMutationTest {
         assertThat(Files.readString(ownerRoot.resolve("source.txt"), StandardCharsets.UTF_8)).isEqualTo("new");
         assertThat(Files.readString(ownerRoot.resolve("target.txt"), StandardCharsets.UTF_8)).isEqualTo("old");
         assertNoMutationArtifacts();
+    }
+
+    @Test
+    void renameMovesFavoriteAndRecentAccessPrefixesWithTheFile() throws Exception {
+        Files.writeString(ownerRoot.resolve("old.txt"), "content", StandardCharsets.UTF_8);
+
+        files.rename(owner, "old.txt", "new.txt");
+
+        verify(mapper).deleteFavoritePrefix(owner.toString(), "new.txt");
+        verify(mapper).deleteAccessPrefix(owner.toString(), "new.txt");
+        verify(mapper).moveFavoritePrefix(owner.toString(), "old.txt", "new.txt");
+        verify(mapper).moveAccessPrefix(owner.toString(), "old.txt", "new.txt");
+        assertThat(Files.exists(ownerRoot.resolve("new.txt"))).isTrue();
+        assertThat(Files.exists(ownerRoot.resolve("old.txt"))).isFalse();
     }
 
     @Test

@@ -5,7 +5,7 @@ import { api, LLMConfigPayload } from "./client";
 export const getStatus = () => api("/config/status", { cache: "no-store" });
 export const getConfig = () => api<{
   configured: boolean;
-  llm?: { type: string; base_url: string; model: string; api_key_masked: string };
+  llm?: { type: string; base_url: string; model: string; api_key_masked: string; supports_images?: boolean };
   embeddings?: { provider: string; base_url: string; model: string; api_key_masked: string } | null;
   preferences?: Record<string, string>;
 }>("/config");
@@ -25,7 +25,7 @@ export const revealLlmApiKey = () => revealApiKey("/config/api-key/reveal");
 /** 由 Web 会话按需读取已保存的 embedding API key；响应不会进入 GET 缓存。 */
 export const revealEmbeddingApiKey = () => revealApiKey("/config/embeddings/api-key/reveal");
 export const listModels = (body: { type: string; base_url: string; api_key: string }) =>
-  api<{ ok: boolean; models?: string[]; error?: string }>("/config/models", {
+  api<{ ok: boolean; models?: string[]; model_capabilities?: Record<string, boolean>; error?: string }>("/config/models", {
     method: "POST",
     body: JSON.stringify(body),
   });

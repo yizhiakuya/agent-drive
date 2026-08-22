@@ -111,6 +111,10 @@ public interface ScheduleMapper {
     int markDispatched(@Param("userId") String userId, @Param("scheduleId") String scheduleId,
                        @Param("nextRunAt") double nextRunAt, @Param("taskId") String taskId);
 
+    /** 写入立即运行的最近任务和执行时间，不改变计划下一次自动运行时间。 */
+    int markManualRun(@Param("userId") String userId, @Param("name") String name,
+                      @Param("taskId") String taskId);
+
     /** 禁用无法解析的历史计划并保留稳定错误说明，避免其反复占据 Worker 队首。 */
     int disableInvalid(@Param("userId") String userId, @Param("scheduleId") String scheduleId,
                        @Param("error") String error);

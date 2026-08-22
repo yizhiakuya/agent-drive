@@ -19,6 +19,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ProviderConfigControllerContractTest {
@@ -111,7 +113,7 @@ class ProviderConfigControllerContractTest {
     }
 
     @Test
-    void exposesOwnerScopedEmbeddingStatusWithoutPlaintextKey() {
+    void exposesOwnerScopedEmbeddingStatusWithoutPlaintextKey() throws Exception {
         UUID owner = UUID.randomUUID();
         LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
         EmbeddingConfigStore embeddings = mock(EmbeddingConfigStore.class);
@@ -126,6 +128,8 @@ class ProviderConfigControllerContractTest {
                 .expectBody(String.class).returnResult().getResponseBody();
 
         assertThat(body).contains("\"configured\":true", "\"provider\":\"jina\"", "\"api_key_masked\":\"jina-s…\"");
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(body)
+                .at("/embeddings/configured").asBoolean()).isTrue();
         assertThat(body).doesNotContain("jina-secret");
     }
 
@@ -162,6 +166,34 @@ class ProviderConfigControllerContractTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.detail").isEqualTo("当前仅支持 Jina embedding provider");
+    }
+
+    @Test
+    void failedEmbeddingProbeDoesNotOverwriteExistingConfigurationOrClaimSuccess() {
+        UUID owner = UUID.randomUUID();
+        LlmApiKeyCipher cipher = new LlmApiKeyCipher(new byte[32]);
+        EmbeddingConfigStore embeddings = mock(EmbeddingConfigStore.class);
+        EmbeddingProbeClient probe = mock(EmbeddingProbeClient.class);
+        when(probe.test("http://127.0.0.1:19091/v1", "jina-embeddings-v3", "new-secret"))
+                .thenReturn(Map.of("ok", false, "status", 401, "error", "embedding provider returned HTTP 401"));
+        ProviderConfigController controller = new ProviderConfigController(
+                new FakeConfigService(owner, null), cipher, new WebRequestPrincipalResolver(authenticator(owner)),
+                new com.fasterxml.jackson.databind.ObjectMapper(), embeddings, mock(TaskStore.class), probe);
+        WebTestClient client = WebTestClient.bindToController(controller)
+                .controllerAdvice(new ProviderConfigExceptionHandler()).build();
+
+        client.put().uri("/api/v1/config/embeddings")
+                .header("Authorization", "Bearer session-token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("provider", "jina", "base_url", "http://127.0.0.1:19091/v1",
+                        "model", "jina-embeddings-v3", "api_key", "new-secret"))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.ok").isEqualTo(false)
+                .jsonPath("$.saved").doesNotExist()
+                .jsonPath("$.message").isEqualTo("连接测试失败，配置未保存");
+        verify(embeddings, never()).save(org.mockito.ArgumentMatchers.eq(owner), org.mockito.ArgumentMatchers.any());
     }
 
     @Test

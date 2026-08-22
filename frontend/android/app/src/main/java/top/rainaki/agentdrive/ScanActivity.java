@@ -16,10 +16,17 @@ import com.journeyapps.barcodescanner.DecoratedBarcodeView;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.List;
 
 /**
@@ -30,6 +37,8 @@ public class ScanActivity extends Activity {
 
     public static final String EXTRA_RESCAN = "rescan";
     private static final int REQ_CAMERA = 99;
+    /** 配对交换只返回很小的 JSON；限制响应体避免恶意服务器耗尽 App 内存。 */
+    static final int MAX_EXCHANGE_RESPONSE_BYTES = 64 * 1024;
 
     private DecoratedBarcodeView barcodeView;
     private boolean handled = false;
@@ -78,7 +87,12 @@ public class ScanActivity extends Activity {
             return;
         }
 
-        final String fServer = server.trim();
+        final String fServer = validateServer(server);
+        if (fServer == null) {
+            handled = false;
+            Toast.makeText(this, "二维码服务器地址不安全：仅支持有效的 HTTPS 地址", Toast.LENGTH_LONG).show();
+            return;
+        }
         final String fPair = pair.trim();
         Toast.makeText(this, "正在授权连接…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
@@ -122,6 +136,8 @@ public class ScanActivity extends Activity {
             conn = (HttpURLConnection) new URL(url).openConnection();
             conn.setDoOutput(true);
             conn.setRequestMethod("POST");
+            // 配对码是一次性授权凭据；绝不能跟随 30x 把它转发到另一台服务器。
+            conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(20000);
@@ -146,16 +162,103 @@ public class ScanActivity extends Activity {
         }
     }
 
-    private static byte[] readAll(HttpURLConnection conn) throws java.io.IOException {
-        try (java.io.InputStream in = conn.getInputStream()) {
-            return in.readAllBytes();
+    /**
+     * 校验并规范化二维码携带的服务器地址。
+     *
+     * <p>配对码会被发送到该地址，因此只接受 HTTPS、无用户凭据/查询片段的绝对 URI，
+     * 并拒绝回环、链路本地和未指定地址。允许站点内网地址，便于自托管设备在局域网使用。</p>
+     *
+     * @param server 二维码中的服务器地址。
+     * @return 去除首尾空白和末尾斜杠后的安全地址；非法时返回 {@code null}。
+     */
+    static String validateServer(String server) {
+        if (server == null) return null;
+        String candidate = server.trim();
+        if (candidate.isEmpty() || candidate.length() > 2048) return null;
+        try {
+            URI uri = new URI(candidate);
+            if (!"https".equalsIgnoreCase(uri.getScheme())
+                    || uri.getHost() == null
+                    || uri.getUserInfo() != null
+                    || uri.getQuery() != null
+                    || uri.getFragment() != null
+                    || uri.getPort() == 0
+                    || uri.getPort() < -1
+                    || uri.getPort() > 65535) {
+                return null;
+            }
+            String host = uri.getHost();
+            if (!isSafeHost(host)) return null;
+            String normalized = candidate;
+            while (normalized.endsWith("/")) {
+                normalized = normalized.substring(0, normalized.length() - 1);
+            }
+            return normalized;
+        } catch (URISyntaxException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static boolean isSafeHost(String host) {
+        String lower = host.toLowerCase(Locale.US);
+        if (lower.isEmpty()
+                || lower.equals("localhost")
+                || lower.endsWith(".localhost")
+                || lower.endsWith(".local")
+                || lower.equals("0.0.0.0")
+                || lower.equals("::")) {
+            return false;
+        }
+        // URI#getHost() returns bracket-free IPv6 on current Android releases; accept only
+        // hexadecimal/colon literals and reject local/link-local/unspecified destinations.
+        boolean ipv6 = host.indexOf(':') >= 0;
+        boolean ipv4 = host.matches("[0-9.]+");
+        if (!ipv6 && !ipv4 && !host.matches("[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")) {
+            return false;
+        }
+        if (ipv6 || ipv4) {
+            try {
+                InetAddress address = InetAddress.getByName(host);
+                if (address.isAnyLocalAddress()
+                        || address.isLoopbackAddress()
+                        || address.isLinkLocalAddress()
+                        || address.isMulticastAddress()) {
+                    return false;
+                }
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static byte[] readAll(HttpURLConnection conn) throws IOException {
+        try (InputStream in = conn.getInputStream()) {
+            return readLimited(in, MAX_EXCHANGE_RESPONSE_BYTES);
         } catch (java.io.IOException e) {
             // 4xx/5xx：body 在 errorStream
-            try (java.io.InputStream err = conn.getErrorStream()) {
-                if (err != null) return err.readAllBytes();
+            try (InputStream err = conn.getErrorStream()) {
+                if (err != null) return readLimited(err, MAX_EXCHANGE_RESPONSE_BYTES);
             }
             throw e;
         }
+    }
+
+    /** 以固定缓冲区读取最多 {@code maxBytes}，避免依赖 API 33 的 readAllBytes。 */
+    static byte[] readLimited(InputStream input, int maxBytes) throws IOException {
+        if (input == null || maxBytes <= 0) throw new IllegalArgumentException("无效响应读取上限");
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(maxBytes, 4096));
+        byte[] buffer = new byte[4096];
+        int total = 0;
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            if (count > maxBytes - total) {
+                throw new IOException("服务器响应过大");
+            }
+            output.write(buffer, 0, count);
+            total += count;
+        }
+        return output.toByteArray();
     }
 
     private static class ExchangeResult {
@@ -174,6 +277,9 @@ public class ScanActivity extends Activity {
         if (requestCode == REQ_CAMERA && grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             barcodeView.resume();
+        } else if (requestCode == REQ_CAMERA) {
+            handled = false;
+            Toast.makeText(this, "需要相机权限才能扫码；可在系统设置中允许后重试", Toast.LENGTH_LONG).show();
         }
     }
 

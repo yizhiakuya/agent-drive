@@ -9,6 +9,9 @@ spring:
     url: ${AGENT_DRIVE_DATABASE_URL:jdbc:postgresql://127.0.0.1:5432/agent_drive}
     username: ${AGENT_DRIVE_DATABASE_USERNAME:agent_drive}
     password: ${AGENT_DRIVE_DATABASE_PASSWORD:}
+  codec:
+    # Chat inline images are bounded by ChatRequest to 16 MiB total JSON payload.
+    max-in-memory-size: 16MB
 
 server:
   address: ${AGENT_DRIVE_BIND_ADDRESS:127.0.0.1}

@@ -50,6 +50,10 @@ class MybatisIndexStoreIntegrationTest {
             assertThat(index.chunks(owner, "embedding-test", List.of("notes.txt"), 10)).hasSize(1);
             assertThat(index.chunks(owner, "embedding-test", List.of("notes.txt"), true, null, 10))
                     .hasSize(2);
+            assertThat(index.clearEmbeddings(owner)).isEqualTo(2);
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM document_chunks WHERE document_id IN (SELECT id FROM documents WHERE file_id = ?::uuid) AND embedding IS NOT NULL",
+                    Integer.class, fileId)).isEqualTo(0);
             assertThat(index.chunks(other, null, 10)).isEmpty();
             assertThat(index.file(other, "notes.txt")).isNull();
             jdbc.update("UPDATE files SET revision = 2 WHERE id = ?::uuid", fileId);

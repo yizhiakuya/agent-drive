@@ -4,8 +4,10 @@ import com.agentdrive.agent.BackendApiDispatcher;
 import com.agentdrive.agent.BackendApiRequest;
 import com.agentdrive.agent.OperationCatalog;
 import com.agentdrive.agent.OperationDefinition;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Constructor;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +49,30 @@ class ChatBackendApiOperationsTest {
         assertThat(catalog.find("POST /api/v1/config/api-key/reveal")).isEmpty();
         assertThat(catalog.find("POST /api/v1/config/embeddings/api-key/reveal")).isEmpty();
         assertThat(catalog.find("POST /api/v1/config/vision/api-key/reveal")).isEmpty();
+    }
+
+    @Test
+    void exposesTaskOperationsAsNormalDomainOperations() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+
+        assertThat(catalog.find("DELETE /api/v1/index/stale")).isPresent();
+        assertThat(catalog.find("DELETE /api/v1/index/vectors")).get()
+                .satisfies(operation -> assertThat(operation.summary()).contains("直接删除"));
+        assertThat(catalog.find("POST /api/v1/tasks/clear-vectors")).isEmpty();
+    }
+
+    @Test
+    void exposesDirectIndexResourceCrudOperations() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+
+        assertThat(catalog.find("GET /api/v1/index")).isPresent();
+        assertThat(catalog.find("GET /api/v1/index/file")).isPresent();
+        assertThat(catalog.find("PUT /api/v1/index/file")).isPresent();
+        assertThat(catalog.find("PUT /api/v1/index/vision")).isPresent();
+        assertThat(catalog.find("PUT /api/v1/index/vectors")).isPresent();
+        assertThat(catalog.find("DELETE /api/v1/index/vectors")).isPresent();
+        assertThat(catalog.find("DELETE /api/v1/index/stale")).isPresent();
+        assertThat(catalog.find("POST /api/v1/index/rebuild")).isPresent();
     }
 
     @Test
@@ -108,6 +134,15 @@ class ChatBackendApiOperationsTest {
         assertThatThrownBy(() -> new ChatBackendApiOperations().backendApiDispatcher(List.of(first, second)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("GET /api/v1/files");
+    }
+
+    @Test
+    void marksTheProductionScheduleHandlerConstructorForSpringInjection() {
+        assertThat(java.util.Arrays.stream(ChatBackendApiScheduleHandler.class.getDeclaredConstructors())
+                .filter(constructor -> constructor.isAnnotationPresent(Autowired.class))
+                .map(Constructor::getParameterCount)
+                .toList())
+                .containsExactly(2);
     }
 
     private BackendApiOperationHandler handlerFor(String operation) {

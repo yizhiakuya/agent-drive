@@ -13,7 +13,7 @@ Agent Drive 的唯一后端是 Java 21 Maven 工程：
 | Agent | LangChain4j 1.19.x，原生 structured tool calling |
 | 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V14 |
 | 文件 | Java NIO owner-scoped 本地文件系统 |
-| 抽取 | Apache Tika + Tesseract/Tess4J |
+| 抽取 | Apache Tika（图片不走 OCR，图片由视觉模型描述） |
 | 构建 | Maven；API 与 Worker 共用 artifact |
 
 生产结构化状态只进入 PostgreSQL。实际文件和用户可见 Agent 文档仍在 owner-scoped 文件根；旧 SQLite/JSON 和 Python 资料只作归档恢复输入。
@@ -29,7 +29,7 @@ Java API 127.0.0.1:8000 ─── PostgreSQL/pgvector
       └── frontend/out
 
 Java Worker ─────────────── PostgreSQL task leases/outbox
-      └── 文件根、Tika/OCR、embedding/vision provider
+      └── 文件根、Tika 文档抽取、embedding/vision provider
 ```
 
 API 和 Worker 是同一个代码库的两种启动模式：
@@ -55,7 +55,7 @@ com.agentdrive
 ├── files/storage   文件用例、revision、trash、路径安全、原子发布
 ├── devices         设备 metadata、撤销和同步状态
 ├── tasks           状态机、租约、事件、schedule、outbox、Worker
-├── index           Tika/OCR、全文、chunk、embedding、vision
+├── index           Tika 文档、全文、chunk、text/vision embedding
 └── infrastructure  PostgreSQL、MyBatis、Flyway、HTTP、日志和启动适配器
 ```
 
@@ -73,8 +73,8 @@ PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注
 
 - Chat SSE 的每个 `data` 都是 JSON object；事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。
 - `thinking_level` 只允许 `auto/low/medium/high`，不发送 temperature；OpenAI 兼容流式模型必须开启 `returnThinking(true)`，reasoning 不进入下一轮 history。
-- `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。discover 以 offset/limit 稳定分页，返回 total_matches、has_more 和 next_offset，单页最多 20 项；非 red 调用按 session/tool/arguments 持久 replay，red 操作使用签名确认和一次性 nonce。
-- `/api/v1/tasks/embed-index`、`vision-index` 只校验 owner 内相对路径并入队任务；抽取、embedding、vision 都由 Worker 异步完成。
+- `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。discover 以 offset/limit 稳定分页，返回 total_matches、has_more 和 next_offset，单页最多 20 项；非 red 调用按 session/tool/arguments 持久 replay，ask/auto 模式下 red 操作使用签名确认和一次性 nonce，full 模式按用户授权直接执行。
+- `/api/v1/tasks/embed-index`、`vision-index`、`clear-vectors` 只校验参数并入队任务；抽取、embedding、vision、失效索引清理和向量清空都由 Worker 异步完成。`cleanup-index` 只清理失效记录，不等价于清空向量。
 - 文件语义搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，结果按文件去重并返回最佳片段。
 - 文件内容变更先失效旧全文/向量，再经 outbox 入队 `index.file`；坏 outbox 事件进入持久死信，瞬时入队错误保留重试。图片描述写入前校验 source revision；视觉全失败不触发全盘 embedding，显式向量/视觉 provider 失败进入任务 fail/retry。强制向量重算逐批覆盖，不预先删除旧向量。单文件抽取失败标记 skipped，不阻断 rebuild。
 
@@ -86,7 +86,7 @@ PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注
 
 - Java API/Worker 已替换生产服务，健康检查、鉴权、静态资源和 Worker canary 通过。
 - legacy 数据导入完成，文件 MD5 核验通过，owner-scoped PostgreSQL backfill 完成。
-- `index.rebuild` 已完成，Tika/Tesseract、Jina/pgvector 和任务状态链路已在 Worker 中运行。
+- `index.rebuild` 已完成，普通文档 Tika、图片视觉描述、Jina/pgvector 和任务状态链路已在 Worker 中运行；图片不使用 OCR。
 - 实际回滚演练通过；现行 `agent-drive-java-backup.timer` 将 Java PostgreSQL dump、owner 文件根和 manifest 归档到 `/opt/agent-drive-java/backups/`，旧资料仍保留在同一归档目录。
 - 旧 Python source/unit 已删除；`legacy-python-data/` 只保留本地一次性 fixture，服务器恢复资料只用于人工恢复。
 

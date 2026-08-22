@@ -49,11 +49,15 @@ class JavaChatContextIntegrationTest {
         assertThat(operations.find("GET /api/v1/devices")).isPresent();
         assertThat(operations.find("POST /api/v1/devices/register")).isPresent();
         assertThat(operations.find("GET /api/v1/tasks")).isPresent();
-        assertThat(operations.find("POST /api/v1/tasks/rebuild-index")).isPresent();
-        assertThat(operations.find("POST /api/v1/tasks/embed-index")).isPresent();
+        assertThat(operations.find("GET /api/v1/index")).isPresent();
+        assertThat(operations.find("PUT /api/v1/index/file")).isPresent();
+        assertThat(operations.find("PUT /api/v1/index/vision")).isPresent();
+        assertThat(operations.find("PUT /api/v1/index/vectors")).isPresent();
+        assertThat(operations.find("DELETE /api/v1/index/vectors")).isPresent();
         assertThat(operations.find("GET /api/v1/schedules")).isPresent();
         assertThat(operations.find("PUT /api/v1/schedules/{name}")).isPresent();
         assertThat(operations.find("DELETE /api/v1/schedules/{name}")).isPresent();
+        assertThat(operations.find("POST /api/v1/schedules/{name}/run")).isPresent();
         assertThat(operations.find("POST /api/v1/files/delete")).isPresent();
         assertThat(operations.find("GET /api/v1/skills")).isPresent();
         assertThat(operations.find("PUT /api/v1/skills/{name}")).isPresent();

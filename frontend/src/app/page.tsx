@@ -56,6 +56,7 @@ export default function Home() {
   const configured = useAppStore((s) => s.configured);
   const tab = useAppStore((s) => s.tab);
   const setTab = useAppStore((s) => s.setTab);
+  const setSessionId = useAppStore((s) => s.setSessionId);
   const modelName = useAppStore((s) => s.modelName);
   const setLoading = useAppStore((s) => s.setLoading);
   const setAuthMode = useAppStore((s) => s.setAuthMode);
@@ -65,6 +66,8 @@ export default function Home() {
   const frontendActions = useAppStore((s) => s.frontendActions);
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayout>(() => createDefaultWorkspaceLayout());
   const [workspaceLayoutReady, setWorkspaceLayoutReady] = useState(false);
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"models" | "security" | null>(null);
 
   useEffect(() => {
     let storage: Storage | undefined;
@@ -274,17 +277,30 @@ export default function Home() {
   return (
     <div className="flex h-screen flex-col bg-panel text-text">
       <PullToRefresh onRefresh={refreshAll} />
-      <WorkspaceHeader tab={tab} modelName={modelName} onTabChange={setTab} />
+      <WorkspaceHeader
+        tab={tab}
+        modelName={modelName}
+        onTabChange={setTab}
+        onSettingsSection={setSettingsSection}
+      />
 
       {/* 对话面板常驻挂载（CSS 隐藏）——切 tab 再回来不丢消息流/工具步骤 */}
-      <main className={`${tab === "chat" ? "flex" : "hidden"} min-w-0 flex-1 overflow-hidden`}>
+      <main className={`${tab === "chat" ? "flex" : "hidden"} relative min-w-0 flex-1 overflow-hidden`}>
         <SessionList
           collapsed={workspaceLayout.sessions.collapsed}
           width={workspaceLayout.sessions.width}
           onResize={resizeSessions}
           onToggle={toggleSessions}
+          mobileOpen={mobileSessionsOpen}
+          onMobileClose={() => setMobileSessionsOpen(false)}
         />
-        <ChatPanel />
+        <ChatPanel
+          onOpenSessions={() => setMobileSessionsOpen(true)}
+          onNewSession={() => {
+            setSessionId(null);
+            setMobileSessionsOpen(false);
+          }}
+        />
         {/* 移动端隐藏：文件管理走"文件"tab；平板(768-1100)也隐藏防挤压 */}
         <div className="hidden h-full min-w-0 xl:flex">
           <FilePanel
@@ -295,9 +311,10 @@ export default function Home() {
           />
         </div>
       </main>
-      {tab === "files" && <main className="flex flex-1 overflow-hidden"><FilePage /></main>}
-      {tab === "tasks" && <main className="flex flex-1 overflow-hidden"><TaskPage /></main>}
-      {tab === "settings" && <main className="flex flex-1 overflow-hidden"><SettingsPage /></main>}
+      {/* 各工作区常驻挂载，仅用 CSS 切换可见性，保留目录、搜索和未保存设置草稿。 */}
+      <main className={`${tab === "files" ? "flex" : "hidden"} flex-1 overflow-hidden`}><FilePage /></main>
+      <main className={`${tab === "tasks" ? "flex" : "hidden"} flex-1 overflow-hidden`}><TaskPage /></main>
+      <main className={`${tab === "settings" ? "flex" : "hidden"} flex-1 overflow-hidden`}><SettingsPage initialSection={settingsSection} /></main>
       <ToastStack />
     </div>
   );

@@ -176,7 +176,8 @@ body {
 /* ============ PWA/移动端细节 ============ */
 /* 刘海屏安全区 */
 @supports (padding: max(0px)) {
-  .input-bar-safe, body { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .input-bar-safe { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); }
+  body { padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 
 /* 移动端触控目标 ≥44px */

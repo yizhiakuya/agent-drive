@@ -1,6 +1,7 @@
 package com.agentdrive.api.chat;
 
 import com.agentdrive.agent.BackendApiRequest;
+import com.agentdrive.agent.ChatModelCapabilities;
 import com.agentdrive.api.config.ProviderConfigController;
 import com.agentdrive.api.config.VisionConfigController;
 import com.agentdrive.infrastructure.EmbeddingConfigStore;
@@ -106,7 +107,8 @@ final class ChatBackendApiConfigHandler implements BackendApiOperationHandler {
         result.put("current", config.map(view -> Map.of(
                 "type", view.provider(),
                 "base_url", view.baseUrl(),
-                "model", view.model()
+                "model", view.model(),
+                "supports_images", ChatModelCapabilities.supportsImages(view.provider(), view.model())
         )).orElse(null));
         return result;
     }

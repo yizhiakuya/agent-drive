@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TaskPeekDrawer from "@/components/tasks/TaskPeekDrawer";
+import { listTasks } from "@/lib/api/tasks";
+import { EV } from "@/lib/events";
 
 type AppTab = "chat" | "files" | "tasks" | "settings";
 
@@ -22,6 +24,7 @@ interface WorkspaceHeaderProps {
   tab: AppTab;
   modelName: string;
   onTabChange: (tab: AppTab) => void;
+  onSettingsSection?: (section: "models" | "security") => void;
 }
 
 const NAV_ITEMS: { key: AppTab; label: string; icon: typeof MessageSquare }[] = [
@@ -31,9 +34,31 @@ const NAV_ITEMS: { key: AppTab; label: string; icon: typeof MessageSquare }[] = 
   { key: "settings", label: "设置", icon: Settings },
 ];
 
-export default function WorkspaceHeader({ tab, modelName, onTabChange }: WorkspaceHeaderProps) {
+export default function WorkspaceHeader({ tab, modelName, onTabChange, onSettingsSection }: WorkspaceHeaderProps) {
   const [navOpen, setNavOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
+  const [taskAttention, setTaskAttention] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadAttention = async () => {
+      try {
+        const response = await listTasks("queued,running,retry_wait,cancelling,failed", { limit: 1 });
+        if (!disposed) setTaskAttention(response.items.length > 0 || Object.entries(response.overview?.counts || {}).some(([status, count]) =>
+          ["queued", "running", "retry_wait", "cancelling", "failed"].includes(status) && Number(count) > 0));
+      } catch {
+        // 顶部提示只反映最近已知状态，任务抽屉仍会展示独立错误态。
+      }
+    };
+    void loadAttention();
+    window.addEventListener(EV.tasksChanged, loadAttention);
+    window.addEventListener(EV.refresh, loadAttention);
+    return () => {
+      disposed = true;
+      window.removeEventListener(EV.tasksChanged, loadAttention);
+      window.removeEventListener(EV.refresh, loadAttention);
+    };
+  }, []);
 
   useEffect(() => {
     if (!navOpen && !tasksOpen) return;
@@ -92,8 +117,8 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange }: Workspa
             onClick={() => setTasksOpen(true)}
           >
             <span className="relative grid size-3.5 place-items-center" aria-hidden="true">
-              <span className="size-2 rounded-full bg-warn" />
-              <span className="absolute size-3.5 animate-ping rounded-full bg-warn/30" />
+              <span className={`size-2 rounded-full ${taskAttention ? "bg-warn" : "bg-muted/50"}`} />
+              {taskAttention && <span className="absolute size-3.5 animate-ping rounded-full bg-warn/30" />}
             </span>
             <ListChecks className="size-4" aria-hidden="true" />
             <span className="hidden sm:inline">任务队列</span>
@@ -150,7 +175,7 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange }: Workspa
                 <button
                   type="button"
                   className="flex min-h-10 w-full items-center gap-2.5 rounded-md px-3 text-left text-sm text-text transition-colors hover:bg-card"
-                  onClick={() => selectTab("settings")}
+                  onClick={() => { selectTab("settings"); onSettingsSection?.("models"); }}
                 >
                   <Cpu className="size-4 shrink-0" aria-hidden="true" />
                   <span>模型与同步</span>
@@ -158,7 +183,7 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange }: Workspa
                 <button
                   type="button"
                   className="flex min-h-10 w-full items-center gap-2.5 rounded-md px-3 text-left text-sm text-text transition-colors hover:bg-card"
-                  onClick={() => selectTab("settings")}
+                  onClick={() => { selectTab("settings"); onSettingsSection?.("security"); }}
                 >
                   <ShieldCheck className="size-4 shrink-0" aria-hidden="true" />
                   <span>设备与安全</span>

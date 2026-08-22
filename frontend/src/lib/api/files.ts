@@ -1,13 +1,24 @@
 // 文件 API（补全：info/raw 走封装，组件不再绕层）
-import { api, apiPath, authenticatedFetch, ApiError, apiErrorMessage, getDeviceToken } from "./client";
+import { api, apiPath, authenticatedFetch, ApiError, apiErrorMessage, ensureBase, getDeviceToken, invalidateApiCache, isCurrentRequest, requestBase } from "./client";
+import { EV } from "@/lib/events";
 
 export interface FileIndexStatus {
   text_indexed: boolean;
+  /** 图片视觉描述是否已写入索引。 */
+  vision_indexed?: boolean;
+  /** 当前文件包含的向量文档类型；mixed 表示文本与视觉描述并存。 */
+  vector_type?: "text" | "vision" | "mixed" | null;
   vectorized: boolean;
   vector_status: "not_indexed" | "indexed" | "pending" | "partial" | "vectorized" | "stale" | "not_configured";
   chunk_count: number;
+  text_chunk_count?: number;
+  vision_chunk_count?: number;
   vector_chunks: number;
+  text_vector_chunks?: number;
+  vision_vector_chunks?: number;
   stored_vector_chunks: number;
+  text_stored_vector_chunks?: number;
+  vision_stored_vector_chunks?: number;
   embedding_configured: boolean;
   /** 文件信息接口可选返回的索引详情，旧后端响应中不存在此字段。 */
   detail?: FileIndexDetail | null;
@@ -23,6 +34,7 @@ export interface FileIndexDetail {
   document_id: string | number | null;
   source_revision: number | string | null;
   extractor_version: string | null;
+  vector_type?: "text" | "vision" | "mixed" | null;
   updated: string | number | null;
   embedding_provider: string | null;
   embedding_model: string | null;
@@ -34,6 +46,7 @@ export interface FileIndexDetail {
 /** 文档索引详情中的一个文本段及其向量版本状态。 */
 export interface FileIndexChunk {
   id: string | number;
+  vector_type?: "text" | "vision" | null;
   index: number;
   chunk_version: string | null;
   source_revision: number | string | null;
@@ -57,10 +70,26 @@ export interface FileItem {
   search_snippet?: string | null;
   /** 最佳匹配 chunk 在文档中的序号。 */
   search_chunk_index?: number | null;
+  /** 语义命中的向量来源：普通文本或视觉描述。 */
+  vector_type?: "text" | "vision" | null;
+  /** owner-scoped 收藏标记。 */
+  favorite?: boolean;
+  /** 最近访问列表返回的 Unix 秒时间戳。 */
+  last_accessed?: number | string | null;
+  access_count?: number | null;
 }
 
 /** 文件列表支持的搜索模式。 */
 export type FileSearchMode = "name" | "semantic";
+export type FileTypeFilter = "all" | "file" | "folder" | "image" | "video" | "audio" | "pdf" | "text";
+
+export interface FileListFilters {
+  type?: FileTypeFilter;
+  modifiedAfter?: number;
+  modifiedBefore?: number;
+  minScore?: number;
+  limit?: number;
+}
 
 export interface FileInfo {
   path: string;
@@ -72,6 +101,15 @@ export interface FileInfo {
   preview_kind: "text" | "image" | "video" | "audio" | "pdf" | "binary";
   snippet: string | null;
   indexed: FileIndexStatus | null;
+}
+
+export interface FileVersion {
+  version_id: string;
+  source_revision: number | string;
+  size: number;
+  content_md5?: string | null;
+  content_sha256?: string | null;
+  created_at: number | string;
 }
 
 export interface FileContent {
@@ -97,25 +135,104 @@ interface UploadResponse {
  * @param mode 名称/路径模式或语义模式。
  * @returns 文件条目、当前模式和磁盘用量。
  */
-export const listFiles = (path = "", query = "", mode: FileSearchMode = "name") => {
+export const listFiles = (path = "", query = "", mode: FileSearchMode = "name", filters: FileListFilters = {}) => {
   const params = new URLSearchParams({ path });
   if (query) params.set("q", query);
   if (mode === "semantic" && query.trim()) params.set("mode", mode);
+  if (filters.type && filters.type !== "all") params.set("type", filters.type);
+  if (typeof filters.modifiedAfter === "number") params.set("modified_after", String(filters.modifiedAfter));
+  if (typeof filters.modifiedBefore === "number") params.set("modified_before", String(filters.modifiedBefore));
+  if (typeof filters.minScore === "number") params.set("min_score", String(filters.minScore));
+  if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
   return api<{
     path: string;
     query?: string;
     mode?: FileSearchMode;
+    /** 新版后端在结果截断时返回；旧后端缺失时由列表层按上限兼容推断。 */
+    has_more?: boolean;
     items: FileItem[];
     disk: { used: number; total: number; free: number } | null;
   }>(`/files?${params.toString()}`);
 };
 
-export const uploadFile = async (file: File, path = ""): Promise<UploadResponse> => {
+export const listFavorites = (limit = 100) =>
+  api<{ path: string; mode?: "favorites"; items: FileItem[]; has_more?: boolean; disk: { used: number; total: number; free: number } | null }>(`/files/favorites?limit=${limit}`);
+
+export const listRecent = (limit = 100) =>
+  api<{ path: string; mode?: "recent"; items: FileItem[]; has_more?: boolean; disk: { used: number; total: number; free: number } | null }>(`/files/recent?limit=${limit}`);
+
+export const listVersions = (path: string, limit = 20) =>
+  api<{ path: string; current_revision?: number | string; items: FileVersion[]; has_more?: boolean }>(
+    `/files/versions?path=${encodeURIComponent(path)}&limit=${limit}`,
+  );
+
+export const restoreVersion = (path: string, versionId: string) =>
+  api<{ restored: { path: string; size: number; deduped?: boolean }; version_id: string }>(
+    `/files/versions/restore?path=${encodeURIComponent(path)}&version_id=${encodeURIComponent(versionId)}`,
+    { method: "POST" },
+  );
+
+export const setFavorite = (path: string, favorite: boolean) =>
+  api<{ path: string; favorite: boolean }>(`/files/favorites?path=${encodeURIComponent(path)}`, { method: favorite ? "POST" : "DELETE" });
+
+export const uploadFile = async (
+  file: File,
+  path = "",
+  onProgress?: (progress: number) => void,
+  signal?: AbortSignal,
+): Promise<UploadResponse> => {
   const form = new FormData();
   form.append("file", file);
+  if (onProgress && typeof XMLHttpRequest !== "undefined") {
+    await ensureBase();
+    const base = requestBase();
+    const token = getDeviceToken();
+    invalidateApiCache();
+    onProgress(0);
+    try {
+      return await new Promise<UploadResponse>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        let settled = false;
+        const finish = (callback: () => void) => {
+          if (settled) return;
+          settled = true;
+          callback();
+        };
+        xhr.open("POST", `${base}/files/upload?path=${encodeURIComponent(path)}`, true);
+        xhr.withCredentials = true;
+        if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) onProgress(Math.max(0, Math.min(99, Math.round((event.loaded / event.total) * 100))));
+        };
+        xhr.onload = () => {
+          let body: unknown = {};
+          try { body = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch { /* handled as API error */ }
+          if (xhr.status === 401 && isCurrentRequest(base, token) && typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent(EV.unauthorized));
+          }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            finish(() => reject(new ApiError(xhr.status, apiErrorMessage(body, xhr.statusText || `HTTP ${xhr.status}`))));
+            return;
+          }
+          onProgress(100);
+          finish(() => resolve(body as UploadResponse));
+        };
+        xhr.onerror = () => finish(() => reject(new Error("上传网络失败")));
+        xhr.onabort = () => finish(() => reject(new DOMException("上传已取消", "AbortError")));
+        if (signal) {
+          if (signal.aborted) { xhr.abort(); return; }
+          signal.addEventListener("abort", () => xhr.abort(), { once: true });
+        }
+        xhr.send(form);
+      });
+    } finally {
+      if (isCurrentRequest(base, token)) invalidateApiCache();
+    }
+  }
   const res = await authenticatedFetch(`/files/upload?path=${encodeURIComponent(path)}`, {
     method: "POST",
     body: form,
+    signal,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

@@ -28,6 +28,21 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
     private final ObjectMapper objectMapper;
     private final SensitiveDataRedactor redactor;
 
+    /** {@inheritDoc} */
+    @Override
+    public List<String> loadedSkillNames(String sessionId) {
+        if (parseUuid(sessionId) == null) {
+            return List.of();
+        }
+        List<String> names = mapper.selectLoadedSkillNames(sessionId);
+        return names == null ? List.of() : names.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+    }
+
     /**
      * 使用默认脱敏器创建运行时状态存储。
      * @param mapper 读写运行时状态表的 MyBatis Mapper。
@@ -203,6 +218,19 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
             return;
         }
         mapper.updateLastTrace(sessionId, json(redactor.value(traces == null ? List.of() : traces)));
+    }
+
+    /**
+     * 覆盖会话最近一次上下文窗口用量。
+     * @param sessionId 会话 UUID 文本。
+     * @param usage 已用、上限、百分比和可选输入/输出 token。
+     */
+    @Override
+    public void updateContextUsage(String sessionId, Map<String, Object> usage) {
+        if (parseUuid(sessionId) == null || usage == null || usage.isEmpty()) {
+            return;
+        }
+        mapper.updateContextUsage(sessionId, json(usage));
     }
 
     /**

@@ -80,6 +80,23 @@ class TaskControllerContractTest {
     }
 
     @Test
+    void queuesVectorClearAsDistinctBackgroundTask() {
+        UUID owner = UUID.randomUUID();
+        StubTasks tasks = new StubTasks();
+
+        client(owner, tasks).post().uri("/api/v1/tasks/clear-vectors")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.queued").isEqualTo(true)
+                .jsonPath("$.execution_mode").isEqualTo("background")
+                .jsonPath("$.task.type").isEqualTo("index.clear_vectors");
+
+        assertThat(tasks.owner).isEqualTo(owner);
+        assertThat(tasks.type).isEqualTo("index.clear_vectors");
+    }
+
+    @Test
     void returnsOwnerScopedTaskDetailsAndChildren() {
         UUID owner = UUID.randomUUID();
         UUID taskId = UUID.randomUUID();

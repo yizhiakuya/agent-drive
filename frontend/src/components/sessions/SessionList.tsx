@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Trash2 } from "lucide-react";
+import { MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Trash2, X } from "lucide-react";
 import { listSessions, deleteSession, summarizeSession } from "@/lib/api/sessions";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -15,13 +15,18 @@ interface SessionListProps {
   width?: number;
   onResize?: (width: number) => void;
   onToggle?: () => void;
+  /** 小于 xl 的视口以抽屉形式显示；完整侧栏只在宽桌面承载。 */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
-export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.sessions.defaultWidth, onResize, onToggle }: SessionListProps) {
+export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.sessions.defaultWidth, onResize, onToggle, mobileOpen = false, onMobileClose }: SessionListProps) {
   const sessionId = useAppStore((s) => s.sessionId);
   const setSessionId = useAppStore((s) => s.setSessionId);
   const sessionsVersion = useAppStore((s) => s.sessionsVersion);
   const [sessions, setSessions] = useState<{ id: string; title: string; summary?: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [localCollapsed, setLocalCollapsed] = useState(false);
   const loadSequenceRef = useRef(0);
   const mountedRef = useRef(true);
@@ -36,6 +41,8 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
     const sequence = ++loadSequenceRef.current;
     // 两次列表写入都必须留在同一请求序列内，防止旧请求的列表覆盖新列表。
     const isCurrent = () => mountedRef.current && sequence === loadSequenceRef.current;
+    setLoading(true);
+    setLoadError("");
     try {
       let list = await listSessions();
       if (!isCurrent()) return;
@@ -66,7 +73,11 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
         list = await listSessions();
         if (!isCurrent()) return; // 响应可能晚于更新的 load 写入，不能覆盖
       }
-    } catch { /* 忽略：下一次会话变更再重试 */ }
+    } catch (error) {
+      if (isCurrent()) setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
   }
   useEffect(() => {
     mountedRef.current = true;
@@ -76,6 +87,7 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
 
   function newSession() {
     setSessionId(null);
+    onMobileClose?.();
   }
 
   async function remove(sid: string, e: React.MouseEvent) {
@@ -83,6 +95,7 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
     await deleteSession(sid);
     load();
     if (sessionId === sid) setSessionId(null);
+    onMobileClose?.();
   }
 
   const panelWidth = isCollapsed ? WORKSPACE_PANEL_LIMITS.sessions.collapsedWidth : width;
@@ -92,8 +105,16 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
       data-testid="session-panel"
       aria-label="会话列表"
       style={{ width: panelWidth, minWidth: panelWidth }}
-      className="relative hidden shrink-0 flex-col border-r border-border bg-bg md:flex"
+      className={`relative shrink-0 flex-col border-r border-border bg-bg ${mobileOpen ? "fixed inset-y-0 left-0 z-50 flex w-[min(22rem,calc(100vw-1rem))] shadow-2xl" : "hidden xl:flex"}`}
     >
+      {mobileOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 -z-10 cursor-default bg-text/20 md:hidden"
+          aria-label="关闭会话抽屉"
+          onClick={onMobileClose}
+        />
+      )}
       <PanelResizeHandle
         panel="sessions"
         width={width}
@@ -122,17 +143,25 @@ export default function SessionList({ collapsed, width = WORKSPACE_PANEL_LIMITS.
                 <Plus className="size-3.5" aria-hidden="true" />
                 新会话
               </Button>
-              <Button variant="ghost" size="icon-sm" onClick={toggle} title="收起会话列表" aria-label="收起会话列表">
+              <Button variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={toggle} title="收起会话列表" aria-label="收起会话列表">
                 <PanelLeftClose className="size-3.5" aria-hidden="true" />
               </Button>
+              {mobileOpen && <Button variant="ghost" size="icon-sm" className="xl:hidden" onClick={onMobileClose} title="关闭会话抽屉" aria-label="关闭会话抽屉"><X className="size-4" /></Button>}
             </div>
           </div>
           <div className="min-w-0 flex-1 overflow-y-auto p-2">
-            {sessions.length === 0 && <div className="p-3 text-xs text-muted">（暂无会话）</div>}
+            {loading && sessions.length === 0 && <div className="p-3 text-xs text-muted" role="status">正在读取会话…</div>}
+            {!loading && loadError && (
+              <div className="space-y-2 p-3 text-xs text-danger" role="alert">
+                <p>会话加载失败：{loadError}</p>
+                <Button type="button" variant="outline" size="sm" className="h-8 px-2 text-xs" onClick={() => void load()}>重试</Button>
+              </div>
+            )}
+            {!loading && !loadError && sessions.length === 0 && <div className="p-3 text-xs text-muted">（暂无会话）</div>}
             {sessions.map((s) => (
               <div key={s.id}
                    className={`relative mb-1 cursor-pointer rounded-md border px-3 py-2.5 transition-colors ${sessionId === s.id ? "border-border bg-panel" : "border-transparent hover:bg-panel"}`}
-                   onClick={() => setSessionId(s.id)}>
+                   onClick={() => { setSessionId(s.id); onMobileClose?.(); }}>
                 <div className="truncate pr-5 text-sm font-semibold text-text">{s.title || "（无标题会话）"}</div>
                 {s.summary && <div className="mt-0.5 truncate text-xs text-muted">{s.summary}</div>}
                 <div className="mt-1 break-all pr-5 font-mono text-[10px] leading-4 text-muted" title={s.id}>

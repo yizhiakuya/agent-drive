@@ -10,6 +10,12 @@ import java.util.Map;
  * 会话写入的单元测试；不能用于需要恢复会话历史的生产运行时。</p>
  */
 public final class NoopChatTranscriptStore implements ChatTranscriptStore {
+    /** 没有持久化会话时没有已加载 Skill。 */
+    @Override
+    public List<String> loadedSkillNames(String sessionId) {
+        return List.of();
+    }
+
     /** 丢弃用户消息，不写入任何存储。 */
     @Override
     public void appendUser(String sessionId, String content) {

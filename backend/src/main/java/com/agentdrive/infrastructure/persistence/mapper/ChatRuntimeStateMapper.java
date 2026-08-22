@@ -4,10 +4,14 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.Map;
+import java.util.List;
 
 /** 访问聊天运行时 replay、pending confirmation、消息、trace 和 nonce 表的 MyBatis 端口。 */
 @Mapper
 public interface ChatRuntimeStateMapper {
+    /** 按会话读取已经成功执行过的 read_skill 名称。 @param sessionId 会话 UUID。 @return 去重 Skill 名称。 */
+    List<String> selectLoadedSkillNames(@Param("sessionId") String sessionId);
+
     /** 按会话、工具和精确参数 JSON 查询可重放结果。 @param sessionId 会话 UUID 文本。 @param tool 工具名。 @param arguments 参数 JSON。 @return replay 行；无匹配时为 {@code null}。 */
     Map<String, Object> selectToolReplay(@Param("sessionId") String sessionId,
                                           @Param("tool") String tool,
@@ -37,6 +41,9 @@ public interface ChatRuntimeStateMapper {
 
     /** 覆盖会话 last_trace。 @param sessionId 会话 UUID。 @param trace 已脱敏的 trace JSON。 @return 更新行数。 */
     int updateLastTrace(@Param("sessionId") String sessionId, @Param("trace") String trace);
+
+    /** 覆盖会话上下文窗口用量。 @param sessionId 会话 UUID。 @param usage 用量 JSON。 @return 更新行数。 */
+    int updateContextUsage(@Param("sessionId") String sessionId, @Param("usage") String usage);
 
     /** 读取会话 pending confirmation JSON。 @param sessionId 会话 UUID。 @return pending JSON；不存在时为 {@code null}。 */
     String selectPending(@Param("sessionId") String sessionId);

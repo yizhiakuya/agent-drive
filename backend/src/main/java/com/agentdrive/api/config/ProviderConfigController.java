@@ -1,6 +1,7 @@
 package com.agentdrive.api.config;
 
 import com.agentdrive.agent.LlmProviderConfig;
+import com.agentdrive.agent.ChatModelCapabilities;
 import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.EmbeddingConfigStore;
 import com.agentdrive.tasks.TaskStore;
@@ -93,13 +94,35 @@ public final class ProviderConfigController {
                                     com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                                     EmbeddingConfigStore embeddingConfigs,
                                     TaskStore tasks) {
+        this(configs, keyCipher, principalResolver, objectMapper, embeddingConfigs, tasks,
+                new EmbeddingProbeClient(objectMapper));
+    }
+
+    /**
+     * 创建可注入 embedding 探测器的控制器，供契约测试隔离外部网络。
+     *
+     * @param configs LLM 配置存储。
+     * @param keyCipher API key 加解密器。
+     * @param principalResolver 请求 owner 解析器。
+     * @param objectMapper Provider 响应 JSON 映射器。
+     * @param embeddingConfigs embedding 配置存储。
+     * @param tasks 索引重建任务存储。
+     * @param embeddingProbe embedding 连接探测器。
+     */
+    ProviderConfigController(LlmProviderConfigService configs,
+                             LlmApiKeyCipher keyCipher,
+                             WebRequestPrincipalResolver principalResolver,
+                             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                             EmbeddingConfigStore embeddingConfigs,
+                             TaskStore tasks,
+                             EmbeddingProbeClient embeddingProbe) {
         this.configs = configs;
         this.keyCipher = keyCipher;
         this.principalResolver = principalResolver;
         this.probe = new ProviderProbeClient(objectMapper);
         this.embeddingConfigs = embeddingConfigs;
         this.tasks = tasks;
-        this.embeddingProbe = new EmbeddingProbeClient(objectMapper);
+        this.embeddingProbe = embeddingProbe;
     }
 
     /**
@@ -126,7 +149,14 @@ public final class ProviderConfigController {
                 .flatMap(principal -> blocking(() -> {
                     Map<String, Object> result = new LinkedHashMap<>();
                     result.put("configured", configs.findForOwner(principal.userId()).isPresent());
-                    result.put("embeddings", embeddingView(principal.userId()));
+                    Map<String, Object> embeddings = embeddingView(principal.userId());
+                    if (embeddings == null) {
+                        embeddings = Map.of("configured", false);
+                    } else {
+                        embeddings = new LinkedHashMap<>(embeddings);
+                        embeddings.put("configured", true);
+                    }
+                    result.put("embeddings", embeddings);
                     return result;
                 }));
     }
@@ -308,6 +338,7 @@ public final class ProviderConfigController {
                     "type", view.provider(),
                     "base_url", view.baseUrl(),
                     "model", view.model(),
+                    "supports_images", ChatModelCapabilities.supportsImages(view.provider(), view.model()),
                     "api_key_masked", masked
             );
         }).orElse(null));
@@ -462,8 +493,8 @@ public final class ProviderConfigController {
      * 校验并保存 Jina embedding 配置，随后测试连接并在成功时入队索引重建。
      *
      * <p>provider 固定为 {@code jina}；空地址/模型使用 Jina 默认值，空 key 仅在
-     * provider、地址和模型都未改变时复用旧密文。配置会先持久化再执行连接测试，
-     * 因此测试失败时响应会明确报告失败但不会伪造重建任务。
+     * provider、地址和模型都未改变时复用旧密文。连接测试成功后才持久化配置，
+     * 因此测试失败时不会覆盖旧配置，也不会返回成功标志。
      *
      * @param userId 配置所属用户 UUID。
      * @param payload embedding 配置请求体。
@@ -493,9 +524,18 @@ public final class ProviderConfigController {
         if (apiKey.isBlank()) {
             throw new IllegalArgumentException("Embedding API Key 不能为空");
         }
+        Map<String, Object> diagnostics = embeddingProbe.test(baseUrl, model, apiKey);
+        if (!Boolean.TRUE.equals(diagnostics.get("ok"))) {
+            Map<String, Object> failed = new LinkedHashMap<>();
+            failed.put("ok", false);
+            failed.put("saved", null);
+            failed.put("test", diagnostics);
+            failed.put("rebuild_task", null);
+            failed.put("message", "连接测试失败，配置未保存");
+            return failed;
+        }
         byte[] encrypted = keyCipher.encrypt(apiKey);
         embeddingConfigs.save(userId, new EmbeddingConfigStore.EmbeddingConfig(provider, baseUrl, model, encrypted));
-        Map<String, Object> diagnostics = embeddingProbe.test(baseUrl, model, apiKey);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("saved", Map.of("provider", provider, "model", model));

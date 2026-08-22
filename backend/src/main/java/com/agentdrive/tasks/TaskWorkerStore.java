@@ -8,6 +8,14 @@ import java.util.Map;
  */
 public interface TaskWorkerStore {
     /**
+     * 返回最近十秒内刷新过心跳的 Worker 数量，供公开 readiness 探针使用。
+     * 非持久化替身默认返回零，避免把未知状态误报为就绪。
+     */
+    default int onlineWorkerCount() {
+        return 0;
+    }
+
+    /**
      * 登记 Worker 进程仍在运行，并刷新其持久化心跳时间。
      * Worker 即使当前没有任务也必须调用该方法，否则 API 无法区分“空闲”与“已掉线”。
      *

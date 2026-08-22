@@ -47,7 +47,7 @@ public final class AgentDriveApiSkillProvider implements BuiltinSkillProvider {
 
                 - 不构造未登记 URL、请求头或凭据。
                 - `path_params` 只放路径模板占位符；查询字符串放 `query_params`；JSON 放 `body`。
-                - green 为只读；yellow 会探测外部服务；red 必须完成确认后执行。
+                - green 为只读；yellow 会探测外部服务；ask/auto 模式下 red 必须完成确认后执行，full 模式按用户授权直接执行。
                 - `PUT /api/v1/skills/{name}` 的 body 使用 `description`、`instructions`、`enabled`。
                 - Skill 指令只能编排已登记工具，不能增加新的系统权限。
 

@@ -27,7 +27,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 ### 不属于当前契约
 
 - 任意 URL、任意 HTTP header、Cookie/Bearer、Python/Java 入口、JavaScript/eval。
-- 在 Agent 请求内执行 OCR、embedding、vision 或长时间文件遍历；这些工作必须入队交给 Worker。
+- 在 Agent 请求内执行 embedding、vision 或长时间文件遍历；这些工作必须入队交给 Worker。图片索引不使用 OCR。
 - S3 存储、多用户产品隔离、iOS 客户端、音视频转写和知识图谱问答。
 
 ## 3. 工具边界
@@ -56,7 +56,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 - Java runtime 以本轮是否产生工具轨迹标记 `chat`/`task`；任务请求走完整 tool loop，普通请求不产生工具步骤。会话 transcript、工具轨迹和 `last_trace` 用于持久化上下文与诊断，当前没有旧版短消息强制分流规则。
 - Provider 原生 tool call 才能产生工具步骤；正文中的 DSML/XML 只是普通文本，不能触发工具，也不应被文档描述为另一套可执行协议。
 - 工具返回结构化成功或失败；瞬时错误按 provider/工具策略退避，永久错误直接反馈原因。
-- red operation 先保存待确认参数，确认后做确定性签名校验；非 red operation 以 session/tool/arguments replay，避免重试再次产生副作用。
+- ask/auto 模式下 red operation 先保存待确认参数，确认后做确定性签名校验；full 模式按用户授权直接执行；非 red operation 以 session/tool/arguments replay，避免重试再次产生副作用。
 - 每轮有步数、输出和上下文预算；流式输出结束、取消、断开和异常都进入明确终态。
 
 ## 5. 事件与记忆

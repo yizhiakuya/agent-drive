@@ -5,12 +5,41 @@ import { PhotoSync, PhotoSyncStatus, SyncProgress } from "@/lib/native/photo-syn
 import { EV } from "@/lib/events";
 import { fmtTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Alert } from "@/components/ui/alert";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Camera, Clock3, RefreshCw, Upload, Wifi } from "lucide-react";
+import { Camera, CheckCircle2, Clock3, RefreshCw, ShieldAlert, Upload, Wifi } from "lucide-react";
 
 const INTERVALS = [1, 6, 12, 24];
+
+function normalizeStatus(status: PhotoSyncStatus): PhotoSyncStatus {
+  return {
+    ...status,
+    configured: Boolean(status.configured),
+    permissionGranted: Boolean(status.permissionGranted),
+    enabled: Boolean(status.enabled),
+    wifiOnly: Boolean(status.wifiOnly),
+    intervalHours: Number.isFinite(status.intervalHours) && status.intervalHours > 0 ? status.intervalHours : 24,
+    targetFolder: status.targetFolder || "相册同步",
+    lastSyncAt: status.lastSyncAt ?? null,
+    lastSyncedCount: status.lastSyncedCount ?? 0,
+    lastError: status.lastError || null,
+    lastScanned: status.lastScanned ?? 0,
+    lastUploaded: status.lastUploaded ?? 0,
+    lastDeduped: status.lastDeduped ?? 0,
+    lastSkipped: status.lastSkipped ?? 0,
+    lastFailed: status.lastFailed ?? 0,
+    lastRetryable: status.lastRetryable ?? 0,
+    notificationsEnabled: status.notificationsEnabled ?? true,
+    lastNotification: status.lastNotification ?? false,
+    running: Boolean(status.running),
+    phase: status.phase || "idle",
+    currentFile: status.currentFile || "",
+    uploaded: status.uploaded ?? 0,
+    total: status.total ?? 0,
+  };
+}
 
 /** 相册自动同步（仅原生 App 显示）：WorkManager 后台周期上传新照片到网盘。 */
 export default function PhotoSyncCard() {
@@ -19,11 +48,13 @@ export default function PhotoSyncCard() {
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [folderDraft, setFolderDraft] = useState("相册同步");
 
   async function load() {
     try {
-      const s = await PhotoSync.getStatus();
+      const s = normalizeStatus(await PhotoSync.getStatus());
       setSt(s);
+      setFolderDraft((current) => current === "相册同步" ? (s.targetFolder || current) : current);
       if (s.running) setProgress(s); // 打开页面时若正同步：恢复进度显示
     } catch (e) {
       setMsg(String(e));
@@ -41,7 +72,7 @@ export default function PhotoSyncCard() {
     // 兜底轮询（事件丢失时仍能恢复进度）
     const timer = setInterval(async () => {
       try {
-        const s = await PhotoSync.getStatus();
+        const s = normalizeStatus(await PhotoSync.getStatus());
         if (s.running) setProgress(s);
       } catch { /* 忽略 */ }
     }, 2000);
@@ -54,11 +85,11 @@ export default function PhotoSyncCard() {
     };
   }, [native]);
 
-  async function apply(patch: { enabled?: boolean; wifiOnly?: boolean; intervalHours?: number }) {
+  async function apply(patch: { enabled?: boolean; wifiOnly?: boolean; intervalHours?: number; targetFolder?: string }) {
     setBusy(true);
     setMsg(null);
     try {
-      setSt(await PhotoSync.configure(patch));
+      setSt(normalizeStatus(await PhotoSync.configure(patch)));
       setMsg("已保存");
     } catch (e) {
       setMsg(String(e));
@@ -73,7 +104,7 @@ export default function PhotoSyncCard() {
     try {
       await PhotoSync.requestPermissions();
       const r = await PhotoSync.syncNow();
-      setMsg(r.started ? "后台同步已启动，完成后通知" : "未启动");
+      setMsg(r.started ? "后台同步已启动，完成后通知" : `未启动${r.reason ? `：${r.reason}` : ""}`);
       load();
     } catch (e) {
       setMsg(String(e));
@@ -85,6 +116,33 @@ export default function PhotoSyncCard() {
   if (!native) return null;
 
   const fmt = (ts: number | null) => (ts ? fmtTime(ts) : "从未");
+
+  async function requestPermission() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const result = await PhotoSync.requestPermissions();
+      setMsg(result.granted ? "相册权限已允许" : "相册权限仍未允许");
+      await load();
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openNotificationSettings() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await PhotoSync.openNotificationSettings();
+      setMsg("已打开通知设置");
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <section className="border-b border-border py-5">
@@ -109,6 +167,22 @@ export default function PhotoSyncCard() {
         </div>
       )}
 
+      {!st?.configured && (
+        <Alert className="mb-3 border-warn/30 bg-warn-soft text-warn">
+          <ShieldAlert className="size-4" />
+          <span>请先扫码连接服务器，再开启相册同步。</span>
+        </Alert>
+      )}
+      {st && !st.permissionGranted && (
+        <Alert className="mb-3 border-warn/30 bg-warn-soft text-warn">
+          <ShieldAlert className="size-4" />
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>需要相册权限才能扫描和上传照片。</span>
+            <Button type="button" variant="outline" size="sm" onClick={requestPermission} disabled={busy}>允许相册权限</Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <label className="mb-2 flex cursor-pointer items-center gap-2 text-sm">
         <Switch checked={st?.enabled ?? false} disabled={busy}
                 onCheckedChange={(v) => apply({ enabled: v })} />
@@ -131,6 +205,15 @@ export default function PhotoSyncCard() {
               </SelectContent>
             </Select>
           </label>
+          <label className="mb-2 flex flex-col gap-1.5 text-sm">
+            <span className="text-xs text-muted">目标文件夹</span>
+            <div className="flex gap-2">
+              <Input value={folderDraft} onChange={(event) => setFolderDraft(event.target.value)} placeholder="相册同步" className="h-9 max-w-xs" />
+              <Button type="button" variant="outline" size="sm" disabled={busy || !folderDraft.trim() || folderDraft.trim() === st.targetFolder}
+                      onClick={() => apply({ targetFolder: folderDraft.trim() })}>保存位置</Button>
+            </div>
+            <span className="text-[10px] text-muted">使用网盘根目录下的相对文件夹路径。</span>
+          </label>
         </>
       )}
 
@@ -140,11 +223,25 @@ export default function PhotoSyncCard() {
         </Button>
         {st && (
           <span className="text-muted text-[10px]">
-            上次：{fmt(st.lastSyncAt)} · 同步 {Math.max(st.lastSyncedCount, 0)} 张
+            上次：{fmt(st.lastSyncAt)} · 扫描 {Math.max(st.lastScanned, 0)} 张 · 上传 {Math.max(st.lastUploaded, 0)} · 去重 {Math.max(st.lastDeduped, 0)}
+            {st.lastSkipped > 0 ? ` · 跳过 ${st.lastSkipped}` : ""}
+            {st.lastFailed > 0 ? ` · 失败 ${st.lastFailed}` : ""}
             {st.lastError ? ` · 最近错误: ${st.lastError}` : ""}
           </span>
         )}
       </div>
+      {st && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted">
+          <span className="inline-flex items-center gap-1"><CheckCircle2 className="size-3 text-success" /> 本次同步 {Math.max(st.lastSyncedCount, 0)} 张</span>
+          {st.lastRetryable > 0 && <span className="text-warn">可重试 {st.lastRetryable} 张</span>}
+          {!st.notificationsEnabled && (
+            <span className="flex flex-wrap items-center gap-2 text-warn">
+              <span>通知权限未开启，完成状态不会弹出通知</span>
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={openNotificationSettings}>打开通知设置</Button>
+            </span>
+          )}
+        </div>
+      )}
       {msg && (
         <Alert
           variant={msg === "已保存" || msg === "后台同步已启动，完成后通知" || msg === "未启动" ? "default" : "destructive"}

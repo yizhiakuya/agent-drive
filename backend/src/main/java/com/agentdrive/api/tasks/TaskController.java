@@ -172,7 +172,7 @@ public final class TaskController {
                     principal.userId(), "index.rebuild", "index", payload,
                     "index.rebuild:" + prefix + ":" + body.force(), "api", null
             );
-            return Map.of("queued", result.created(), "task", result.task());
+            return queued(result);
         }));
     }
 
@@ -199,7 +199,7 @@ public final class TaskController {
                     principal.userId(), "index.embed", "index", payload,
                     dedupeKey, "api", null
             );
-            return Map.of("queued", result.created(), "task", result.task());
+            return queued(result);
         }));
     }
 
@@ -226,7 +226,7 @@ public final class TaskController {
                     principal.userId(), "index.vision", "index", payload,
                     dedupeKey, "api", null
             );
-            return Map.of("queued", result.created(), "task", result.task());
+            return queued(result);
         }));
     }
 
@@ -243,8 +243,44 @@ public final class TaskController {
                     principal.userId(), "index.cleanup", "index", Map.of(),
                     "index.cleanup", "api", null
             );
-            return Map.of("queued", result.created(), "task", result.task());
+            Map<String, Object> response = queued(result);
+            response.put("message", "后台失效索引清理已提交，不会清空当前文本或视觉向量");
+            return response;
         }));
+    }
+
+    /**
+     * 响应 {@code POST /api/v1/tasks/clear-vectors}，后台清空当前 owner 的全部向量值。
+     *
+     * <p>该操作只删除 text/vision embedding 和 fingerprint，不删除原文件、正文索引或
+     * 视觉描述；由于会扫描并更新 owner 全部 chunk，必须交给 Worker 执行。</p>
+     *
+     * @param exchange 用于限定清空范围到当前任务 owner 的请求上下文。
+     * @return {@code queued} 标志和后台任务记录。
+     */
+    @PostMapping("/clear-vectors")
+    public Mono<Map<String, Object>> clearVectors(ServerWebExchange exchange) {
+        return principalResolver.resolve(exchange).flatMap(principal -> blocking(() -> {
+            TaskStore.EnqueueResult result = tasks.enqueue(
+                    principal.userId(), "index.clear_vectors", "index", Map.of(),
+                    "index.clear_vectors", "api", null
+            );
+            Map<String, Object> response = queued(result);
+            response.put("message", "后台向量清空已提交，不会删除原文件或正文索引");
+            return response;
+        }));
+    }
+
+    /** 统一返回后台任务提交结果，明确 queued 不等于业务已完成。 */
+    private Map<String, Object> queued(TaskStore.EnqueueResult result) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("queued", result.created());
+        response.put("execution_mode", "background");
+        response.put("message", result.created()
+                ? "后台任务已提交，请通过 task.id 查询完成状态"
+                : "已有相同后台任务在运行，请通过 task.id 查询完成状态");
+        response.put("task", result.task());
+        return response;
     }
 
     /**

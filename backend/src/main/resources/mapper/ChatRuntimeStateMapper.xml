@@ -3,6 +3,18 @@
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.agentdrive.infrastructure.persistence.mapper.ChatRuntimeStateMapper">
+    <select id="selectLoadedSkillNames" resultType="string">
+        SELECT DISTINCT ON (parsed-&gt;'skill'-&gt;&gt;'name') parsed-&gt;'skill'-&gt;&gt;'name'
+        FROM chat_messages
+        WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+          AND role = 'tool_call'
+          AND tool_name = 'read_skill'
+          AND arguments-&gt;&gt;'action' = 'read'
+          AND parsed-&gt;&gt;'ok' = 'true'
+          AND parsed-&gt;'skill'-&gt;&gt;'name' IS NOT NULL
+        ORDER BY parsed-&gt;'skill'-&gt;&gt;'name', id DESC
+    </select>
+
     <select id="selectToolReplay" resultType="map">
         SELECT output, parsed::text AS parsed
         FROM chat_tool_replays
@@ -69,6 +81,12 @@
     <update id="updateLastTrace">
         UPDATE chat_sessions
         SET last_trace = CAST(#{trace, jdbcType=LONGVARCHAR} AS jsonb), updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <update id="updateContextUsage">
+        UPDATE chat_sessions
+        SET context_usage = CAST(#{usage, jdbcType=LONGVARCHAR} AS jsonb), updated_at = now()
         WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
     </update>
 

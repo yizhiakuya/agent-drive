@@ -224,4 +224,18 @@ class BackendApiToolTest {
         assertThat(OperationCatalog.riskFor("POST", "/api/v1/files/test")).isEqualTo("yellow");
         assertThat(OperationCatalog.riskFor("DELETE", "/api/v1/files")).isEqualTo("red");
     }
+
+    @Test
+    void discoveryExposesOperationShapeWithoutTaskSchedulingPolicy() throws Exception {
+        OperationCatalog executionCatalog = new OperationCatalog(List.of(
+                OperationDefinition.http("POST", "/api/v1/tasks/cleanup-index", "Cleanup stale index")));
+        BackendApiTool tool = new BackendApiTool(executionCatalog, (operation, request) -> Map.of(), mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "cleanup index", null, null, null, null, null)));
+
+        assertThat(result.path("operations").get(0).path("operation").asText())
+                .isEqualTo("POST /api/v1/tasks/cleanup-index");
+        assertThat(result.path("operations").get(0).has("execution_mode")).isFalse();
+    }
 }

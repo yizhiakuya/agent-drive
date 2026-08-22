@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,6 +23,7 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
             "POST /api/v1/tasks/embed-index",
             "POST /api/v1/tasks/vision-index",
             "POST /api/v1/tasks/cleanup-index",
+            "POST /api/v1/tasks/clear-vectors",
             "GET /api/v1/tasks/{task_id}",
             "POST /api/v1/tasks/{task_id}/cancel",
             "POST /api/v1/tasks/{task_id}/retry"
@@ -50,6 +52,8 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
             case "POST /api/v1/tasks/vision-index" -> enqueueVisionTask(request, userId);
             case "POST /api/v1/tasks/cleanup-index" -> enqueueTask(request, userId,
                     "index.cleanup", "index", "index.cleanup");
+            case "POST /api/v1/tasks/clear-vectors" -> enqueueTask(request, userId,
+                    "index.clear_vectors", "index", "index.clear_vectors");
             case "GET /api/v1/tasks/{task_id}" -> taskDetails(request, userId);
             case "POST /api/v1/tasks/{task_id}/cancel" -> taskTransition(request, userId, false);
             case "POST /api/v1/tasks/{task_id}/retry" -> taskTransition(request, userId, true);
@@ -77,7 +81,7 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
                 "prefix", BackendApiParams.parameter(request, "prefix", ""),
                 "force", BackendApiParams.booleanParameter(request, "force"));
         TaskStore.EnqueueResult result = tasks.enqueue(userId, type, lane, payload, dedupeKey, "agent", null);
-        return Map.of("queued", result.created(), "task", result.task());
+        return taskResult(result);
     }
 
     private Map<String, Object> enqueueEmbeddingTask(BackendApiRequest request, UUID userId) {
@@ -92,7 +96,7 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
         boolean force = BackendApiParams.booleanParameter(request, "force");
         TaskStore.EnqueueResult result = tasks.enqueue(userId, "index.embed", "index",
                 Map.of("files", paths, "force", force), IndexTaskPaths.dedupeKey(paths, force), "agent", null);
-        return Map.of("queued", result.created(), "task", result.task());
+        return taskResult(result);
     }
 
     private Map<String, Object> enqueueVisionTask(BackendApiRequest request, UUID userId) {
@@ -110,7 +114,7 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
         TaskStore.EnqueueResult result = tasks.enqueue(userId, "index.vision", "index",
                 Map.of("files", paths, "force", force),
                 "index.vision:" + IndexTaskPaths.dedupeKey(paths, force), "agent", null);
-        return Map.of("queued", result.created(), "task", result.task());
+        return taskResult(result);
     }
 
     private Map<String, Object> taskDetails(BackendApiRequest request, UUID userId) {
@@ -118,6 +122,14 @@ final class ChatBackendApiTaskHandler implements BackendApiOperationHandler {
         Map<String, Object> task = tasks.get(userId, taskId);
         if (task == null) return Map.of("ok", false, "error", "task_not_found");
         return Map.of("task", task, "children", tasks.childSummary(userId, taskId));
+    }
+
+    /** 返回任务模块的真实提交结果，不把任务调度策略包装成 Agent 指令。 */
+    private Map<String, Object> taskResult(TaskStore.EnqueueResult result) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("created", result.created());
+        response.put("task", result.task());
+        return response;
     }
 
     private Map<String, Object> taskTransition(BackendApiRequest request, UUID userId, boolean retry) {

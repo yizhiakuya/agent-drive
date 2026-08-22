@@ -50,19 +50,44 @@ class IndexingServiceTest {
     }
 
     @Test
-    void skipsFileWhenTikaCannotExtractDocumentText() throws Exception {
+    void routesImagesToVisionInsteadOfTikaOrOcr() throws Exception {
         FileStorageService files = mock(FileStorageService.class);
         IndexStore index = mock(IndexStore.class);
         UUID owner = UUID.randomUUID();
-        Path source = temp.resolve("broken.jpg");
-        Files.write(source, new byte[]{0, 1, 2, 3});
         when(index.file(owner, "broken.jpg")).thenReturn(Map.of(
                 "id", UUID.randomUUID().toString(), "size_bytes", 4L, "revision", 1L
         ));
-        when(files.fileForRead(owner, "broken.jpg")).thenReturn(source);
 
         Map<String, Object> result = new IndexingService(files, index).indexFile(owner, "broken.jpg");
 
-        assertThat(result).containsEntry("indexed", false).containsEntry("status", "extract_error");
+        assertThat(result).containsEntry("indexed", false)
+                .containsEntry("status", "vision_required")
+                .containsEntry("vector_type", "vision");
+        verify(files, org.mockito.Mockito.never()).fileForRead(owner, "broken.jpg");
+        verify(index, org.mockito.Mockito.never()).replaceDocument(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void storesVisionDescriptionAsVisionDocumentType() {
+        FileStorageService files = mock(FileStorageService.class);
+        IndexStore index = mock(IndexStore.class);
+        UUID owner = UUID.randomUUID();
+        UUID fileId = UUID.randomUUID();
+        when(index.file(owner, "photo.jpg")).thenReturn(Map.of(
+                "id", fileId.toString(), "size_bytes", 4L, "revision", 7L
+        ));
+
+        Map<String, Object> result = new IndexingService(files, index)
+                .indexDescription(owner, "photo.jpg", "{\"summary\":\"receipt\"}");
+
+        assertThat(result).containsEntry("indexed", true)
+                .containsEntry("status", "vision_indexed")
+                .containsEntry("vector_type", "vision");
+        verify(index).replaceDocument(eq(owner), eq(fileId), eq(7L),
+                eq(IndexStore.VISION_DOCUMENT_TYPE), eq("{\"summary\":\"receipt\"}"),
+                eq("vision-description-v1"), any(), eq("vision-chunk-v1"));
     }
 }

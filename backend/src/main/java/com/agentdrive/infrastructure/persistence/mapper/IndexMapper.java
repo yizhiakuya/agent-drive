@@ -84,6 +84,7 @@ public interface IndexMapper {
     Map<String, Object> upsertDocument(@Param("userId") String userId,
                                        @Param("fileId") String fileId,
                                        @Param("sourceRevision") long sourceRevision,
+                                       @Param("documentType") String documentType,
                                        @Param("content") String content,
                                        @Param("extractorVersion") String extractorVersion);
 
@@ -112,6 +113,7 @@ public interface IndexMapper {
      */
     int deleteOtherDocuments(@Param("userId") String userId, @Param("fileId") String fileId,
                              @Param("sourceRevision") long sourceRevision,
+                             @Param("documentType") String documentType,
                              @Param("extractorVersion") String extractorVersion);
 
     /**
@@ -144,6 +146,13 @@ public interface IndexMapper {
      * @return 实际删除的过期文档数；没有过期文档时为 {@code 0}
      */
     int cleanup(@Param("userId") String userId);
+
+    /**
+     * 清空 owner 全部文档 chunk 的 embedding 和 fingerprint，保留正文与文档元数据。
+     * @param userId 文件所属 owner 的 UUID 字符串
+     * @return 实际被清空的 chunk 数量
+     */
+    int clearEmbeddings(@Param("userId") String userId);
 
     /**
      * 分页查询 owner 当前文件 revision 下需要生成或更新向量的文本分块。

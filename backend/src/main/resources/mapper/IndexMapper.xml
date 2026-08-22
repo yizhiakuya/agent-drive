@@ -5,28 +5,32 @@
 <mapper namespace="com.agentdrive.infrastructure.persistence.mapper.IndexMapper">
     <select id="selectStats" resultType="map">
         WITH current_documents AS (
-            SELECT DISTINCT ON (d.file_id)
+            SELECT DISTINCT ON (d.file_id, d.document_type)
                    d.id,
-                   d.file_id
+                   d.file_id,
+                   d.document_type
             FROM documents d
             JOIN files f ON f.id = d.file_id
             WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
               AND f.is_dir = false
               AND d.source_revision = f.revision
-            ORDER BY d.file_id, d.updated_at DESC, d.id DESC
+            ORDER BY d.file_id, d.document_type, d.updated_at DESC, d.id DESC
         ), chunk_stats AS (
             SELECT cd.file_id,
-                   COUNT(c.id)::int AS chunk_count,
-                   COUNT(c.id) FILTER (
-                       WHERE c.embedding IS NOT NULL
+                   COUNT(c.id) FILTER (WHERE cd.document_type = 'text')::int AS text_chunk_count,
+                   COUNT(c.id) FILTER (WHERE cd.document_type = 'vision')::int AS vision_chunk_count,
+                   COUNT(c.id) FILTER (WHERE cd.document_type = 'text' AND c.embedding IS NOT NULL
                          AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
-                         AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
-                   )::int AS current_vector_chunks,
-                   COUNT(c.id) FILTER (
-                       WHERE c.embedding IS NOT NULL
+                         AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR})::int AS text_current_vector_chunks,
+                   COUNT(c.id) FILTER (WHERE cd.document_type = 'vision' AND c.embedding IS NOT NULL
+                         AND #{fingerprint, jdbcType=VARCHAR} IS NOT NULL
+                         AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR})::int AS vision_current_vector_chunks,
+                   COUNT(c.id) FILTER (WHERE cd.document_type = 'text' AND c.embedding IS NOT NULL
                          AND (#{fingerprint, jdbcType=VARCHAR} IS NULL
-                              OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR})
-                   )::int AS stale_vector_chunks
+                              OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR}))::int AS text_stale_vector_chunks,
+                   COUNT(c.id) FILTER (WHERE cd.document_type = 'vision' AND c.embedding IS NOT NULL
+                         AND (#{fingerprint, jdbcType=VARCHAR} IS NULL
+                              OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR}))::int AS vision_stale_vector_chunks
             FROM current_documents cd
             LEFT JOIN document_chunks c
               ON c.document_id = cd.id
@@ -39,25 +43,47 @@
                COUNT(cs.file_id)::int AS extracted_files,
                COUNT(*) FILTER (
                    WHERE f.is_dir = false
+                     AND COALESCE(cs.text_chunk_count, 0) &gt; 0
+                     AND cs.text_current_vector_chunks = cs.text_chunk_count
+               )::int AS text_vector_files,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND COALESCE(cs.vision_chunk_count, 0) &gt; 0
+                     AND cs.vision_current_vector_chunks = cs.vision_chunk_count
+               )::int AS vision_vector_files,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
                      AND cs.file_id IS NOT NULL
-                     AND cs.chunk_count &gt; 0
-                     AND cs.current_vector_chunks = cs.chunk_count
+                     AND COALESCE(cs.text_chunk_count, 0) + COALESCE(cs.vision_chunk_count, 0) &gt; 0
+                     AND COALESCE(cs.text_current_vector_chunks, 0) + COALESCE(cs.vision_current_vector_chunks, 0)
+                         = COALESCE(cs.text_chunk_count, 0) + COALESCE(cs.vision_chunk_count, 0)
                )::int AS vector_files,
                COUNT(*) FILTER (
                    WHERE f.is_dir = false
                      AND cs.file_id IS NOT NULL
-                     AND cs.chunk_count = 0
+                     AND COALESCE(cs.text_chunk_count, 0) + COALESCE(cs.vision_chunk_count, 0) = 0
                )::int AS non_vectorizable_files,
                COUNT(*) FILTER (
                    WHERE f.is_dir = false
                      AND cs.file_id IS NOT NULL
-                     AND cs.chunk_count &gt; 0
-                     AND cs.current_vector_chunks &lt; cs.chunk_count
+                     AND COALESCE(cs.text_chunk_count, 0) + COALESCE(cs.vision_chunk_count, 0) &gt; 0
+                     AND COALESCE(cs.text_current_vector_chunks, 0) + COALESCE(cs.vision_current_vector_chunks, 0)
+                         &lt; COALESCE(cs.text_chunk_count, 0) + COALESCE(cs.vision_chunk_count, 0)
                )::int AS missing_vectors,
                COUNT(*) FILTER (
                    WHERE f.is_dir = false
-                     AND cs.stale_vector_chunks &gt; 0
-               )::int AS stale_vectors
+                     AND COALESCE(cs.text_stale_vector_chunks, 0) + COALESCE(cs.vision_stale_vector_chunks, 0) &gt; 0
+               )::int AS stale_vectors,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND COALESCE(cs.text_chunk_count, 0) &gt; 0
+                     AND cs.text_current_vector_chunks &lt; cs.text_chunk_count
+               )::int AS text_missing_vectors,
+               COUNT(*) FILTER (
+                   WHERE f.is_dir = false
+                     AND COALESCE(cs.vision_chunk_count, 0) &gt; 0
+                     AND cs.vision_current_vector_chunks &lt; cs.vision_chunk_count
+               )::int AS vision_missing_vectors
         FROM files f
         LEFT JOIN chunk_stats cs ON cs.file_id = f.id
         WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
@@ -72,21 +98,38 @@
     </select>
 
     <select id="selectFiles" resultType="map">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
         SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256
         FROM files
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND is_dir = false
           AND (#{prefix, jdbcType=VARCHAR} IS NULL OR path = #{prefix, jdbcType=VARCHAR}
-               OR path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+               OR path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
         ORDER BY path ASC
     </select>
 
     <select id="semanticSearch" resultType="map">
-        WITH ranked AS (
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
+        WITH current_documents AS (
+            SELECT DISTINCT ON (d.file_id, d.document_type)
+                   d.id,
+                   d.file_id,
+                   d.source_revision,
+                   d.document_type
+            FROM documents d
+            JOIN files f ON f.id = d.file_id
+            WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND f.is_dir = false
+              AND d.source_revision = f.revision
+            ORDER BY d.file_id, d.document_type, d.updated_at DESC, d.id DESC
+        ), ranked AS (
             SELECT f.id::text AS file_id,
                    f.path,
                    f.size_bytes AS size,
                    EXTRACT(EPOCH FROM f.updated_at) AS mtime,
+                   d.document_type AS vector_type,
                    c.chunk_index,
                    LEFT(c.content, 4000) AS search_snippet,
                    (1 - (c.embedding &lt;=&gt; CAST(#{vector, jdbcType=LONGVARCHAR} AS vector)))::double precision AS search_score,
@@ -95,7 +138,8 @@
                        ORDER BY c.embedding &lt;=&gt; CAST(#{vector, jdbcType=LONGVARCHAR} AS vector), c.chunk_index ASC
                    ) AS file_rank
             FROM document_chunks c
-            JOIN documents d ON d.id = c.document_id
+            JOIN current_documents cd ON cd.id = c.document_id
+            JOIN documents d ON d.id = cd.id
             JOIN files f ON f.id = d.file_id
             WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
               AND f.is_dir = false
@@ -105,10 +149,10 @@
               AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
               <if test="prefix != null and prefix != ''">
               AND (f.path = #{prefix, jdbcType=VARCHAR}
-                   OR f.path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+                   OR f.path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
               </if>
         )
-        SELECT file_id, path, size, mtime, chunk_index, search_snippet, search_score
+        SELECT file_id, path, size, mtime, vector_type, chunk_index, search_snippet, search_score
         FROM ranked
         WHERE file_rank = 1
         ORDER BY search_score DESC, lower(path) ASC
@@ -116,12 +160,12 @@
     </select>
 
     <select id="upsertDocument" resultType="map">
-        INSERT INTO documents(file_id, source_revision, extractor_version, content)
-        SELECT f.id, #{sourceRevision}, #{extractorVersion, jdbcType=VARCHAR}, #{content, jdbcType=LONGVARCHAR}
+        INSERT INTO documents(file_id, source_revision, document_type, extractor_version, content)
+        SELECT f.id, #{sourceRevision}, #{documentType, jdbcType=VARCHAR}, #{extractorVersion, jdbcType=VARCHAR}, #{content, jdbcType=LONGVARCHAR}
         FROM files f
         WHERE f.id = CAST(#{fileId, jdbcType=VARCHAR} AS uuid)
           AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
-        ON CONFLICT (file_id, source_revision, extractor_version) DO UPDATE SET
+        ON CONFLICT (file_id, source_revision, document_type, extractor_version) DO UPDATE SET
             content = EXCLUDED.content,
             updated_at = now()
         RETURNING id::text AS id
@@ -138,6 +182,7 @@
         WHERE d.file_id = f.id
           AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND d.file_id = CAST(#{fileId, jdbcType=VARCHAR} AS uuid)
+          AND d.document_type = #{documentType, jdbcType=VARCHAR}
           AND (d.source_revision &lt;&gt; #{sourceRevision}
                OR d.extractor_version &lt;&gt; #{extractorVersion, jdbcType=VARCHAR})
     </delete>
@@ -161,9 +206,19 @@
           AND d.source_revision &lt;&gt; f.revision
     </delete>
 
+    <update id="clearEmbeddings">
+        UPDATE document_chunks c
+        SET embedding = NULL,
+            embedding_fingerprint = NULL
+        FROM documents d
+        JOIN files f ON f.id = d.file_id
+        WHERE c.document_id = d.id
+          AND f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
     <select id="selectChunks" resultType="map">
         SELECT c.id::text AS id, c.content, c.source_revision, c.chunk_version,
-               d.id::text AS document_id, f.path
+               d.id::text AS document_id, d.document_type AS vector_type, f.path
         FROM document_chunks c
         JOIN documents d ON d.id = c.document_id
         JOIN files f ON f.id = d.file_id

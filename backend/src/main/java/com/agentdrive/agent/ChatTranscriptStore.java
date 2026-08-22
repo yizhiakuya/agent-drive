@@ -11,6 +11,20 @@ import java.util.Map;
  */
 public interface ChatTranscriptStore {
     /**
+     * 返回当前会话已经成功读取过的 Skill 名称。
+     *
+     * <p>Skill 正文不直接信任客户端历史；生产实现从 owner 会话内已持久化的
+     * {@code read_skill action=read} 工具轨迹中提取名称，下一轮再由当前 Skill
+     * registry 解析最新正文。测试替身没有历史时返回空列表。</p>
+     *
+     * @param sessionId 会话 UUID 文本
+     * @return 去重后的已读取 Skill 名称
+     */
+    default List<String> loadedSkillNames(String sessionId) {
+        return List.of();
+    }
+
+    /**
      * 追加一条用户消息。
      * @param sessionId 会话 UUID 的字符串表示
      * @param content 用户实际发送的正文
@@ -55,4 +69,17 @@ public interface ChatTranscriptStore {
      * @param traces 本轮工具步骤的有序结构化记录
      */
     void updateLastTrace(String sessionId, List<Map<String, Object>> traces);
+
+    /**
+     * 保存最近一次上下文窗口用量，供重新打开会话时恢复展示。
+     *
+     * <p>轻量测试替身默认忽略该元数据；生产实现应按会话 ID 原子覆盖，不能把
+     * token 数量写入消息正文或工具轨迹。</p>
+     *
+     * @param sessionId 会话 UUID 的字符串表示
+     * @param usage 已用、上限、百分比及可选输入/输出 token
+     */
+    default void updateContextUsage(String sessionId, Map<String, Object> usage) {
+        // 兼容只验证消息/工具轨迹的轻量测试存储。
+    }
 }

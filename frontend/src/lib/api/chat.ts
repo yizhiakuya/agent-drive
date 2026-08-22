@@ -1,6 +1,8 @@
 // 对话 API：聚合 + SSE 流式（含跨 chunk 缓冲）
 import { api, authenticatedFetch, ApiError, apiErrorMessage } from "./client";
 import type { FrontendCapability } from "../frontend-actions";
+import type { PermissionMode } from "@/lib/permission";
+import type { InlineImage } from "@/components/chat/chat-types";
 
 export class ChatStreamError extends Error {
   readonly sessionId: string | null;
@@ -20,6 +22,9 @@ export const chat = (
   thinkingLevel = "auto",
   frontendCapabilities: FrontendCapability[] = [],
   model = "",
+  fileContext: string[] = [],
+  permissionMode: PermissionMode = "auto",
+  inlineImages: Pick<InlineImage, "name" | "mediaType" | "data">[] = [],
 ) => api("/chat", {
   method: "POST",
   body: JSON.stringify({
@@ -30,6 +35,9 @@ export const chat = (
     thinking_level: thinkingLevel,
     frontend_capabilities: frontendCapabilities,
     model: model || undefined,
+    file_context: fileContext,
+    permission_mode: permissionMode,
+    inline_images: inlineImages,
   }),
 });
 
@@ -43,6 +51,9 @@ export async function chatStream(
   thinkingLevel = "auto",
   frontendCapabilities: FrontendCapability[] = [],
   model = "",
+  fileContext: string[] = [],
+  permissionMode: PermissionMode = "auto",
+  inlineImages: Pick<InlineImage, "name" | "mediaType" | "data">[] = [],
 ): Promise<Record<string, unknown> | null> {
   const res = await authenticatedFetch("/chat/stream", {
     method: "POST",
@@ -55,6 +66,9 @@ export async function chatStream(
       thinking_level: thinkingLevel,
       frontend_capabilities: frontendCapabilities,
       model: model || undefined,
+      file_context: fileContext,
+      permission_mode: permissionMode,
+      inline_images: inlineImages,
     }),
     signal,
   });

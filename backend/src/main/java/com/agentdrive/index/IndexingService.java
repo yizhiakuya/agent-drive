@@ -7,7 +7,6 @@ import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
-import org.apache.tika.parser.ocr.TesseractOCRConfig;
 import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -22,12 +21,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.xml.sax.SAXException;
 
 /**
  * 负责把用户文件转换为可检索全文和重叠文本块的索引服务。
- * 小型文本文件直接按 UTF-8 读取，其他格式交给 Apache Tika，并将 OCR 结果纳入同一索引流程；单文件正文上限为 20 MiB。
+ * 小型文本文件直接按 UTF-8 读取，其他文档格式交给 Apache Tika；图片不进入文本抽取链路，必须走视觉描述索引；单文件正文上限为 20 MiB。
  * 每次写入都携带 source revision、抽取器版本和 chunk 版本，避免旧文件内容继续参与向量检索。
  */
 @Service
@@ -38,6 +38,8 @@ public class IndexingService {
     private static final int MAX_TEXT_BYTES = 20 * 1024 * 1024;
     private static final int CHUNK_SIZE = 2000;
     private static final int CHUNK_OVERLAP = 200;
+    private static final Set<String> IMAGE_EXTENSIONS = Set.of(
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp");
 
     private final FileStorageService files;
     private final IndexStore index;
@@ -67,6 +69,7 @@ public class IndexingService {
     public Map<String, Object> indexFile(UUID userId, String path) {
         Map<String, Object> metadata = index.file(userId, path);
         if (metadata == null) throw new IllegalArgumentException("file not found: " + path);
+        if (isImagePath(path)) return result(path, false, "vision_required", 0L, IndexStore.VISION_DOCUMENT_TYPE);
         long size = number(metadata.get("size_bytes"));
         if (size > MAX_TEXT_BYTES) return result(path, false, "too_large", size);
         Path source = files.fileForRead(userId, path);
@@ -80,7 +83,7 @@ public class IndexingService {
         long revision = number(metadata.get("revision"));
         List<String> chunks = chunks(content);
         index.replaceDocument(userId, fileId, revision, content, EXTRACTOR_VERSION, chunks, CHUNK_VERSION);
-        return result(path, true, "indexed", content.length());
+        return result(path, true, "indexed", content.length(), IndexStore.TEXT_DOCUMENT_TYPE);
     }
 
     /**
@@ -105,9 +108,9 @@ public class IndexingService {
         UUID fileId = UUID.fromString(String.valueOf(metadata.get("id")));
         long revision = number(metadata.get("revision"));
         List<String> chunks = chunks(structuredDescription);
-        index.replaceDocument(userId, fileId, revision, structuredDescription,
-                "vision-description-v1", chunks, "vision-chunk-v1");
-        return result(path, true, "vision_indexed", structuredDescription.length());
+        index.replaceDocument(userId, fileId, revision, IndexStore.VISION_DOCUMENT_TYPE,
+                structuredDescription, "vision-description-v1", chunks, "vision-chunk-v1");
+        return result(path, true, "vision_indexed", structuredDescription.length(), IndexStore.VISION_DOCUMENT_TYPE);
     }
 
     /**
@@ -135,6 +138,8 @@ public class IndexingService {
         TaskProgressReporter reporter = progress == null ? TaskProgressReporter.noop() : progress;
         int indexed = 0;
         int skipped = 0;
+        List<String> textPaths = new ArrayList<>();
+        List<String> visionPaths = new ArrayList<>();
         List<Map<String, Object>> files = index.files(userId, prefix);
         int total = files.size();
         reporter.report(0, total, total == 0 ? "全文索引：没有需要处理的文件" : "全文索引：准备处理 " + total + " 个文件");
@@ -143,13 +148,20 @@ public class IndexingService {
             String path = String.valueOf(file.get("path"));
             reporter.report(processed, total, "全文索引：正在处理 " + path);
             Map<String, Object> result = indexFile(userId, path);
-            if (Boolean.TRUE.equals(result.get("indexed"))) indexed++;
-            else skipped++;
+            if (Boolean.TRUE.equals(result.get("indexed"))) {
+                indexed++;
+                textPaths.add(path);
+            } else if ("vision_required".equals(result.get("status"))) {
+                visionPaths.add(path);
+            } else {
+                skipped++;
+            }
             processed++;
             reporter.report(processed, total, "全文索引：已处理 " + processed + "/" + total);
         }
         return Map.of("indexed", indexed, "skipped", skipped, "processed_files", processed,
-                "total_files", total, "prefix", prefix == null ? "" : prefix);
+                "total_files", total, "prefix", prefix == null ? "" : prefix,
+                "text_paths", List.copyOf(textPaths), "vision_paths", List.copyOf(visionPaths));
     }
 
     /**
@@ -164,8 +176,19 @@ public class IndexingService {
     }
 
     /**
-     * 根据文件扩展名选择文本读取或 Tika 抽取策略。
-     * 已知文本/代码格式优先用 UTF-8 直接读取；遇到非法 UTF-8 时退回受大小限制的字节读取，其他格式交给 Tika 和 OCR。
+     * 清空 owner 全部文本/视觉向量，保留正文索引和原始文件，供后续任务重新生成。
+     * 该入口只由 Worker 调用，不在上传、聊天或普通文件请求内执行。
+     *
+     * @param userId 文件归属 owner。
+     * @return 清空数量和稳定操作状态。
+     */
+    public Map<String, Object> clearVectors(UUID userId) {
+        return Map.of("cleared_vectors", index.clearEmbeddings(userId), "status", "vectors_cleared");
+    }
+
+    /**
+     * 根据文件扩展名选择文本读取或 Tika 抽取策略。图片在调用方已被识别并拒绝进入此方法，
+     * 因此这里不会把图片字节伪装成文本。
      *
      * @param source 已通过存储层安全校验的本地文件路径。
      * @param path 文件相对路径，用于扩展名判断和异常信息。
@@ -191,8 +214,8 @@ public class IndexingService {
     }
 
     /**
-     * 使用 Tika 自动识别文档格式并抽取正文，必要时启用 Tesseract OCR。
-     * OCR 语言从 {@code AGENT_DRIVE_OCR_LANGUAGE} 读取，默认使用 {@code chi_sim+eng}；Tika handler 和 OCR 均受 20 MiB/120 秒限制。
+     * 使用 Tika 自动识别非图片文档格式并抽取正文。Tika handler 受 20 MiB 限制，
+     * 不配置或调用图片文字识别 parser。
      *
      * @param source 待读取的本地文档路径。
      * @param path 文档相对路径，用作 Tika 资源名和错误上下文。
@@ -205,11 +228,6 @@ public class IndexingService {
             metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, path);
             BodyContentHandler handler = new BodyContentHandler(MAX_TEXT_BYTES);
             ParseContext context = new ParseContext();
-            TesseractOCRConfig ocr = new TesseractOCRConfig();
-            ocr.setLanguage(System.getenv().getOrDefault("AGENT_DRIVE_OCR_LANGUAGE", "chi_sim+eng"));
-            ocr.setMaxFileSizeToOcr(MAX_TEXT_BYTES);
-            ocr.setTimeoutSeconds(120);
-            context.set(TesseractOCRConfig.class, ocr);
             new AutoDetectParser().parse(input, handler, metadata, context);
             return handler.toString();
         } catch (IOException | SAXException | TikaException error) {
@@ -267,12 +285,26 @@ public class IndexingService {
      * @return 包含 path、indexed、status 和 size 的有序结果 map。
      */
     private Map<String, Object> result(String path, boolean indexed, String status, long size) {
+        return result(path, indexed, status, size,
+                IndexStore.TEXT_DOCUMENT_TYPE);
+    }
+
+    private Map<String, Object> result(String path, boolean indexed, String status, long size, String vectorType) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("path", path);
         result.put("indexed", indexed);
         result.put("status", status);
         result.put("size", size);
+        result.put("vector_type", vectorType);
         return result;
+    }
+
+    /** 图片只允许走视觉描述链路，避免生成第二份不受控的文本向量。 */
+    public static boolean isImagePath(String path) {
+        String normalized = path == null ? "" : path.toLowerCase(java.util.Locale.ROOT);
+        int slash = normalized.lastIndexOf('/');
+        int dot = normalized.lastIndexOf('.');
+        return dot > slash && IMAGE_EXTENSIONS.contains(normalized.substring(dot));
     }
 
     /**

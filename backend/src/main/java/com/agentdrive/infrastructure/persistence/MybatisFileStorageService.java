@@ -68,7 +68,8 @@ import java.util.stream.Stream;
 public class MybatisFileStorageService implements FileStorageService {
     private static final int INDEX_DETAIL_LIMIT = 100;
     private static final int FILE_LIST_LIMIT = 1000;
-    private static final Set<String> INTERNAL_NAMES = Set.of(".index", ".trash", ".storage.lock");
+    private static final int MAX_VERSION_SNAPSHOTS = 20;
+    private static final Set<String> INTERNAL_NAMES = Set.of(".index", ".trash", ".versions", ".storage.lock");
     private static final String COPY_PREFIX = ".copy.";
     private static final String COPY_OLD_PREFIX = ".copy-old.";
     private static final String COPY_MARKER_SUFFIX = ".txn.json";
@@ -216,8 +217,29 @@ public class MybatisFileStorageService implements FileStorageService {
      */
     @Override
     public Map<String, Object> list(UUID ownerId, String path, String query, String mode) {
+        return list(ownerId, path, query, mode, FILE_LIST_LIMIT, null);
+    }
+
+    /**
+     * 分页/最低相关度版文件列表；返回多取一条后的 {@code has_more}，避免客户端以
+     * “返回条数等于 limit”猜测是否还有结果。
+     */
+    @Override
+    public Map<String, Object> list(UUID ownerId, String path, String query, String mode,
+                                    int limit, Double minScore) {
+        return list(ownerId, path, query, mode, limit, minScore, "all", null, null);
+    }
+
+    @Override
+    public Map<String, Object> list(UUID ownerId, String path, String query, String mode,
+                                    int limit, Double minScore, String type,
+                                    Double modifiedAfter, Double modifiedBefore) {
         String normalizedMode = mode == null ? "name" : mode.trim().toLowerCase(Locale.ROOT);
-        if ("name".equals(normalizedMode)) return list(ownerId, path, query);
+        int requestedLimit = Math.max(1, Math.min(limit, FILE_LIST_LIMIT));
+        String normalizedType = normalizeTypeFilter(type);
+        if ("name".equals(normalizedMode)) {
+            return listByName(ownerId, path, query, requestedLimit, normalizedType, modifiedAfter, modifiedBefore);
+        }
         if (!"semantic".equals(normalizedMode)) {
             throw new FileStorageException(400, "不支持的文件搜索模式");
         }
@@ -229,11 +251,200 @@ public class MybatisFileStorageService implements FileStorageService {
             throw new FileStorageException(503, "语义搜索服务未启用");
         }
         try {
-            Map<String, Object> result = new LinkedHashMap<>(semanticSearch.search(ownerId, normalizePath(path), query));
+            Map<String, Object> result = new LinkedHashMap<>(semanticSearch.search(
+                    ownerId, normalizePath(path), query, Math.min(100, requestedLimit), minScore,
+                    normalizedType, modifiedAfter, modifiedBefore));
+            decorateFavoriteFlags(ownerId, result);
             result.put("disk", diskUsage());
             return result;
         } catch (IOException error) {
             throw new FileStorageException(500, "读取磁盘用量失败", error);
+        }
+    }
+
+    /** 返回当前 owner 最近收藏的仍然存在且可见的文件/目录。 */
+    @Override
+    public Map<String, Object> listFavorites(UUID ownerId, int limit) {
+        int requestedLimit = Math.max(1, Math.min(limit, 100));
+        List<Map<String, Object>> rows = mapper.selectFavorites(ownerId.toString(), requestedLimit + 20);
+        return listTrackedPaths(ownerId, rows, requestedLimit, "favorites");
+    }
+
+    /** 返回当前 owner 最近访问的仍然存在且可见的普通文件。 */
+    @Override
+    public Map<String, Object> listRecent(UUID ownerId, int limit) {
+        int requestedLimit = Math.max(1, Math.min(limit, 100));
+        List<Map<String, Object>> rows = mapper.selectRecent(ownerId.toString(), requestedLimit + 20);
+        return listTrackedPaths(ownerId, rows, requestedLimit, "recent");
+    }
+
+    /** 列出指定文件的真实内容快照，数据库或磁盘孤儿只跳过不展示。 */
+    @Override
+    public Map<String, Object> listVersions(UUID ownerId, String path, int limit) {
+        String normalized = normalizePath(path);
+        requireOwnedFile(ownerId, normalized);
+        int requestedLimit = Math.max(1, Math.min(limit, 50));
+        List<Map<String, Object>> rows = mapper.selectVersionSnapshots(ownerId.toString(), normalized,
+                requestedLimit + 1);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            try {
+                Path snapshot = safeInternalVersion(ownerId, String.valueOf(row.get("snapshot_path")));
+                if (!Files.isRegularFile(snapshot, LinkOption.NOFOLLOW_LINKS)) continue;
+                items.add(mapOf("version_id", row.get("version_id"),
+                        "source_revision", row.get("source_revision"),
+                        "size", row.get("size_bytes"),
+                        "content_md5", row.get("content_md5"),
+                        "content_sha256", row.get("content_sha256"),
+                        "created_at", row.get("created_at")));
+                if (items.size() >= requestedLimit) break;
+            } catch (FileStorageException ignored) {
+                // Malformed internal rows are treated as orphans, never as public paths.
+            }
+        }
+        Map<String, Object> result = mapOf("path", normalized, "items", items,
+                "has_more", rows.size() > requestedLimit);
+        Map<String, Object> current = mapper.selectByPath(ownerId.toString(), normalized);
+        if (current != null) result.put("current_revision", current.get("revision"));
+        return result;
+    }
+
+    /** 将快照内容作为新 revision 原子恢复到文件路径。 */
+    @Override
+    @Transactional
+    public Map<String, Object> restoreVersion(UUID ownerId, String path, String versionId) {
+        String normalized = normalizePath(path);
+        if (versionId == null || versionId.isBlank()) {
+            throw new FileStorageException(400, "version_id 不能为空");
+        }
+        requireOwnedFile(ownerId, normalized);
+        Map<String, Object> row;
+        try {
+            UUID.fromString(versionId);
+            row = mapper.selectVersionSnapshot(ownerId.toString(), normalized, versionId);
+        } catch (IllegalArgumentException error) {
+            throw new FileStorageException(400, "version_id 无效");
+        }
+        if (row == null) throw new FileStorageException(404, "文件版本不存在");
+        Path snapshot = safeInternalVersion(ownerId, String.valueOf(row.get("snapshot_path")));
+        if (!Files.isRegularFile(snapshot, LinkOption.NOFOLLOW_LINKS)) {
+            throw new FileStorageException(404, "文件版本内容不存在");
+        }
+        Path temp = createUploadTemp();
+        try {
+            Files.copy(snapshot, temp, StandardCopyOption.REPLACE_EXISTING, LinkOption.NOFOLLOW_LINKS);
+            int separator = normalized.lastIndexOf('/');
+            String directory = separator < 0 ? "" : normalized.substring(0, separator);
+            String filename = separator < 0 ? normalized : normalized.substring(separator + 1);
+            Map<String, Object> published = publishUpload(ownerId, directory, filename, temp, "", false);
+            return mapOf("restored", published.get("uploaded"), "version_id", versionId);
+        } catch (IOException error) {
+            throw new FileStorageException(500, "恢复文件版本失败", error);
+        } finally {
+            discardTemp(temp);
+        }
+    }
+
+    /** 添加或移除收藏，并在写入前重新执行 owner 路径和物理类型检查。 */
+    @Override
+    @Transactional
+    public Map<String, Object> setFavorite(UUID ownerId, String path, boolean favorite) {
+        String normalized = normalizePath(path);
+        if (normalized.isBlank()) throw new FileStorageException(400, "收藏路径不能为空");
+        Path target = safePath(ownerId, normalized, false);
+        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new FileStorageException(404, "文件或目录不存在");
+        }
+        rejectSpecial(target);
+        if (favorite) mapper.addFavorite(ownerId.toString(), normalized);
+        else mapper.removeFavorite(ownerId.toString(), normalized);
+        return mapOf("path", normalized, "favorite", favorite);
+    }
+
+    /** 记录一次用户可见的普通文件访问；数据库异常只记日志，不影响读取主流程。 */
+    @Override
+    public void touchAccess(UUID ownerId, String path) {
+        if (ownerId == null || path == null || path.isBlank()) return;
+        String normalized = normalizePath(path);
+        try {
+            Path target = safePath(ownerId, normalized, false);
+            if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+                mapper.touchAccess(ownerId.toString(), normalized);
+            }
+        } catch (RuntimeException ignored) {
+            LOGGER.warn("文件访问记录写入失败 owner_id={} path={}", ownerId, normalized);
+        }
+    }
+
+    /** 把收藏/访问表中的路径重新解析为当前可见条目，过滤删除、越界和内部路径。 */
+    private Map<String, Object> listTrackedPaths(UUID ownerId, List<Map<String, Object>> rows,
+                                                  int requestedLimit, String mode) {
+        List<Map<String, Object>> visible = new ArrayList<>();
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                if (row == null || row.get("path") == null) continue;
+                String trackedPath = normalizePath(String.valueOf(row.get("path")));
+                if (trackedPath.isBlank()) continue;
+                try {
+                    Path target = safePath(ownerId, trackedPath, false);
+                    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) continue;
+                    rejectSpecial(target);
+                    ListedEntry entry = listedEntry(ownerId, target);
+                    Map<String, Object> item = mapOf(
+                            "name", target.getFileName().toString(),
+                            "path", trackedPath,
+                            "is_dir", entry.directory(),
+                            "size", entry.size(),
+                            "mtime", entry.modifiedAt(),
+                            "favorite", "favorites".equals(mode));
+                    if (!entry.directory()) {
+                        item.put("index", indexStatus(ownerId, trackedPath, currentEmbeddingFingerprint(ownerId)));
+                    }
+                    if ("recent".equals(mode)) {
+                        item.put("last_accessed", row.get("last_accessed_at"));
+                        item.put("access_count", row.get("access_count"));
+                        item.put("favorite", isFavorite(ownerId, trackedPath));
+                    }
+                    visible.add(item);
+                } catch (RuntimeException | IOException ignored) {
+                    // Stale tracking rows are intentionally invisible; cleanup can happen lazily later.
+                }
+            }
+        }
+        boolean hasMore = visible.size() > requestedLimit;
+        if (hasMore) visible = new ArrayList<>(visible.subList(0, requestedLimit));
+        try {
+            return mapOf("path", "", "query", "", "mode", mode,
+                    "items", visible, "limit", requestedLimit, "has_more", hasMore, "disk", diskUsage());
+        } catch (IOException error) {
+            throw new FileStorageException(500, "读取磁盘用量失败", error);
+        }
+    }
+
+    private boolean isFavorite(UUID ownerId, String path) {
+        List<Map<String, Object>> rows = mapper.selectFavoritePaths(ownerId.toString(), List.of(path));
+        return rows != null && !rows.isEmpty();
+    }
+
+    private void decorateFavoriteFlags(UUID ownerId, Map<String, Object> result) {
+        Object rawItems = result.get("items");
+        if (!(rawItems instanceof List<?> items) || items.isEmpty()) return;
+        List<String> paths = new ArrayList<>();
+        for (Object raw : items) {
+            if (raw instanceof Map<?, ?> item && item.get("path") != null) paths.add(String.valueOf(item.get("path")));
+        }
+        if (paths.isEmpty()) return;
+        Set<String> favorites = new HashSet<>();
+        List<Map<String, Object>> rows = mapper.selectFavoritePaths(ownerId.toString(), paths);
+        if (rows != null) for (Map<String, Object> row : rows) {
+            if (row != null && row.get("path") != null) favorites.add(String.valueOf(row.get("path")));
+        }
+        for (Object raw : items) {
+            if (raw instanceof Map<?, ?> item && item.get("path") != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> mutable = (Map<String, Object>) item;
+                mutable.put("favorite", favorites.contains(String.valueOf(item.get("path"))));
+            }
         }
     }
 
@@ -250,6 +461,11 @@ public class MybatisFileStorageService implements FileStorageService {
      */
     @Override
     public Map<String, Object> list(UUID ownerId, String path, String query) {
+        return listByName(ownerId, path, query, FILE_LIST_LIMIT, "all", null, null);
+    }
+
+    private Map<String, Object> listByName(UUID ownerId, String path, String query, int requestedLimit,
+                                           String type, Double modifiedAfter, Double modifiedBefore) {
         Path directory = safePath(ownerId, path, false);
         if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
             throw new FileStorageException(404, "目录不存在");
@@ -257,7 +473,11 @@ public class MybatisFileStorageService implements FileStorageService {
         String normalizedQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         String fingerprint = currentEmbeddingFingerprint(ownerId);
         try (Stream<Path> children = normalizedQuery.isBlank() ? Files.list(directory) : Files.walk(directory)) {
-            List<Path> sorted = retainListLimit(ownerId, directory, normalizedQuery, children);
+            int probeLimit = Math.min(FILE_LIST_LIMIT + 1, Math.max(1, requestedLimit + 1));
+            List<Path> sorted = retainListLimit(ownerId, directory, normalizedQuery, children, probeLimit,
+                    type, modifiedAfter, modifiedBefore);
+            boolean hasMore = sorted.size() > requestedLimit;
+            if (hasMore) sorted = sorted.subList(0, requestedLimit);
             List<ListedEntry> entries = new ArrayList<>(sorted.size());
             for (Path child : sorted) {
                 entries.add(listedEntry(ownerId, child));
@@ -265,6 +485,8 @@ public class MybatisFileStorageService implements FileStorageService {
             synchronizeListedMetadata(ownerId, entries);
 
             List<Map<String, Object>> items = new ArrayList<>(entries.size());
+            Set<String> favoritePaths = favoritePathSet(ownerId,
+                    entries.stream().map(ListedEntry::relativePath).toList());
             for (ListedEntry entry : entries) {
                 Path child = entry.path();
                 rejectSpecial(child);
@@ -273,16 +495,28 @@ public class MybatisFileStorageService implements FileStorageService {
                         "path", entry.relativePath(),
                         "is_dir", entry.directory(),
                         "size", entry.size(),
-                        "mtime", entry.modifiedAt()
+                        "mtime", entry.modifiedAt(),
+                        "favorite", favoritePaths.contains(entry.relativePath())
                 );
                 if (!entry.directory()) item.put("index", indexStatus(ownerId, entry.relativePath(), fingerprint));
                 items.add(item);
             }
             return mapOf("path", normalizePath(path), "query", query == null ? "" : query,
-                    "items", items, "disk", diskUsage());
+                    "type", type, "modified_after", modifiedAfter, "modified_before", modifiedBefore,
+                    "items", items, "limit", requestedLimit, "has_more", hasMore, "disk", diskUsage());
         } catch (IOException error) {
             throw new FileStorageException(500, "读取目录失败", error);
         }
+    }
+
+    private Set<String> favoritePathSet(UUID ownerId, List<String> paths) {
+        if (paths == null || paths.isEmpty()) return Set.of();
+        Set<String> favorites = new HashSet<>();
+        List<Map<String, Object>> rows = mapper.selectFavoritePaths(ownerId.toString(), paths);
+        if (rows != null) for (Map<String, Object> row : rows) {
+            if (row != null && row.get("path") != null) favorites.add(String.valueOf(row.get("path")));
+        }
+        return favorites;
     }
 
     /**
@@ -290,25 +524,55 @@ public class MybatisFileStorageService implements FileStorageService {
      * 建立无界中间集合。遍历仍覆盖搜索目录树，但内存占用固定在列表上限内。
      */
     private List<Path> retainListLimit(UUID ownerId, Path directory, String normalizedQuery,
-                                       Stream<Path> children) {
+                                       Stream<Path> children, int limit, String type,
+                                       Double modifiedAfter, Double modifiedBefore) {
         Comparator<Path> order = Comparator
                 .comparing((Path child) -> !Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS))
                 .thenComparing(child -> child.getFileName().toString().toLowerCase(Locale.ROOT))
                 .thenComparing(child -> relative(ownerId, child).toLowerCase(Locale.ROOT));
-        PriorityQueue<Path> selected = new PriorityQueue<>(FILE_LIST_LIMIT, order.reversed());
+        PriorityQueue<Path> selected = new PriorityQueue<>(limit, order.reversed());
         children
                 .filter(child -> !child.equals(directory))
                 .filter(child -> !isInternal(child.getFileName().toString()))
                 .filter(child -> !hasInternalComponent(relative(ownerId, child)))
                 .filter(child -> normalizedQuery.isBlank()
                         || relative(ownerId, child).toLowerCase(Locale.ROOT).contains(normalizedQuery))
-                .forEach(child -> retainPath(selected, child, order));
+                .filter(child -> matchesFileFilter(child, type, modifiedAfter, modifiedBefore))
+                .forEach(child -> retainPath(selected, child, order, limit));
         return selected.stream().sorted(order).toList();
     }
 
+    private String normalizeTypeFilter(String type) {
+        String normalized = type == null || type.isBlank() ? "all" : type.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("all", "file", "folder", "image", "video", "audio", "pdf", "text").contains(normalized)) {
+            throw new FileStorageException(400, "不支持的文件类型筛选");
+        }
+        return normalized;
+    }
+
+    private boolean matchesFileFilter(Path candidate, String type,
+                                      Double modifiedAfter, Double modifiedBefore) {
+        try {
+            boolean directory = Files.isDirectory(candidate, LinkOption.NOFOLLOW_LINKS);
+            if ("folder".equals(type) && !directory) return false;
+            if ("file".equals(type) && directory) return false;
+            if (directory && !Set.of("all", "file", "folder").contains(type)) return false;
+            if (!directory && !"all".equals(type) && !"file".equals(type)) {
+                String kind = previewKind(suffix(candidate));
+                if (!type.equals(kind)) return false;
+            }
+            double modified = Files.getLastModifiedTime(candidate, LinkOption.NOFOLLOW_LINKS).toMillis() / 1000.0;
+            return (modifiedAfter == null || modified >= modifiedAfter)
+                    && (modifiedBefore == null || modified <= modifiedBefore);
+        } catch (IOException error) {
+            return false;
+        }
+    }
+
     /** 将一条候选路径放入固定大小的 top-k 集合。 */
-    private static void retainPath(PriorityQueue<Path> selected, Path candidate, Comparator<Path> order) {
-        if (selected.size() < FILE_LIST_LIMIT) {
+    private static void retainPath(PriorityQueue<Path> selected, Path candidate, Comparator<Path> order,
+                                   int limit) {
+        if (selected.size() < limit) {
             selected.offer(candidate);
         } else if (order.compare(candidate, selected.peek()) < 0) {
             selected.poll();
@@ -388,6 +652,7 @@ public class MybatisFileStorageService implements FileStorageService {
             Map<String, Object> metadata = mapper.selectByPath(ownerId.toString(), normalizedPath);
             Map<String, Object> indexed = indexStatus(ownerId, normalizedPath, embeddingFingerprint);
             indexed.put("detail", indexDetails(ownerId, normalizedPath, embeddingFingerprint));
+            touchAccess(ownerId, normalizedPath);
             return mapOf(
                     "path", normalizedPath,
                     "name", file.getFileName().toString(),
@@ -439,6 +704,7 @@ public class MybatisFileStorageService implements FileStorageService {
                     .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                     .decode(java.nio.ByteBuffer.wrap(bytes, 0, Math.min(offset, limit)))
                     .toString();
+            touchAccess(ownerId, normalized);
             return mapOf("path", normalized, "name", file.getFileName().toString(),
                     "content", text, "encoding", "UTF-8", "size", size, "truncated", truncated);
         } catch (java.nio.charset.CharacterCodingException error) {
@@ -554,13 +820,24 @@ public class MybatisFileStorageService implements FileStorageService {
                     throw new FileStorageException(409, "目标是目录: " + requested);
                 }
                 syncParentMetadata(ownerId, target.getParent());
+                VersionSnapshot snapshot = null;
+                if (!noclobber && Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                    snapshot = prepareVersionSnapshot(ownerId, target);
+                    mutation.onPublished(snapshot::commit, snapshot::rollback);
+                    snapshot.persist(mapper);
+                    String snapshotPath = relative(ownerId, target);
+                    mutation.onPublished(
+                            () -> pruneVersionSnapshots(ownerId, snapshotPath),
+                            () -> { });
+                }
                 PublishedMove publication = new PublishedMove(ownerId, temp, target, false);
                 mutation.onPublished(publication::commit, publication::rollback);
                 publication.publish();
                 mapper.upsertContent(ownerId.toString(), relative(ownerId, target), size, digests.md5(), digests.sha256());
                 mapper.insertRevision(ownerId.toString(), relative(ownerId, target), size, digests.md5(), digests.sha256());
                 Map<String, Object> metadata = mapper.selectByPath(ownerId.toString(), relative(ownerId, target));
-                long revision = metadata == null ? 1 : longValue(metadata.get("revision"));
+                long revision = metadata == null || metadata.get("revision") == null
+                        ? 1 : longValue(metadata.get("revision"));
                 String publishedPath = relative(ownerId, target);
                 mapper.upsertDedupe(ownerId.toString(), digests.md5(), publishedPath, revision, true);
                 publishChange(ownerId, "upsert", List.of(publishedPath),
@@ -748,7 +1025,8 @@ public class MybatisFileStorageService implements FileStorageService {
         String trashId = UUID.randomUUID().toString();
         Path stored = trashRoot(ownerId).resolve(trashId);
         Map<String, Object> metadata = mapper.selectByPath(ownerId.toString(), original);
-        long revision = metadata == null ? 1 : longValue(metadata.get("revision"));
+        long revision = metadata == null || metadata.get("revision") == null
+                ? 1 : longValue(metadata.get("revision"));
         try (MutationScope mutation = mutationScope()) {
             PublishedMove publication = new PublishedMove(ownerId, source, stored, true);
             mutation.onPublished(publication::commit, publication::rollback);
@@ -870,8 +1148,9 @@ public class MybatisFileStorageService implements FileStorageService {
                 } catch (FileStorageException invalidLegacyPath) {
                     pathExists = true;
                 }
-                if (current != null && sameLong(current.get("revision"), row.get("file_revision")) && !pathExists) {
-                    mapper.deletePrefix(ownerId.toString(), original);
+                if (!pathExists && (current == null || sameLong(current.get("revision"), row.get("file_revision")))) {
+                    if (current != null) mapper.deletePrefix(ownerId.toString(), original);
+                    deleteVersionSnapshots(ownerId, original);
                 }
                 mapper.deleteTrash(ownerId.toString(), id);
                 publishChange(ownerId, "delete", List.of(original), "file-empty-trash:" + ownerId + ":" + id);
@@ -916,8 +1195,9 @@ public class MybatisFileStorageService implements FileStorageService {
                 } catch (FileStorageException invalidLegacyPath) {
                     pathExists = true;
                 }
-                if (current != null && sameLong(current.get("revision"), row.get("file_revision")) && !pathExists) {
-                    mapper.deletePrefix(ownerId.toString(), original);
+                if (!pathExists && (current == null || sameLong(current.get("revision"), row.get("file_revision")))) {
+                    if (current != null) mapper.deletePrefix(ownerId.toString(), original);
+                    deleteVersionSnapshots(ownerId, original);
                 }
                 if (mapper.deleteTrash(ownerId.toString(), id) > 0) {
                     removed++;
@@ -928,6 +1208,18 @@ public class MybatisFileStorageService implements FileStorageService {
             }
         }
         return mapOf("removed", removed, "retention_days", days);
+    }
+
+    /** 永久删除已确认不再存在的原路径时同步回收其版本快照文件和元数据。 */
+    private void deleteVersionSnapshots(UUID ownerId, String path) throws IOException {
+        List<Map<String, Object>> rows = mapper.selectVersionSnapshots(ownerId.toString(), path, 1000);
+        if (rows == null) return;
+        for (Map<String, Object> row : rows) {
+            Path snapshot = safeInternalVersion(ownerId, String.valueOf(row.get("snapshot_path")));
+            Files.deleteIfExists(snapshot);
+            mapper.deleteVersionSnapshot(ownerId.toString(), String.valueOf(row.get("version_id")));
+        }
+        forceDirectory(ownerRoot(ownerId).resolve(".versions"));
     }
 
     /**
@@ -1005,6 +1297,48 @@ public class MybatisFileStorageService implements FileStorageService {
         return new MutationScope(storageLock());
     }
 
+    /** 在覆盖发布前把旧普通文件复制到 owner 私有版本区，并返回可补偿快照 artifact。 */
+    private VersionSnapshot prepareVersionSnapshot(UUID ownerId, Path target) throws IOException {
+        rejectSpecial(target);
+        String path = relative(ownerId, target);
+        Map<String, Object> metadata = mapper.selectByPath(ownerId.toString(), path);
+        long sourceRevision = metadata == null || metadata.get("revision") == null
+                ? 1 : longValue(metadata.get("revision"));
+        Digests digests = digest(target);
+        long size = Files.size(target);
+        UUID id = UUID.randomUUID();
+        Path versions = ownerRoot(ownerId).resolve(".versions");
+        Files.createDirectories(versions);
+        rejectSymlinkComponents(ownerRoot(ownerId), versions);
+        Path snapshot = versions.resolve(id + ".bin");
+        try {
+            Files.copy(target, snapshot, LinkOption.NOFOLLOW_LINKS);
+            forcePublishedPath(snapshot);
+            forceDirectory(versions);
+        } catch (IOException error) {
+            Files.deleteIfExists(snapshot);
+            throw error;
+        }
+        return new VersionSnapshot(ownerId, id, path, sourceRevision,
+                ".versions/" + id + ".bin", snapshot, size, digests);
+    }
+
+    /** 提交后按固定上限回收最旧快照，避免版本能力无限吞噬 owner 存储空间。 */
+    private void pruneVersionSnapshots(UUID ownerId, String path) throws IOException {
+        List<Map<String, Object>> rows = mapper.selectVersionSnapshots(ownerId.toString(), path,
+                MAX_VERSION_SNAPSHOTS + 32);
+        if (rows == null || rows.size() <= MAX_VERSION_SNAPSHOTS) return;
+        Path versions = ownerRoot(ownerId).resolve(".versions");
+        for (int index = MAX_VERSION_SNAPSHOTS; index < rows.size(); index++) {
+            Map<String, Object> row = rows.get(index);
+            String id = String.valueOf(row.get("version_id"));
+            Path snapshot = safeInternalVersion(ownerId, String.valueOf(row.get("snapshot_path")));
+            Files.deleteIfExists(snapshot);
+            mapper.deleteVersionSnapshot(ownerId.toString(), id);
+        }
+        forceDirectory(versions);
+    }
+
     /** 可抛出 I/O 异常的文件提交或回滚动作。 */
     @FunctionalInterface
     private interface MutationAction {
@@ -1015,6 +1349,49 @@ public class MybatisFileStorageService implements FileStorageService {
         void run() throws IOException;
     }
 
+    /** 覆盖发布前的真实内容快照，提交后保留，回滚时删除文件和行。 */
+    private final class VersionSnapshot {
+        private final UUID ownerId;
+        private final UUID id;
+        private final String path;
+        private final long sourceRevision;
+        private final String snapshotPath;
+        private final Path file;
+        private final long size;
+        private final Digests digests;
+
+        private VersionSnapshot(UUID ownerId, UUID id, String path, long sourceRevision,
+                                String snapshotPath, Path file, long size, Digests digests) {
+            this.ownerId = ownerId;
+            this.id = id;
+            this.path = path;
+            this.sourceRevision = sourceRevision;
+            this.snapshotPath = snapshotPath;
+            this.file = file;
+            this.size = size;
+            this.digests = digests;
+        }
+
+        private void persist(FileMapper fileMapper) {
+            fileMapper.insertVersionSnapshot(id.toString(), ownerId.toString(), path, sourceRevision,
+                    snapshotPath, size, digests.md5(), digests.sha256());
+        }
+
+        private void commit() {
+            // The snapshot is the retained historical artifact; no commit cleanup is needed.
+        }
+
+        private void rollback() throws IOException {
+            fileMapperDelete();
+            Files.deleteIfExists(file);
+            forceDirectory(file.getParent());
+        }
+
+        private void fileMapperDelete() {
+            mapper.deleteVersionSnapshot(ownerId.toString(), id.toString());
+        }
+    }
+
     /**
      * 把可见文件变更与当前 Spring 事务的最终状态绑定，并在完成前持续持有 storage lock。
      * <p>无事务同步时 {@link #complete()} 立即提交；有事务同步时由 afterCompletion 决定清理
@@ -1022,8 +1399,8 @@ public class MybatisFileStorageService implements FileStorageService {
      */
     private final class MutationScope implements AutoCloseable {
         private final StorageLock storageLock;
-        private MutationAction commitAction = () -> { };
-        private MutationAction rollbackAction = () -> { };
+        private final List<MutationAction> commitActions = new ArrayList<>();
+        private final List<MutationAction> rollbackActions = new ArrayList<>();
         private boolean published;
         private boolean deferred;
         private boolean finished;
@@ -1042,9 +1419,8 @@ public class MybatisFileStorageService implements FileStorageService {
          * @param rollbackAction 数据库未提交时恢复发布前内容的动作。
          */
         private void onPublished(MutationAction commitAction, MutationAction rollbackAction) {
-            if (published) throw new IllegalStateException("一个文件变更范围只能登记一次发布");
-            this.commitAction = commitAction;
-            this.rollbackAction = rollbackAction;
+            this.commitActions.add(commitAction);
+            this.rollbackActions.add(rollbackAction);
             this.published = true;
         }
 
@@ -1082,8 +1458,14 @@ public class MybatisFileStorageService implements FileStorageService {
             if (finished) return;
             try {
                 if (published) {
-                    if (committed) commitAction.run();
-                    else rollbackAction.run();
+                    List<MutationAction> actions = committed ? commitActions : rollbackActions;
+                    if (committed) {
+                        for (MutationAction action : actions) action.run();
+                    } else {
+                        for (int index = actions.size() - 1; index >= 0; index--) {
+                            actions.get(index).run();
+                        }
+                    }
                 }
             } catch (Exception error) {
                 if (committed) {
@@ -1104,7 +1486,9 @@ public class MybatisFileStorageService implements FileStorageService {
         /** 无事务同步时提交文件变更；提交后的清理失败不把已发布操作改报为失败。 */
         private void commitNow() {
             try {
-                if (published) commitAction.run();
+                if (published) {
+                    for (MutationAction action : commitActions) action.run();
+                }
             } catch (Exception error) {
                 LOGGER.warn("文件变更已发布但 artifact 清理失败，将保守保留: {}", root, error);
             } finally {
@@ -1123,7 +1507,11 @@ public class MybatisFileStorageService implements FileStorageService {
          */
         private void rollbackNow(RuntimeException original) {
             try {
-                if (published) rollbackAction.run();
+                if (published) {
+                    for (int index = rollbackActions.size() - 1; index >= 0; index--) {
+                        rollbackActions.get(index).run();
+                    }
+                }
             } catch (Exception rollbackError) {
                 original.addSuppressed(rollbackError);
             } finally {
@@ -1322,6 +1710,13 @@ public class MybatisFileStorageService implements FileStorageService {
             PublishedMove publication = new PublishedMove(ownerId, sourcePath, target, true);
             mutation.onPublished(publication::commit, publication::rollback);
             publication.publish();
+            // Tracking rows are path keyed; move them with the visible tree while the
+            // same transaction still protects the filesystem and metadata update.
+            mapper.deleteFavoritePrefix(ownerId.toString(), targetRelative);
+            mapper.deleteAccessPrefix(ownerId.toString(), targetRelative);
+            mapper.moveFavoritePrefix(ownerId.toString(), sourceRelative, targetRelative);
+            mapper.moveAccessPrefix(ownerId.toString(), sourceRelative, targetRelative);
+            mapper.moveVersionSnapshotPrefix(ownerId.toString(), sourceRelative, targetRelative);
             mapper.deletePrefix(ownerId.toString(), sourceRelative);
             mapper.deletePrefix(ownerId.toString(), targetRelative);
             refreshMetadata(ownerId, target);
@@ -1499,6 +1894,18 @@ public class MybatisFileStorageService implements FileStorageService {
         return candidate;
     }
 
+    /** 将数据库中的版本快照路径限制在当前 owner 的 .versions 子树内。 */
+    private Path safeInternalVersion(UUID ownerId, String stored) {
+        Path base = ownerRoot(ownerId);
+        Path versions = base.resolve(".versions").normalize();
+        Path candidate = base.resolve(stored.replace('\\', '/')).normalize();
+        if (!candidate.startsWith(versions) || candidate.equals(versions)) {
+            throw new FileStorageException(403, "非法版本快照路径");
+        }
+        rejectSymlinkComponents(base, candidate);
+        return candidate;
+    }
+
     /**
      * 检查 base 到 candidate 之间的每个路径组件是否为符号链接。
      * @param base 已确认安全的路径基准。
@@ -1621,20 +2028,33 @@ public class MybatisFileStorageService implements FileStorageService {
         Map<String, Object> result = new LinkedHashMap<>();
         if (raw == null) {
             result.put("text_indexed", false);
+            result.put("vision_indexed", false);
+            result.put("vector_type", null);
             result.put("vectorized", false);
             result.put("vector_status", "not_indexed");
             result.put("chunk_count", 0);
+            result.put("text_chunk_count", 0);
+            result.put("vision_chunk_count", 0);
             result.put("vector_chunks", 0);
+            result.put("text_vector_chunks", 0);
+            result.put("vision_vector_chunks", 0);
             result.put("stored_vector_chunks", 0);
+            result.put("text_stored_vector_chunks", 0);
+            result.put("vision_stored_vector_chunks", 0);
             result.put("embedding_configured", fingerprint != null);
             return result;
         }
         boolean textIndexed = Boolean.TRUE.equals(raw.get("text_indexed"));
+        boolean visionIndexed = Boolean.TRUE.equals(raw.get("vision_indexed"));
+        int textChunks = intValue(raw.get("text_chunk_count"));
+        int visionChunks = intValue(raw.get("vision_chunk_count"));
         int chunks = intValue(raw.get("chunk_count"));
         int stored = intValue(raw.get("stored_vector_chunks"));
         int current = intValue(raw.get("vector_chunks"));
+        int textCurrent = intValue(raw.get("text_vector_chunks"));
+        int visionCurrent = intValue(raw.get("vision_vector_chunks"));
         String status;
-        if (!textIndexed) status = "not_indexed";
+        if (!textIndexed && !visionIndexed) status = "not_indexed";
         else if (chunks == 0) status = "indexed";
         else if (fingerprint == null) status = stored > 0 ? "stale" : "not_configured";
         else if (current == chunks) status = "vectorized";
@@ -1642,11 +2062,20 @@ public class MybatisFileStorageService implements FileStorageService {
         else if (stored > 0) status = "stale";
         else status = "pending";
         result.put("text_indexed", textIndexed);
+        result.put("vision_indexed", visionIndexed);
+        result.put("vector_type", textIndexed && visionIndexed ? "mixed"
+                : visionIndexed ? "vision" : textIndexed ? "text" : null);
         result.put("vectorized", "vectorized".equals(status));
         result.put("vector_status", status);
         result.put("chunk_count", chunks);
+        result.put("text_chunk_count", textChunks);
+        result.put("vision_chunk_count", visionChunks);
         result.put("vector_chunks", current);
+        result.put("text_vector_chunks", textCurrent);
+        result.put("vision_vector_chunks", visionCurrent);
         result.put("stored_vector_chunks", stored);
+        result.put("text_stored_vector_chunks", intValue(raw.get("text_stored_vector_chunks")));
+        result.put("vision_stored_vector_chunks", intValue(raw.get("vision_stored_vector_chunks")));
         result.put("embedding_configured", fingerprint != null);
         return result;
     }
@@ -1676,6 +2105,7 @@ public class MybatisFileStorageService implements FileStorageService {
 
         detail.put("available", true);
         detail.put("document_id", documentId);
+        detail.put("vector_type", stringValue(first.get("vector_type")));
         detail.put("source_revision", first.get("source_revision"));
         detail.put("extractor_version", first.get("extractor_version"));
         detail.put("updated", first.get("updated"));
@@ -1694,6 +2124,7 @@ public class MybatisFileStorageService implements FileStorageService {
             if (chunkId.isBlank()) continue;
             Map<String, Object> chunk = new LinkedHashMap<>();
             chunk.put("id", chunkId);
+            chunk.put("vector_type", stringValue(row.get("vector_type")));
             chunk.put("index", row.get("chunk_index"));
             chunk.put("chunk_version", row.get("chunk_version"));
             chunk.put("source_revision", row.get("chunk_source_revision"));

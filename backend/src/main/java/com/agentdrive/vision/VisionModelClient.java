@@ -171,7 +171,7 @@ public final class VisionModelClient {
                 + "不要编造不可见事实。只返回一个 JSON 对象，不要 Markdown 代码围栏。文件路径仅供上下文："
                 + path + "。JSON 必须包含以下字段："
                 + "schema_version(固定为 image-description-v1), title, summary, scene, objects(数组，"
-                + "每项含 label/count/attributes), text_in_image(字符串数组), colors(字符串数组), "
+                + "每项含 label/count/attributes), colors(字符串数组), "
                 + "tags(字符串数组), people_count(整数), time_of_day(字符串或 null), confidence(0 到 1 数字)。"
                 + "看不清或无法确定的字段使用空字符串、空数组或 null。";
     }
@@ -189,7 +189,6 @@ public final class VisionModelClient {
         result.put("summary", text(raw, "summary", 1200));
         result.put("scene", text(raw, "scene", 400));
         result.put("objects", objects(raw.path("objects")));
-        result.put("text_in_image", strings(raw.path("text_in_image"), 20, 500));
         result.put("colors", strings(raw.path("colors"), 20, 80));
         result.put("tags", strings(raw.path("tags"), 30, 80));
         result.put("people_count", Math.max(0, Math.min(10000, raw.path("people_count").asInt(0))));

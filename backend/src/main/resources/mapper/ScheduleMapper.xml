@@ -9,6 +9,7 @@
         priority, max_attempts, timezone,
         EXTRACT(EPOCH FROM next_run_at) AS next_run_at,
         last_task_id::text AS last_task_id,
+        EXTRACT(EPOCH FROM last_run_at) AS last_run_at,
         last_error,
         EXTRACT(EPOCH FROM created_at) AS created_at,
         EXTRACT(EPOCH FROM updated_at) AS updated_at
@@ -79,10 +80,21 @@
         UPDATE task_schedules
         SET next_run_at = to_timestamp(#{nextRunAt}),
             last_task_id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid),
+            last_run_at = now(),
             last_error = NULL,
             updated_at = now()
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND id = CAST(#{scheduleId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <update id="markManualRun">
+        UPDATE task_schedules
+        SET last_task_id = CAST(#{taskId, jdbcType=VARCHAR} AS uuid),
+            last_run_at = now(),
+            last_error = NULL,
+            updated_at = now()
+        WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND name = #{name, jdbcType=VARCHAR}
     </update>
 
     <update id="disableInvalid">

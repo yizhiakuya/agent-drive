@@ -12,6 +12,9 @@ import java.util.Map;
  */
 @Mapper
 public interface TaskWorkerMapper {
+    /** Count workers whose heartbeat is within the public readiness window. */
+    int selectOnlineWorkerCount();
+
     /**
      * 插入或刷新 Worker 进程心跳。
      * SQL 使用 Worker ID 做幂等键，允许 Worker 空闲时仍保持在线状态。
