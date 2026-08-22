@@ -9,10 +9,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
-import java.util.concurrent.Callable;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /**
  * 暴露当前用户最近一次自动化报告的只读端点。
@@ -71,14 +71,4 @@ public final class AutomationController {
         return reports.latestFor(userId);
     }
 
-    /**
-     * 将文件扫描包装到 bounded-elastic 调度器。
-     *
-     * @param operation 要执行的同步报告查询。
-     * @param <T> 查询结果类型。
-     * @return 异步报告查询结果。
-     */
-    private <T> Mono<T> blocking(Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
-    }
 }

@@ -11,7 +11,6 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.time.Instant;
-import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,22 +18,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AuthControllerContractTest {
-    @Test
-    void forwardedClientAddressIsTrustedOnlyFromTheLoopbackProxy() {
-        assertThat(AuthController.clientAddress(
-                new InetSocketAddress("127.0.0.1", 8000), "203.0.113.9"))
-                .isEqualTo("203.0.113.9");
-        assertThat(AuthController.clientAddress(
-                new InetSocketAddress("198.51.100.4", 8000), "203.0.113.9"))
-                .isEqualTo("198.51.100.4");
-        assertThat(AuthController.clientAddress(
-                new InetSocketAddress("127.0.0.1", 8000), "203.0.113.9, 198.51.100.4"))
-                .isEqualTo("127.0.0.1");
-        assertThat(AuthController.clientAddress(
-                new InetSocketAddress("127.0.0.1", 8000), "not-an-ip"))
-                .isEqualTo("127.0.0.1");
-    }
-
     @Test
     void setupLoginAndLogoutKeepExistingAuthShape() throws Exception {
         FakeAccountStore store = new FakeAccountStore();

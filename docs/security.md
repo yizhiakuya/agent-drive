@@ -72,7 +72,8 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 
 ## 6. 日志、备份与恢复
 
-- Java API 使用统一 SLF4J/Logback，生产日志进入 systemd journal；聊天链路按 request ID 检索，敏感字段不写普通日志。
+- Java API 使用统一 SLF4J/Logback，生产日志进入 systemd journal。所有 `/api` 请求复用合法 `X-Request-ID`/`X-Correlation-ID`/`traceparent` 或生成 UUID，响应回写 `X-Request-ID`；完成日志只包含 method、匹配路由模板、status、duration、可信 client IP 和 terminal，不记录 query value、path parameter、header 或 body。聊天链路继续按同一 request ID 检索。
+- 未分类 500 对客户端只返回稳定通用 detail，服务端以隔离 cause/suppressed 的脱敏 throwable 记录真实原因；API key、Cookie、Bearer、设备 token、query credential、完整消息和文件内容不进入普通日志。
 - `agent-drive-java-backup.timer` 每日调用 `scripts/backup-java.sh`，将 PostgreSQL dump、owner 文件根和 manifest 归档到 `/opt/agent-drive-java/backups/`，保留最近 7 份并生成 SHA-256 校验文件；环境密钥位于 0600 的 `/etc/agent-drive-java/java.env`，均不进 git。仓库不再提供旧 Python/SQLite 定时备份脚本。
 - 只有处理 legacy 恢复资料时才需要 SQLite snapshot；必须通过 SQLite backup API 生成一致快照，禁止直接打包活动 WAL 三件套。
 - 认证表、设备撤销状态和 PostgreSQL schema 异常时服务失败关闭，不得把错误当作“未初始化”重新开放首次设密。

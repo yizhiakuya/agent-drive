@@ -1,5 +1,6 @@
 package com.agentdrive.api.vision;
 
+import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.index.IndexPaths;
 import com.agentdrive.vision.VisionDescriptionService;
@@ -12,7 +13,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
@@ -51,8 +51,8 @@ public final class VisionController {
     public Mono<Map<String, Object>> describe(@RequestBody(required = false) DescribeRequest request,
                                                ServerWebExchange exchange) {
         List<String> paths = normalize(request == null ? null : request.files());
-        return principalResolver.resolve(exchange).flatMap(principal -> Mono.fromCallable(
-                () -> vision.describeFiles(principal.userId(), paths)).subscribeOn(Schedulers.boundedElastic()));
+        return principalResolver.resolve(exchange).flatMap(principal -> ReactiveExecution.blocking(
+                () -> vision.describeFiles(principal.userId(), paths)));
     }
 
     /**

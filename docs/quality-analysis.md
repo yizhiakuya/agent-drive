@@ -14,7 +14,7 @@
 
 每次按以下顺序检查：
 
-1. 门禁：Maven test/package、前端 lint/Vitest/build、Android JVM 单测。
+1. 门禁：Java 21/Maven 3.9 Enforcer、Maven test/package、前端 lint/Vitest/build、Android JVM 单测。
 2. 风格：命名、Javadoc、TypeScript/React 约定、UI token、错误处理和相邻代码一致性。
 3. 耦合与重复：模块依赖方向、重复请求封装、重复 UI 和跨层访问。
 4. 静态质量：编译、类型、ESLint、死导出、失效 suppress、TODO/FIXME 和临时文件。
@@ -32,6 +32,9 @@
 cd backend
 mvn -q test
 mvn -q -DskipTests package
+
+# 测试完成后检查 target/site/jacoco/index.html；CI 保存为 backend-jacoco artifact。
+# 当前用于趋势观察，不以历史代码的一次性阈值阻断构建。
 
 # 真实持久化门禁必须设置 AGENT_DRIVE_JDBC_TEST_URL，并启用 db profile；未设置时集成用例会被跳过，不能记为完整通过。
 
@@ -85,6 +88,7 @@ rg -n "console\.|TODO|FIXME" frontend/src backend/src -g "*.ts" -g "*.tsx" -g "*
 
 - **架构**：Java 21 + Spring Boot/WebFlux API、PostgreSQL/pgvector；Next.js 16 静态导出前端；Capacitor 7 Android 壳。当前没有 Java 任务 Worker，索引/视觉/向量由业务 API 直接执行。详见 [`architecture.md`](architecture.md)。
 - **技术栈**：Java 21、Spring Modulith、LangChain4j、MyBatis-Plus、Flyway、PostgreSQL/pgvector、Tika、视觉模型/Jina；TypeScript 5、React 19、Tailwind 4、shadcn/ui、Vitest；AndroidX Security Crypto/WorkManager。
-- **当前达标项**：backend_api 已按 catalog/router 和领域 handler 分层；聊天流已拆出事件、状态和帧模块；前端文件页有请求代次保护；文件列表使用有界 top-k 和批量 metadata upsert；Agent 工具不捕获 JVM `Error`；锁序、原子发布、失败关闭和数据库集成测试已纳入门禁。
-- **主要复杂度热点**：文件存储、Agent runtime、文件页、聊天流和 Android `SyncEngine`。后续重构应以测试和行为不变量为前提，不在质量分析阶段直接改写。
+- **当前达标项**：backend_api 已按 catalog/router 和领域 handler 分层；API 请求元数据/完成日志和 WebFlux 阻塞执行边界已统一；聊天流已拆出事件、状态、帧、模型目录和文件引用模块；文件页上传队列已独立并保留请求代次保护；Java/Maven 工具链和 JaCoCo 报告已进入 Maven 生命周期；Agent 工具不捕获 JVM `Error`；锁序、原子发布、失败关闭和数据库集成测试已纳入门禁。
+- **覆盖率基线**：2026-08-22 全量 PostgreSQL 门禁下 JaCoCo instruction 64.3%、branch 46.0%；先用 CI artifact 跟踪趋势，新增/变更行为仍要求聚焦回归，不用低价值测试追逐一次性数字。
+- **主要复杂度热点**：文件存储、Agent runtime、文件页剩余业务编排、聊天会话编排和 Android `SyncEngine`。后续重构应以直接 hook/领域测试和行为不变量为前提，不在质量分析阶段直接改写。
 - **生产状态**：Java API 已运行，生产入口为 nginx `13311`；旧 Python source/unit 和历史任务表不属于运行时，旧资料只在 fixture/cutover backup 中保留。

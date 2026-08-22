@@ -767,8 +767,6 @@ public class MybatisFileStorageService implements FileStorageService {
                         ? 1 : longValue(metadata.get("revision"));
                 String publishedPath = relative(ownerId, target);
                 mapper.upsertDedupe(ownerId.toString(), digests.md5(), publishedPath, revision, true);
-                publishChange(ownerId, "upsert", List.of(publishedPath),
-                        "file-change:" + ownerId + ":" + publishedPath + ":" + revision);
                 mutation.complete();
                 return mapOf("uploaded", mapOf("path", publishedPath, "size", size), "indexed", null);
             }
@@ -925,8 +923,6 @@ public class MybatisFileStorageService implements FileStorageService {
                     () -> rollbackPublishedCopy(transaction));
             mapper.deletePrefix(ownerId.toString(), relative(ownerId, target));
             refreshMetadata(ownerId, target);
-            publishChange(ownerId, "copy", List.of(relative(ownerId, target)),
-                    "file-copy:" + ownerId + ":" + relative(ownerId, target));
             mutation.complete();
             return mapOf("copied", normalizePath(source) + " → " + normalizePath(destination));
         } catch (IOException error) {
@@ -959,7 +955,6 @@ public class MybatisFileStorageService implements FileStorageService {
             mutation.onPublished(publication::commit, publication::rollback);
             publication.publish();
             mapper.insertTrash(trashId, ownerId.toString(), original, ".trash/" + trashId, revision);
-            publishChange(ownerId, "delete", List.of(original), "file-delete:" + ownerId + ":" + trashId);
             long size = Files.isRegularFile(stored, LinkOption.NOFOLLOW_LINKS) ? Files.size(stored) : 0;
             mutation.complete();
             return mapOf("path", original, "trash_id", trashId, "trash_path", trashId,
@@ -1035,8 +1030,6 @@ public class MybatisFileStorageService implements FileStorageService {
             publication.publish();
             mapper.deleteTrash(ownerId.toString(), String.valueOf(row.get("trash_id")));
             refreshMetadata(ownerId, target);
-            publishChange(ownerId, "upsert", List.of(original),
-                    "file-restore:" + ownerId + ":" + row.get("trash_id"));
             mutation.complete();
             return mapOf("restored", original);
         } catch (FileStorageException error) {
@@ -1080,7 +1073,6 @@ public class MybatisFileStorageService implements FileStorageService {
                     if (current != null) mapper.deletePrefix(ownerId.toString(), original);
                     deferVersionSnapshotCleanup(mutation, ownerId, original);
                 }
-                publishChange(ownerId, "delete", List.of(original), "file-empty-trash:" + ownerId + ":" + id);
             }
             mutation.complete();
         } catch (IOException error) {
@@ -1129,7 +1121,6 @@ public class MybatisFileStorageService implements FileStorageService {
                     deferVersionSnapshotCleanup(mutation, ownerId, original);
                 }
                 removed++;
-                publishChange(ownerId, "delete", List.of(original), "file-cleanup-trash:" + ownerId + ":" + id);
             }
             mutation.complete();
         } catch (IOException error) {
@@ -1186,17 +1177,6 @@ public class MybatisFileStorageService implements FileStorageService {
         } catch (IOException error) {
             throw new FileStorageException(500, "清理上传临时文件失败", error);
         }
-    }
-
-    /**
-     * 保留文件 mutation 的统一通知调用点；当前索引由显式业务 operation 执行，因此不写 outbox。
-     * @param ownerId 数据所属用户的唯一标识。
-     * @param action 文件变更动作，例如 {@code upsert}、{@code move} 或 {@code delete}。
-     * @param paths 已经发生变化的 owner 相对路径列表。
-     * @param idempotencyKey 兼容旧调用方的幂等标识。
-     */
-    private void publishChange(UUID ownerId, String action, List<String> paths, String idempotencyKey) {
-        // File mutations remain durable; indexing is an explicit synchronous business operation.
     }
 
     /**
@@ -1653,8 +1633,6 @@ public class MybatisFileStorageService implements FileStorageService {
             mapper.deletePrefix(ownerId.toString(), sourceRelative);
             mapper.deletePrefix(ownerId.toString(), targetRelative);
             refreshMetadata(ownerId, target);
-            publishChange(ownerId, "move", List.of(sourceRelative, targetRelative),
-                    "file-move:" + ownerId + ":" + sourceRelative + "->" + targetRelative);
             mutation.complete();
             return mapOf(resultKey, normalizePath(source) + " → " + normalizePath(destination));
         } catch (FileStorageException error) {

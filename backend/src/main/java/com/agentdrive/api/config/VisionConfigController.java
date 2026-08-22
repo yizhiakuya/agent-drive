@@ -14,10 +14,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
 import java.util.UUID;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /**
  * 提供 owner-scoped 视觉模型配置读取、保存和连接测试接口。
@@ -129,16 +130,6 @@ public final class VisionConfigController {
      */
     public Map<String, Object> saveForOwner(UUID userId, String provider, String baseUrl, String apiKey, String model) {
         return configs.save(userId, provider, baseUrl, apiKey, model);
-    }
-
-    /**
-     * 把阻塞的数据库和 provider 测试移出 WebFlux 事件循环。
-     * @param operation 要执行的配置操作。
-     * @param <T> 返回值类型。
-     * @return bounded-elastic 调度后的异步结果。
-     */
-    private <T> Mono<T> blocking(java.util.concurrent.Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listFiles, listFavorites, listRecent, setFavorite, uploadFile, getFileInfo, getFileContent, renameFile, moveFile, copyFile, mkdir,
+import { listFiles, listFavorites, listRecent, setFavorite, getFileInfo, getFileContent, renameFile, moveFile, copyFile, mkdir,
   deleteToTrash, listTrash, restoreFromTrash, emptyTrash, FileInfo, FileItem, FileSearchMode, FileTypeFilter, fileDownloadUrl } from "@/lib/api/files";
 import FilePreview from "./FilePreview";
 import FileDetails, { indexStatusLabel } from "./FileDetails";
@@ -45,6 +45,8 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import UploadQueueBar from "./UploadQueueBar";
+import { useUploadQueue } from "./useUploadQueue";
 
 /** 把后端返回的 cosine 相似度转换成适合文件列表展示的百分比。 */
 function searchScoreLabel(score: number | null | undefined) {
@@ -54,7 +56,6 @@ function searchScoreLabel(score: number | null | undefined) {
 
 type FileActionItem = { name: string; path: string; is_dir: boolean };
 type FileSort = "name" | "mtime" | "size";
-type UploadEntry = { id: string; name: string; status: "queued" | "uploading" | "succeeded" | "failed" | "cancelled"; progress: number; error?: string };
 
 function isCompactViewport() {
   return typeof window !== "undefined"
@@ -115,8 +116,6 @@ export default function FilePage() {
   const [modifiedBeforeInput, setModifiedBeforeInput] = useState("");
   const [searchHasMore, setSearchHasMore] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
-  const [uploading, setUploading] = useState(false);
-  const [uploadQueue, setUploadQueue] = useState<UploadEntry[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
   const [trashItems, setTrashItems] = useState<{ path: string; trash_id: string; deleted_at: number; size: number; is_dir: boolean }[]>([]);
@@ -130,14 +129,11 @@ export default function FilePage() {
   const queryRef = useRef("");
   const searchModeRef = useRef<FileSearchMode>("name");
   const filtersRef = useRef<{ type: FileTypeFilter; modifiedAfter: string; modifiedBefore: string; minScore: string }>({ type: "all", modifiedAfter: "", modifiedBefore: "", minScore: "" });
-  const cancelledUploadsRef = useRef(new Set<string>());
   const listRequestRef = useRef(0);
   const selectionRequestRef = useRef(0);
   const contentRequestRef = useRef(0);
   const indexingRequestRef = useRef(0);
   const trashRequestRef = useRef(0);
-  const uploadFilesRef = useRef(new Map<string, File>());
-  const uploadControllersRef = useRef(new Map<string, AbortController>());
   const frontendActions = useAppStore((s) => s.frontendActions);
   const consumeFrontendAction = useAppStore((s) => s.consumeFrontendAction);
   const processingFrontendActionRef = useRef<string | null>(null);
@@ -194,6 +190,14 @@ export default function FilePage() {
       if (request === listRequestRef.current) setListLoading(false);
     }
   }, []);
+
+  const refreshAfterUpload = useCallback(() => {
+    void load(pathRef.current, queryRef.current, searchModeRef.current);
+  }, [load]);
+  const { uploading, uploadQueue, uploadFiles, cancelUpload, retryUpload } = useUploadQueue(
+    pathRef,
+    refreshAfterUpload,
+  );
 
   const loadCollection = useCallback(async (kind: "favorites" | "recent") => {
     const request = ++listRequestRef.current;
@@ -268,8 +272,6 @@ export default function FilePage() {
     contentRequestRef.current += 1;
     indexingRequestRef.current += 1;
     trashRequestRef.current += 1;
-    uploadControllersRef.current.forEach((controller) => controller.abort());
-    uploadControllersRef.current.clear();
   }, []);
   useEffect(() => {
     function onFilesChanged() {
@@ -315,84 +317,6 @@ export default function FilePage() {
         processingFrontendActionRef.current = null;
       });
   }, [consumeFrontendAction, frontendActions]);
-
-  async function uploadFiles(files: File[]) {
-    if (files.length === 0) return;
-    const entries = files.map((file, index) => ({
-      id: `${Date.now()}-${index}-${file.name}-${Math.random().toString(36).slice(2, 8)}`,
-      name: file.name,
-      status: "queued" as const,
-      progress: 0,
-    }));
-    entries.forEach((entry, index) => uploadFilesRef.current.set(entry.id, files[index]));
-    setUploadQueue((current) => [...current, ...entries].slice(-12));
-    setUploading(true);
-    try {
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        const entry = entries[index];
-        if (cancelledUploadsRef.current.has(entry.id)) {
-          setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "cancelled" } : item));
-          uploadFilesRef.current.delete(entry.id);
-          continue;
-        }
-        setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "uploading" } : item));
-        const controller = new AbortController();
-        uploadControllersRef.current.set(entry.id, controller);
-        try {
-          await uploadFile(file, pathRef.current,
-            (progress) => setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, progress } : item)),
-            controller.signal);
-          setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "succeeded", progress: 100 } : item));
-          uploadFilesRef.current.delete(entry.id);
-          emitToast({ kind: "ok", text: `已上传 ${file.name}` });
-        } catch (error) {
-          const cancelled = controller.signal.aborted;
-          setUploadQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) } : item));
-          if (!cancelled) emitToast({ kind: "error", text: `上传 ${file.name} 失败: ${error}` });
-        }
-        finally { uploadControllersRef.current.delete(entry.id); }
-      }
-      void load(pathRef.current, queryRef.current, searchModeRef.current);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function doUpload(file: File) {
-    await uploadFiles([file]);
-  }
-
-  function cancelQueuedUpload(id: string) {
-    cancelledUploadsRef.current.add(id);
-    uploadControllersRef.current.get(id)?.abort();
-    setUploadQueue((current) => current.map((item) => item.id === id && item.status === "queued" ? { ...item, status: "cancelled" } : item));
-  }
-
-  async function retryUpload(id: string) {
-    const file = uploadFilesRef.current.get(id);
-    if (!file || uploading) return;
-    setUploading(true);
-    const controller = new AbortController();
-    uploadControllersRef.current.set(id, controller);
-    setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: "uploading", progress: 0, error: undefined } : item));
-    try {
-      await uploadFile(file, pathRef.current,
-        (progress) => setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, progress } : item)),
-        controller.signal);
-      setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: "succeeded", progress: 100 } : item));
-      uploadFilesRef.current.delete(id);
-      emitToast({ kind: "ok", text: `已重试上传 ${file.name}` });
-      void load(pathRef.current, queryRef.current, searchModeRef.current);
-    } catch (error) {
-      const cancelled = controller.signal.aborted;
-      setUploadQueue((current) => current.map((item) => item.id === id ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) } : item));
-      if (!cancelled) emitToast({ kind: "error", text: `重试上传 ${file.name} 失败: ${error}` });
-    } finally {
-      uploadControllersRef.current.delete(id);
-      setUploading(false);
-    }
-  }
 
   async function openItem(it: FileItem) {
     // 目录点击直接进入，避免移动端先打开预览覆盖层后无法再次触达列表。
@@ -719,7 +643,7 @@ export default function FilePage() {
         e.preventDefault();
         setDragOver(false);
         const file = e.dataTransfer?.files?.[0];
-        if (file) doUpload(file);
+        if (file) void uploadFiles([file]);
       }}
     >
       <div className="flex-1 flex flex-col min-w-0 gap-3 bg-bg p-3 sm:p-4">
@@ -747,7 +671,7 @@ export default function FilePage() {
           <input ref={fileRef} type="file" multiple style={{ display: "none" }}
                  onChange={async (e) => { const files = Array.from(e.target.files || []); if (files.length) { await uploadFiles(files); e.target.value = ""; } }} />
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
-                 onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await doUpload(f); e.target.value = ""; } }} />
+                 onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await uploadFiles([f]); e.target.value = ""; } }} />
         </div>
 
         <div className="flex flex-wrap items-center gap-1 border-b border-border pb-2" role="tablist" aria-label="文件集合">
@@ -877,21 +801,12 @@ export default function FilePage() {
             <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedPaths(new Set())}>清除选择</Button>
           </div>
         )}
-        {uploadQueue.length > 0 && (
-          <div className="flex max-h-20 shrink-0 items-center gap-2 overflow-x-auto border-b border-border text-[11px] text-muted" aria-label="上传队列">
-            <span className="shrink-0 px-1">完成 {uploadQueue.filter((entry) => entry.status === "succeeded" || entry.status === "cancelled").length}/{uploadQueue.length}</span>
-            {uploadQueue.map((entry) => (
-              <div key={entry.id} className="flex shrink-0 items-center gap-1 rounded border border-border bg-card/50 px-2 py-1">
-                <span className="max-w-28 truncate" title={entry.name}>{entry.name}</span>
-                <span className={entry.status === "failed" ? "text-danger" : entry.status === "succeeded" ? "text-success" : "text-muted"}>
-                  {entry.status === "queued" ? "排队" : entry.status === "uploading" ? `上传中 ${entry.progress}%` : entry.status === "succeeded" ? "完成" : entry.status === "cancelled" ? "已取消" : "失败"}
-                </span>
-                {(entry.status === "queued" || entry.status === "uploading") && <button type="button" className="text-muted hover:text-danger" aria-label={"取消上传 " + entry.name} onClick={() => cancelQueuedUpload(entry.id)}><X className="size-3" /></button>}
-                {entry.status === "failed" && <button type="button" className="text-muted hover:text-text" aria-label={"重试上传 " + entry.name} onClick={() => void retryUpload(entry.id)} disabled={uploading}><RefreshCw className="size-3" /></button>}
-              </div>
-            ))}
-          </div>
-        )}
+        <UploadQueueBar
+          entries={uploadQueue}
+          uploading={uploading}
+          onCancel={cancelUpload}
+          onRetry={(id) => { void retryUpload(id); }}
+        />
         <div className="flex items-center gap-0.5 text-xs flex-wrap" aria-label="当前位置">
           <Button variant="ghost" size="sm" className={`px-1.5 ${!path ? "font-semibold text-text" : "text-muted"}`} onClick={() => load("")}><Home className="size-3.5" /> 根目录</Button>
           {crumbs.map((c, i) => (

@@ -47,6 +47,15 @@ jobs:
           AGENT_DRIVE_LLM_CONFIG_KEY: ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=
         run: mvn -q test
 
+      - name: Upload Java coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jacoco
+          path: backend/target/site/jacoco
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Java package
         run: mvn -q -DskipTests package
 

@@ -1,6 +1,6 @@
 # 前端架构
 
-> 现行说明（2026-08-20）。前端是 Next.js 16 + React 19 + TypeScript 5 的静态导出应用；生产由 Java WebFlux 托管 `frontend/out`，Android 通过 Capacitor 7 复用同一套 web UI。
+> 现行说明（2026-08-22）。前端是 Next.js 16 + React 19 + TypeScript 5 的静态导出应用；生产由 Java WebFlux 托管 `frontend/out`，Android 通过 Capacitor 7 复用同一套 web UI。
 
 ## 1. 目录与分层
 
@@ -9,8 +9,8 @@ frontend/src/
 ├── app/                 # layout、主题、viewport、认证门控和主页面
 ├── components/
 │   ├── auth/            # 登录/设密、重扫码、服务未就绪
-│   ├── chat/            # ChatPanel、工具轨迹、流事件/状态/帧模块
-│   ├── files/           # FilePage、FilePanel、FilePreview、FileDetails
+│   ├── chat/            # ChatPanel、模型目录、文件引用、工具轨迹和流事件/状态/帧模块
+│   ├── files/           # FilePage、上传队列、FilePanel、FilePreview、FileDetails
 │   ├── sessions/        # 会话列表和摘要刷新
 │   ├── settings/        # provider、embedding、Skill、设备、同步和系统状态
 │   ├── workspace/       # 工作区面板收缩、拖拽调整和键盘分隔轨道
@@ -50,6 +50,7 @@ frontend/src/
 - `chat-stream-state.ts`：上下文注入顺序、消息、reasoning、工具轮次和终态状态转换；
 - `chat-stream-frame.ts`：80ms 批量刷新、工具轮次边界和最终冲刷。
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
+- `useModelCatalog.ts`：独立管理模型目录、能力映射和配置变化时的迟到响应隔离；`AssistantMarkdown.tsx` 与 `FileMentionPicker.tsx` 分别负责安全文件引用渲染和候选列表，避免把这些职责继续堆入 ChatPanel。
 - ChatPanel 的会话滚动策略按状态收敛：历史加载完成和会话切换默认定位底部；活动流的消息、reasoning、工具步骤和计划更新持续跟随底部；非运行状态用户手动上滑后不抢回位置，只显示 composer 上沿的圆形“回到最新消息”按钮。
 - ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；响应同时提供按模型 ID 编排的 `model_capabilities`，显式 Provider 能力字段优先，未知模型保守视为不支持图片。选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。Onboarding 使用同一目录接口完成首次模型选择，并在协议、地址或 API key 变化时使旧请求失效；协议或地址变化还会销毁旧 key 草稿。
 - Skill 正文由后端按会话恢复：前端不把工具轨迹伪装成客户端 history；服务端从 owner transcript 识别已成功读取的 Skill，下一轮直接注入当前版本正文，目录标记为“已加载”，因此模型不会重复调用 `read_skill`。
@@ -63,7 +64,7 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 
 ## 4. 文件页请求生命周期
 
-`FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。
+`FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。`useUploadQueue.ts` 单独持有文件引用、AbortController、进度、取消和失败重试，组件卸载统一终止在途上传；`UploadQueueBar.tsx` 只负责固定高度的状态展示。
 
 `FilePanel` 对目录列表和文件详情使用独立请求代次；`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
 
@@ -110,4 +111,4 @@ npm run build
 npm run verify:build
 ```
 
-前端行为变化需要同步测试和 Service Worker cache 版本。生产静态资源通过顶层 `scripts/deploy.ps1` 原子发布，不使用 PowerShell 通配符上传 `out`，以免遗漏 `.well-known/assetlinks.json`。
+前端行为变化需要同步测试和 Service Worker cache 版本。独立 hook 的并发/代次语义优先写直接 Vitest，再由页面测试覆盖组合行为。生产静态资源通过顶层 `scripts/deploy.ps1` 原子发布，不使用 PowerShell 通配符上传 `out`，以免遗漏 `.well-known/assetlinks.json`。

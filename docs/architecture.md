@@ -21,7 +21,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
 
 | 模块 | 职责 | 约束 |
 |------|------|------|
-| `api` | WebFlux controller、SSE、上传下载、静态资源和 SPA fallback | 处理协议/鉴权入口，不直接拼 SQL 或决定领域规则 |
+| `api` | WebFlux controller、SSE、上传下载、请求元数据/完成日志、静态资源和 SPA fallback | 处理协议/鉴权入口；同步调用统一经 `ReactiveExecution` 移出 event loop，不直接拼 SQL 或决定领域规则 |
 | `agent` | LangChain4j runtime、tool catalog、确认、replay、reasoning | owner、凭据和权限由运行时注入，不暴露给模型 |
 | `auth` | 用户、Cookie/Bearer session、设备令牌、配对码、限速 | 认证数据异常失败关闭 |
 | `config` | LLM、embedding、vision 配置、模型探测和会话认证的按需 Key 回显 | API key 加密存储；普通响应只给掩码，回显响应禁止缓存且不进入 Agent 工具目录 |
@@ -50,6 +50,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 - 所有业务接口保持 `/api/v1` 前缀。`/api/v1/health` 和认证初始化接口按规则公开，其余业务接口按当前 owner 鉴权。
 - `/api/v1/ready` 是公开的最小 readiness 探针，只返回数据库和存储可用性，并附带不参与 ready 判定的最近备份摘要；系统状态中心把它与 owner-scoped 的配置、设备/同步和文件磁盘信息合并展示。
+- 所有 `/api` 响应由 `ApiRequestLoggingWebFilter` 复用或生成 `X-Request-ID`，并在请求终止时记录 method、匹配后的路由模板、status、duration、可信 client IP 和 terminal；不记录 query value、header、body 或路径参数。只有 loopback TCP 对端可以使用 nginx 覆写的单值合法 `X-Forwarded-For`。
 - `/api/v1/files/favorites` 和 `/api/v1/files/recent` 提供 owner-scoped 收藏/最近访问集合；文件列表支持 `type`、`modified_after`、`modified_before` 和语义 `min_score`，服务端负责校验范围并返回 `has_more`。
 - `/api/v1/files/versions` 列出当前文件的真实内容快照，`POST /api/v1/files/versions/restore` 把快照作为新 revision 原子发布；快照元数据按 owner 绑定，内容位于 owner 私有 `.versions` 目录，公共路径解析拒绝该目录；每个文件最多保留 20 个快照，超出部分在数据库提交后回收。
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
@@ -73,13 +74,13 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 ## 6. 业务错误与执行边界
 
-所有 Controller 使用统一的 `status/code/detail/ok` 错误结构；参数错误、资源不存在、冲突、provider 不可用和内部异常分别返回稳定状态。Agent 的 `backend_api` 将业务异常转成结构化 `ok:false` 工具结果，模型不能把失败误当成普通成功返回。索引/视觉/向量 API 同步返回真实执行结果，provider 前置检查失败时不写入任何任务记录。
+所有 Controller 使用统一的 `status/code/detail/ok` 错误结构；参数错误、资源不存在、冲突和 provider 不可用返回稳定领域说明，未分类 500 只向客户端返回通用 detail，真实异常以脱敏 throwable 和 request ID 写入 journal。Agent 的 `backend_api` 将业务异常转成结构化 `ok:false` 工具结果，模型不能把失败误当成普通成功返回。索引/视觉/向量 API 同步返回真实执行结果，provider 前置检查失败时不写入任何任务记录。
 
 ## 7. 前端与 Android
 
 Next.js 16 使用静态导出，生产由 Java API 托管 `frontend/out`。前端分为认证门控、Chat、文件、会话、设置、Skill 和设备/同步页面；API client 统一处理身份、GET 缓存隔离、401 和事件总线。
 
-文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast。ChatPanel 保持常驻挂载；初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 按 session key 保存活动 controller/frame/busy，切换会话只隔离 UI 写入而不中止原流，不同会话可并行；首次流通过 `X-Session-ID` 收养服务端会话，页面把活动 session ID 写入 localStorage，重新进入时先 `no-store` 读取最新历史并查询 active relay，运行中自动重连、跟随底部，显式停止才调用 cancel。显式停止或组件卸载只 Abort 浏览器订阅，不把普通刷新误当成取消。ChatPanel 的会话历史/模型目录、SettingsPage 的 LLM/视觉模型目录，以及 Onboarding 的首次模型目录请求都必须在响应提交前校验请求代次和当前配置边界。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
+文件页的列表、详情、全文、索引和回收站刷新使用独立请求代次与当前路径校验，只有当前请求失败才显示 toast；上传状态机和展示分别由 `useUploadQueue` / `UploadQueueBar` 管理。ChatPanel 保持常驻挂载；模型目录、文件引用 Markdown 和候选列表分别由 `useModelCatalog`、`AssistantMarkdown`、`FileMentionPicker` 管理，主组件集中处理聊天会话编排。初次 `authMode=loading` 才显示整页 Skeleton，下拉刷新不得因 store.loading 卸载工作区。`useChatStream` 按 session key 保存活动 controller/frame/busy，切换会话只隔离 UI 写入而不中止原流，不同会话可并行；首次流通过 `X-Session-ID` 收养服务端会话，页面把活动 session ID 写入 localStorage，重新进入时先 `no-store` 读取最新历史并查询 active relay，运行中自动重连、跟随底部，显式停止才调用 cancel。显式停止或组件卸载只 Abort 浏览器订阅，不把普通刷新误当成取消。ChatPanel 的会话历史/模型目录、SettingsPage 的 LLM/视觉模型目录，以及 Onboarding 的首次模型目录请求都必须在响应提交前校验请求代次和当前配置边界。UI 控件和主题遵循 [`frontend-design.md`](frontend-design.md)。
 
 Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配对、加密令牌、WorkManager、MediaStore 和通知。相册同步使用秒级 checkpoint、pending second/id、服务端 dedupe 预检和 MD5 校验；本地文件消失/权限拒绝永久跳过，其他本地 I/O 冻结水位，线程中断保留中断位并终止本批。同步配置写入独立 EncryptedSharedPreferences，失败关闭，不降级明文。
 
@@ -89,6 +90,7 @@ Android 是 Capacitor 7 原生壳：ServerConfig/PhotoSync 插件接入扫码配
 - artifact：`/opt/agent-drive-java/agent-drive-backend.jar`；数据根：`/opt/agent-drive-java/data`。
 - 密钥：`/etc/agent-drive-java/java.env`，权限 0600；外部 HTTP(S) 代理来自 `/etc/agent-drive/proxy.env`，systemd 清除 SOCKS 环境变量。
 - 公网：nginx `13311` → API `8000`；生产部署优先使用 `scripts/deploy.ps1`，它负责构建、原子替换、unit 校验、API 重启并验证 `/api/v1/ready`，失败自动回滚到上一版。
+- 构建：后端要求 Java 21 + Maven 3.9，Maven Enforcer 在生命周期前段校验；`mvn test` 生成 `backend/target/site/jacoco/index.html`。
 
 详细认证和暴露面规则见 [`security.md`](security.md)，生产切换证据见 [`java-migration-architecture.md`](java-migration-architecture.md)。
 

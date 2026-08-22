@@ -10,7 +10,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
 import java.nio.file.Files;
@@ -66,8 +65,7 @@ public class HealthController {
      */
     @GetMapping("/ready")
     public Mono<ResponseEntity<Map<String, Object>>> ready() {
-        return Mono.fromCallable(this::readiness)
-                .subscribeOn(Schedulers.boundedElastic());
+        return ReactiveExecution.blocking(this::readiness);
     }
 
     private ResponseEntity<Map<String, Object>> readiness() {

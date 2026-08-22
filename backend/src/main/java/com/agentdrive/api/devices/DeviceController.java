@@ -16,10 +16,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /**
  * 提供当前用户设备注册表的查询、注册和撤销端点。
@@ -95,17 +96,6 @@ public final class DeviceController {
                     result.put("tokens_revoked", true);
                     return result;
                 }));
-    }
-
-    /**
-     * 将设备存储的阻塞调用移出 WebFlux 事件循环。
-     *
-     * @param operation 要执行的设备查询或写入操作。
-     * @param <T> 操作结果类型。
-     * @return 在 bounded-elastic 调度器运行操作的异步结果。
-     */
-    private <T> Mono<T> blocking(java.util.concurrent.Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**

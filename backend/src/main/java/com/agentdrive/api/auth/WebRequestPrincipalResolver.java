@@ -1,5 +1,6 @@
 package com.agentdrive.api.auth;
 
+import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.auth.AuthenticatedPrincipal;
 import com.agentdrive.auth.CredentialAuthenticator;
 import org.springframework.http.HttpStatus;
@@ -8,7 +9,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 /**
  * 将 Web 请求中的认证凭据解析为已认证用户主体。
@@ -47,8 +47,7 @@ public final class WebRequestPrincipalResolver {
         if (cookie == null && bearer == null) {
             return Mono.error(unauthorized());
         }
-        return Mono.fromCallable(() -> authenticate(cookie, bearer))
-                .subscribeOn(Schedulers.boundedElastic());
+        return ReactiveExecution.blocking(() -> authenticate(cookie, bearer));
     }
 
     /**
@@ -70,8 +69,7 @@ public final class WebRequestPrincipalResolver {
         if (token == null || token.isBlank()) {
             return Mono.error(unauthorized());
         }
-        return Mono.fromCallable(() -> authenticator.authenticate(token).orElseThrow(this::unauthorized))
-                .subscribeOn(Schedulers.boundedElastic());
+        return ReactiveExecution.blocking(() -> authenticator.authenticate(token).orElseThrow(this::unauthorized));
     }
 
     /**

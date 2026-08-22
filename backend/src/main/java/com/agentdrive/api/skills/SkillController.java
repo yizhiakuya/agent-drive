@@ -1,5 +1,6 @@
 package com.agentdrive.api.skills;
 
+import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.skills.SkillDefinition;
 import com.agentdrive.skills.SkillPage;
@@ -22,7 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -119,8 +119,7 @@ public final class SkillController {
      * @return 异步结果
      */
     private <T> Mono<T> blocking(Callable<T> operation) {
-        return Mono.fromCallable(operation)
-                .subscribeOn(Schedulers.boundedElastic())
+        return ReactiveExecution.blocking(operation)
                 .onErrorMap(SkillRegistryException.class, error ->
                         new ResponseStatusException(HttpStatusCode.valueOf(error.status()), error.getMessage(), error));
     }

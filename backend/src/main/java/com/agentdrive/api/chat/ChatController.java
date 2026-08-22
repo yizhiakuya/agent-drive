@@ -1,5 +1,7 @@
 package com.agentdrive.api.chat;
 
+import com.agentdrive.api.ReactiveExecution;
+import com.agentdrive.api.WebRequestMetadata;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.auth.ConversationSessionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,15 +23,15 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /**
  * 暴露非流式 {@code POST /api/v1/chat} 和流式 {@code POST /api/v1/chat/stream}。
@@ -44,7 +46,6 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequestMapping("/api/v1")
 public final class ChatController {
     private static final Logger LOGGER = LoggerFactory.getLogger(ChatController.class);
-    private static final String REQUEST_ID_HEADER = "X-Request-ID";
     private static final String SESSION_ID_HEADER = "X-Session-ID";
     private final ChatRuntime runtime;
     private final ChatSseEncoder encoder;
@@ -107,8 +108,7 @@ public final class ChatController {
     public Mono<ChatResponse> complete(@Valid @RequestBody ChatRequest request,
                                        ServerWebExchange exchange) {
         return prepare(request, exchange)
-                .flatMap(normalized -> runtime.complete(normalized)
-                        .subscribeOn(Schedulers.boundedElastic()));
+                .flatMap(normalized -> ReactiveExecution.onBlockingScheduler(() -> runtime.complete(normalized)));
     }
 
     /**
@@ -157,10 +157,6 @@ public final class ChatController {
                 }));
     }
 
-    private <T> Mono<T> blocking(java.util.concurrent.Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
-    }
-
     /**
      * 响应 {@code POST /api/v1/chat/stream}，把 runtime 事件编码为 SSE 流。
      *
@@ -173,8 +169,8 @@ public final class ChatController {
     public Mono<Void> stream(@Valid @RequestBody ChatRequest request,
                              ServerWebExchange exchange,
                              ServerHttpResponse response) {
-        String requestId = correlationId(exchange);
-        response.getHeaders().set(REQUEST_ID_HEADER, requestId);
+        String requestId = WebRequestMetadata.requestId(exchange);
+        response.getHeaders().set(WebRequestMetadata.REQUEST_ID_HEADER, requestId);
         return prepare(request, exchange).map(normalized -> normalized.withRequestId(requestId)).flatMap(normalized -> {
             if (normalized.sessionId() != null) response.getHeaders().set(SESSION_ID_HEADER, normalized.sessionId());
             HttpHeaders headers = response.getHeaders();
@@ -242,22 +238,6 @@ public final class ChatController {
     }
 
     /**
-     * 从受信任格式的请求头复用关联 ID，缺失时生成新的 UUID。
-     *
-     * @param exchange 当前 HTTP 请求上下文。
-     * @return 可安全写入日志和响应头的关联 ID。
-     */
-    private String correlationId(ServerWebExchange exchange) {
-        for (String header : new String[]{REQUEST_ID_HEADER, "X-Correlation-ID", "traceparent"}) {
-            String candidate = exchange.getRequest().getHeaders().getFirst(header);
-            if (candidate != null && candidate.matches("[A-Za-z0-9._:-]{1,128}")) {
-                return candidate;
-            }
-        }
-        return UUID.randomUUID().toString();
-    }
-
-    /**
      * 把 owner UUID 转换为不含凭据的日志字段。
      *
      * @param request 已由认证层补齐 owner 的聊天请求。
@@ -315,10 +295,10 @@ public final class ChatController {
             return Mono.just(request);
         }
         return principalResolver.resolve(exchange)
-                .flatMap(principal -> Mono.fromCallable(() -> {
+                .flatMap(principal -> blocking(() -> {
                     String sessionId = sessionService.ensureOwned(principal.userId(), request.sessionId());
                     return request.withSessionId(sessionId).withAuthenticatedUserId(principal.userId());
-                }).subscribeOn(Schedulers.boundedElastic()));
+                }));
     }
 
     /**

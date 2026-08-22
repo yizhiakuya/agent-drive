@@ -11,10 +11,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /**
  * 提供当前用户对聊天会话的列表、详情、摘要和删除 API。
@@ -108,14 +109,4 @@ public final class SessionController {
                 }));
     }
 
-    /**
-     * 将会话服务的同步持久化调用移出 WebFlux 事件循环。
-     *
-     * @param operation 要执行的会话查询或变更。
-     * @param <T> 操作结果类型。
-     * @return 在 bounded-elastic 调度器运行操作的异步结果。
-     */
-    private <T> Mono<T> blocking(java.util.concurrent.Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
-    }
 }

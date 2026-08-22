@@ -1,5 +1,6 @@
 package com.agentdrive.api.files;
 
+import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.files.FileStorageService;
 import com.agentdrive.auth.AuthenticatedPrincipal;
@@ -20,7 +21,6 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -364,9 +364,8 @@ public final class FileController {
         return principalResolver.resolve(exchange).flatMap(principal -> {
             Path temp = files.createUploadTemp();
             return file.transferTo(temp)
-                    .then(Mono.fromCallable(() -> files.publishUpload(
+                    .then(ReactiveExecution.blocking(() -> files.publishUpload(
                             principal.userId(), path, file.filename(), temp, md5, noclobber)))
-                    .subscribeOn(Schedulers.boundedElastic())
                     .doFinally(signal -> files.discardTemp(temp));
         });
     }
@@ -387,12 +386,11 @@ public final class FileController {
         return principalResolver.resolve(exchange).flatMap(principal -> {
             Path temp = files.createUploadTemp();
             return file.transferTo(temp)
-                    .then(Mono.fromCallable(() -> files.publishUpload(
+                    .then(ReactiveExecution.blocking(() -> files.publishUpload(
                             principal.userId(), "", file.filename(), temp, "", true)))
                     .map(result -> ResponseEntity.<Void>status(303)
                             .header(HttpHeaders.LOCATION, "/?shared=" + String.valueOf(((Map<?, ?>) result.get("uploaded")).get("path")))
                             .build())
-                    .subscribeOn(Schedulers.boundedElastic())
                     .doFinally(signal -> files.discardTemp(temp));
         });
     }
@@ -407,8 +405,7 @@ public final class FileController {
      */
     private <T> Mono<T> authenticated(ServerWebExchange exchange, Function<UUID, T> action) {
         return principalResolver.resolve(exchange)
-                .flatMap(principal -> Mono.fromCallable(() -> action.apply(principal.userId()))
-                        .subscribeOn(Schedulers.boundedElastic()));
+                .flatMap(principal -> ReactiveExecution.blocking(() -> action.apply(principal.userId())));
     }
 
     /**
@@ -421,7 +418,7 @@ public final class FileController {
      */
     private Mono<ResponseEntity<Resource>> media(ServerWebExchange exchange, String path, boolean download) {
         return principalResolver.resolveMedia(exchange)
-                .flatMap(principal -> Mono.fromCallable(() -> {
+                .flatMap(principal -> ReactiveExecution.blocking(() -> {
                     Path file = files.fileForRead(principal.userId(), path);
                     files.touchAccess(principal.userId(), path);
                     String contentType = Files.probeContentType(file);
@@ -446,7 +443,7 @@ public final class FileController {
                                 ContentDisposition.attachment().filename(file.getFileName().toString()).build().toString());
                     }
                     return response.body(resource);
-                }).subscribeOn(Schedulers.boundedElastic()));
+                }));
     }
 
     /**

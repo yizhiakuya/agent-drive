@@ -22,7 +22,7 @@ Agent-first 的私人网盘：文件管理、检索、配置和自动化都可�
 
 ### 后端
 
-需要 Java 21 和可用的 PostgreSQL/pgvector 配置。当前只启动 API：
+需要 Java 21、Maven 3.9 和可用的 PostgreSQL/pgvector 配置。Maven Enforcer 会在错误工具链下提前终止构建；当前只启动 API：
 
 ```bash
 cd backend
@@ -49,6 +49,8 @@ cd backend && mvn -q test && mvn -q -DskipTests package
 cd ../frontend && npm run lint && npm test && npm run build
 cd android && gradlew.bat testDebugUnitTest
 ```
+
+后端测试同时生成 `backend/target/site/jacoco/index.html` 覆盖率报告，CI 将其保存为 `backend-jacoco` artifact；报告用于持续观察，现阶段不以一次性阈值阻断历史代码。
 
 ## 部署
 

@@ -3,7 +3,6 @@ import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } fro
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api/client";
-import { getConfig, listModels } from "@/lib/api/config";
 import { listFiles, uploadFile, type FileItem } from "@/lib/api/files";
 import { getSession } from "@/lib/api/sessions";
 import { EV, emitToast } from "@/lib/events";
@@ -16,9 +15,7 @@ import { PermissionControl } from "./PermissionControl";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
 import { maskSecretsJson } from "@/lib/format";
-import { isSafeFrontendPath } from "@/lib/frontend-actions";
-import { supportsInlineImages } from "@/lib/model-capabilities";
-import { ArrowDown, ArrowUp, AtSign, Brain, ChevronDown, ChevronRight, CornerUpLeft, Cpu, FileSearch, FileText, FolderOpen, FolderPlus, ListChecks, Loader2, PanelLeftOpen, Paperclip, Plus, RefreshCw, ShieldAlert, Square, X } from "lucide-react";
+import { ArrowDown, ArrowUp, AtSign, Brain, ChevronDown, Cpu, FileSearch, FileText, FolderOpen, ListChecks, Loader2, PanelLeftOpen, Paperclip, Plus, RefreshCw, ShieldAlert, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   Combobox,
@@ -37,70 +34,11 @@ import {
 } from "@/components/ui/select";
 import { useChatStream, chatTextDelta } from "./useChatStream";
 import type { ContextUsage, InlineImage, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./useChatStream";
+import AssistantMarkdown from "./AssistantMarkdown";
+import FileMentionPicker from "./FileMentionPicker";
+import { useModelCatalog } from "./useModelCatalog";
 
 export { chatTextDelta };
-
-function normalizeFileReferenceMarkdown(value: string) {
-  return value.replace(/\[\[(file|folder):([^\]\n]+)\]\]/g, (_match, kind: string, path: string) => {
-    const encoded = encodeURIComponent(path.trim());
-    return `[${path.trim()}](https://agent-drive.local/file?kind=${kind}&path=${encoded})`;
-  });
-}
-
-/** 将模型声明的文件引用转换为已经登记的前端打开动作。 */
-function AssistantMarkdown({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        a: ({ href, children }) => {
-          let reference: { kind: "file" | "folder"; path: string } | null = null;
-          if (href) {
-            try {
-              const url = new URL(href);
-              const kind = url.origin === "https://agent-drive.local" && url.pathname === "/file"
-                ? url.searchParams.get("kind")
-                : null;
-              const path = url.searchParams.get("path");
-              if ((kind === "file" || kind === "folder") && path) {
-                reference = { kind, path };
-              }
-            } catch {
-              // Markdown may contain a relative or malformed external href.
-            }
-          }
-          const isFileReference = reference?.kind === "file";
-          const isFolderReference = reference?.kind === "folder";
-          if (reference && (isFileReference || isFolderReference)) {
-            const path = reference.path;
-            const safe = isSafeFrontendPath(path);
-            if (!safe) return <span>{children}</span>;
-            const operation = isFileReference ? "files.open" : "files.open_folder";
-            return (
-              <button
-                type="button"
-                aria-label={isFileReference ? `打开文件 ${path}` : `打开文件夹 ${path}`}
-                className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded-sm border border-border bg-card px-1.5 py-0.5 text-left text-accent underline-offset-2 hover:bg-accent-soft hover:underline"
-                onClick={() => useAppStore.getState().enqueueFrontendAction({
-                  operation,
-                  arguments: { path },
-                  targetTab: "files",
-                  summary: isFileReference ? `打开文件 ${path}` : `打开文件夹 ${path}`,
-                })}
-              >
-                {isFileReference ? <FileText className="size-3 shrink-0" aria-hidden="true" /> : <FolderOpen className="size-3 shrink-0" aria-hidden="true" />}
-                <span className="truncate">{children}</span>
-              </button>
-            );
-          }
-          return <a href={href}>{children}</a>;
-        },
-      }}
-    >
-      {normalizeFileReferenceMarkdown(content)}
-    </ReactMarkdown>
-  );
-}
 
 const QUICK_ACTIONS: { icon: LucideIcon; label: string; msg: string }[] = [
   { icon: FolderOpen, label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
@@ -192,15 +130,18 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   const [reportDismissed, setReportDismissed] = useState(false);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("auto");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("auto");
-  const [selectedModel, setSelectedModel] = useState(configuredModel);
-  const [providerType, setProviderType] = useState("");
-  const [configuredSupportsImages, setConfiguredSupportsImages] = useState<boolean | undefined>(undefined);
-  const [modelCapabilities, setModelCapabilities] = useState<Record<string, boolean>>({});
-  const [modelOptions, setModelOptions] = useState<string[]>(configuredModel ? [configuredModel] : []);
-  const [modelsOpen, setModelsOpen] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
-  const [modelLoadError, setModelLoadError] = useState("");
+  const {
+    selectedModel,
+    setSelectedModel,
+    modelOptions,
+    modelsOpen,
+    setModelsOpen,
+    modelsLoading,
+    modelsLoaded,
+    modelLoadError,
+    loadModels,
+    modelSupportsImages,
+  } = useModelCatalog(configuredModel);
   const [fileContext, setFileContext] = useState<FileItem[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionItems, setMentionItems] = useState<FileItem[]>([]);
@@ -209,13 +150,8 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   const [mentionBrowseStack, setMentionBrowseStack] = useState<Array<{ path: string | null; query: string }>>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [inlineImages, setInlineImages] = useState<InlineImage[]>([]);
-  const configuredModelRef = useRef(configuredModel);
-  const modelLoadRequestRef = useRef(0);
   const mentionRequestRef = useRef(0);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
-  const modelSupportsImages = modelCapabilities[selectedModel]
-    ?? supportsInlineImages(providerType, selectedModel,
-      selectedModel === configuredModel ? configuredSupportsImages : undefined);
 
   useEffect(() => {
     try {
@@ -229,31 +165,6 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
       localStorage.setItem("agent-drive-thinking-level", thinkingLevel);
     } catch { /* 忽略 */ }
   }, [thinkingLevel]);
-
-  useEffect(() => {
-    if (configuredModelRef.current === configuredModel) return;
-    configuredModelRef.current = configuredModel;
-    modelLoadRequestRef.current += 1;
-    setModelsLoading(false);
-    setModelsOpen(false);
-    setSelectedModel(configuredModel);
-    setModelOptions(configuredModel ? [configuredModel] : []);
-    setModelsLoaded(false);
-    setModelLoadError("");
-  }, [configuredModel]);
-
-  useEffect(() => {
-    let active = true;
-    void getConfig().then((cfg) => {
-      if (!active) return;
-      const llm = cfg.llm;
-      setProviderType(llm?.type || "");
-      setConfiguredSupportsImages(llm?.supports_images);
-    }).catch(() => {
-      // The model-name fallback still prevents sending images to unknown models.
-    });
-    return () => { active = false; };
-  }, [configuredModel]);
 
   // 只在输入末尾形成 @token 时查询文件目录，避免普通聊天输入触发递归搜索。
   useEffect(() => {
@@ -306,7 +217,6 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   const autoScrollRef = useRef(true);
 
   useEffect(() => () => {
-    modelLoadRequestRef.current += 1;
     sessionLoadRequestRef.current += 1;
   }, []);
 
@@ -327,44 +237,6 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   useEffect(() => {
     if (permissionMode === "full") setPending(null);
   }, [permissionMode]);
-
-  /**
-   * 读取当前 owner 的 Provider 模型目录；地址、协议和 key 仍由服务端从已保存配置解析。
-   * 模型列表只用于本地选择，不会修改设置页的默认模型。
-   */
-  async function loadModels() {
-    if (modelsLoading) return;
-    const request = ++modelLoadRequestRef.current;
-    const requestedModel = selectedModel;
-    setModelsLoading(true);
-    setModelLoadError("");
-    try {
-      const cfg = await getConfig();
-      const llm = cfg.llm;
-      if (!llm) throw new Error("尚未配置聊天模型");
-      setProviderType(llm.type);
-      setConfiguredSupportsImages(llm.supports_images);
-      setModelCapabilities({});
-      const result = await listModels({ type: llm.type, base_url: llm.base_url, api_key: "" });
-      if (request !== modelLoadRequestRef.current) return;
-      if (!result.ok || !result.models?.length) {
-        throw new Error(result.error || "当前服务商没有返回可用模型");
-      }
-      setModelOptions((current) => Array.from(new Set([
-        requestedModel || llm.model,
-        ...current,
-        ...result.models!,
-      ].filter(Boolean))));
-      setModelCapabilities(result.model_capabilities || {});
-      setModelsLoaded(true);
-    } catch (error) {
-      if (request === modelLoadRequestRef.current) {
-        setModelLoadError(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      if (request === modelLoadRequestRef.current) setModelsLoading(false);
-    }
-  }
 
   /** 切换会话时读取目标历史；其他 session 的流继续在后台运行。 */
   async function loadSession(sid: string) {
@@ -872,84 +744,17 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
       <div data-testid="chat-input-bar" className="input-bar-safe shrink-0 bg-panel px-4 py-2 sm:px-6 sm:py-2">
         <div className="mx-auto max-w-4xl">
           <div className="relative">
-          {mentionQuery !== null && (
-            <div role="listbox" aria-label="文件引用候选" className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-full overflow-auto rounded-md border border-border bg-panel p-1 shadow-lg">
-              {mentionBrowsePath !== null ? (
-                <div className="flex items-center gap-1 border-b border-border px-1 pb-1.5">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="size-7 shrink-0 text-muted"
-                    aria-label={mentionBrowseStack.length > 0 ? "返回上一级" : "返回文件引用搜索"}
-                    title={mentionBrowseStack.length > 0 ? "返回上一级" : "返回搜索结果"}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={goBackMentionFolder}
-                  >
-                    <CornerUpLeft className="size-3.5" aria-hidden="true" />
-                  </Button>
-                  <div className="min-w-0 flex-1 px-1">
-                    <div className="text-[10px] font-semibold text-muted">选择文件</div>
-                    <div className="truncate text-xs text-text" title={mentionBrowsePath}>{mentionBrowsePath}</div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 shrink-0 gap-1 px-2 text-[11px] text-muted hover:text-text"
-                    aria-label={`引用文件夹 ${mentionBrowsePath}`}
-                    title="引用整个文件夹"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={quoteCurrentMentionFolder}
-                  >
-                    <FolderPlus className="size-3.5" aria-hidden="true" />
-                    <span>引用文件夹</span>
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 border-b border-border px-2 pb-1.5 text-[10px] text-muted">
-                  <AtSign className="size-3.5 shrink-0" aria-hidden="true" />
-                  <span>选择文件，或进入文件夹继续浏览</span>
-                </div>
-              )}
-              {mentionLoading && <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted"><Loader2 className="size-3.5 animate-spin" /> 搜索文件…</div>}
-              {!mentionLoading && mentionItems.length === 0 && <div className="px-3 py-2 text-xs text-muted">{mentionBrowsePath !== null ? "文件夹为空" : "没有匹配的文件或文件夹"}</div>}
-              {!mentionLoading && mentionItems.map((item) => (
-                item.is_dir ? (
-                  <div key={item.path} role="option" aria-selected="false" aria-label={`文件夹 ${item.path}`} className="flex items-center gap-1 rounded-sm px-1 hover:bg-card">
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-xs"
-                      aria-label={`进入文件夹 ${item.path}`}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => enterMentionFolder(item)}
-                    >
-                      <FolderOpen className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate">{item.path}</span>
-                      <span className="shrink-0 text-[10px] text-muted">文件夹</span>
-                      <ChevronRight className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="shrink-0 rounded-sm p-1.5 text-muted hover:bg-panel hover:text-text"
-                      aria-label={`引用文件夹 ${item.path}`}
-                      title="引用整个文件夹"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => chooseMention(item)}
-                    >
-                      <FolderPlus className="size-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                ) : (
-                  <button key={item.path} type="button" role="option" aria-selected="false" className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-xs hover:bg-card" onMouseDown={(event) => event.preventDefault()} onClick={() => chooseMention(item)}>
-                    <FileText className="size-3.5 shrink-0 text-muted" aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate">{item.path}</span>
-                    <span className="shrink-0 text-[10px] text-muted">文件</span>
-                  </button>
-                )
-              ))}
-            </div>
-          )}
+          <FileMentionPicker
+            open={mentionQuery !== null}
+            browsePath={mentionBrowsePath}
+            historyDepth={mentionBrowseStack.length}
+            loading={mentionLoading}
+            items={mentionItems}
+            onBack={goBackMentionFolder}
+            onChoose={chooseMention}
+            onEnterFolder={enterMentionFolder}
+            onChooseCurrentFolder={quoteCurrentMentionFolder}
+          />
            <div
              data-testid="chat-composer"
              className="overflow-visible rounded-md border border-border bg-panel shadow-sm transition-[border-color,box-shadow] duration-150 has-[[data-slot=chat-input]:focus]:border-accent has-[[data-slot=chat-input]:focus]:ring-2 has-[[data-slot=chat-input]:focus]:ring-accent/10"

@@ -16,11 +16,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /** Owner-scoped 索引资源 CRUD 和直接业务操作 API。 */
 @RestController
@@ -107,10 +107,6 @@ public final class IndexController {
                 .flatMap(principal -> blocking(() -> operation.apply(principal.userId())))
                 .onErrorMap(IllegalArgumentException.class, error ->
                         new ResponseStatusException(HttpStatus.BAD_REQUEST, error.getMessage(), error));
-    }
-
-    private <T> Mono<T> blocking(Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
     }
 
     public record IndexRequest(@JsonProperty("path") String path,

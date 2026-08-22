@@ -2,6 +2,8 @@ package com.agentdrive.api;
 
 import com.agentdrive.agent.ChatLogSupport;
 import com.agentdrive.vision.VisionProviderUnavailableException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -11,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.reactive.resource.NoResourceFoundException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
 import org.springframework.web.bind.support.WebExchangeBindException;
 
@@ -28,6 +31,8 @@ import java.util.stream.Collectors;
 @RestControllerAdvice
 @Order(Ordered.LOWEST_PRECEDENCE)
 public final class ApiExceptionHandler {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
     /** Missing static/API resource must remain an actual HTTP 404, never an HTTP 200 error body. */
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<Map<String, Object>> missingResource(NoResourceFoundException error) {
@@ -75,9 +80,11 @@ public final class ApiExceptionHandler {
 
     /** 未分类运行时异常的统一安全兜底。 */
     @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<Map<String, Object>> unexpected(RuntimeException error) {
+    public ResponseEntity<Map<String, Object>> unexpected(RuntimeException error, ServerWebExchange exchange) {
+        LOGGER.error("api_unexpected_error request_id={}",
+                WebRequestMetadata.requestId(exchange), ChatLogSupport.safeThrowable(error));
         return response(HttpStatus.INTERNAL_SERVER_ERROR.value(), "internal_error",
-                safeDetail(ChatLogSupport.message(error), "业务处理失败，请稍后重试"));
+                "业务处理失败，请稍后重试");
     }
 
     private ResponseEntity<Map<String, Object>> response(int status, String code, String detail) {

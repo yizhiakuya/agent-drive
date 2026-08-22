@@ -8,7 +8,7 @@
 - LangChain4j 1.19.x、MyBatis-Plus、Flyway V1-V19
 - PostgreSQL 16 + pgvector
 - Apache Tika、视觉模型和 Jina embedding（图片不走 OCR）
-- Maven
+- Maven 3.9（Enforcer 同时锁定 Java 21 / Maven 3.9 工具链）
 
 ## 本地运行
 
@@ -30,6 +30,10 @@ mvn spring-boot:run \
 mvn -q test
 mvn -q -DskipTests package
 ```
+
+`mvn test` 同时生成 `target/site/jacoco/index.html`，CI 保存为 `backend-jacoco` artifact。当前覆盖率用于趋势观察，不以一次性阈值阻断历史代码。
+
+所有 `/api` 请求统一回写 `X-Request-ID`，完成日志只记录 method、匹配路由模板、status、duration、可信 client IP 和 terminal，不记录 query value、路径参数、header 或 body。Controller 内同步工作统一经 `ReactiveExecution` 移出 WebFlux event-loop；未分类 500 对客户端只返回通用 detail，脱敏原因按 request ID 写入 journal。
 
 后端诊断脚本使用 Java source-file 模式：
 

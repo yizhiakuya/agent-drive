@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -32,7 +31,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.Callable;
+
+import static com.agentdrive.api.ReactiveExecution.blocking;
 
 /**
  * 提供 LLM Provider、模型探测和 Jina embedding 配置 API。
@@ -654,17 +654,6 @@ public final class ProviderConfigController {
      */
     private static Map<String, Object> error(String message) {
         return Map.of("ok", false, "error", message);
-    }
-
-    /**
-     * 将配置存储和外部探测的阻塞调用移出 WebFlux 事件循环。
-     *
-     * @param operation 要执行的配置读写或连接探测。
-     * @param <T> 操作结果类型。
-     * @return 在 bounded-elastic 调度器执行操作的异步结果。
-     */
-    private <T> Mono<T> blocking(Callable<T> operation) {
-        return Mono.fromCallable(operation).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
