@@ -28,7 +28,8 @@ app:
   confirmation-key: ${AGENT_DRIVE_CONFIRMATION_KEY:}
   llm-config-encryption-key: ${AGENT_DRIVE_LLM_CONFIG_KEY:}
   system-prompt: ${AGENT_DRIVE_SYSTEM_PROMPT:}
-  max-chat-steps: ${AGENT_DRIVE_MAX_CHAT_STEPS:100}
+  # 0 means the Agent may continue until it completes, is cancelled, or the run timeout fires.
+  max-chat-steps: ${AGENT_DRIVE_MAX_CHAT_STEPS:0}
   data-dir: ${AGENT_DRIVE_DATA_DIR:data}
   frontend-dir: ${AGENT_DRIVE_FRONTEND_DIR:../frontend/out}
   max-upload-mb: ${AGENT_DRIVE_MAX_UPLOAD_MB:300}

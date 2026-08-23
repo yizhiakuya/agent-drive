@@ -259,6 +259,30 @@ class LangChainAgentRuntimeTest {
     }
 
     @Test
+    void unlimitedRuntimeContinuesPastLegacyHundredStepCap() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.http("GET", "/api/v1/files", "List files"))),
+                (operation, request) -> Map.of("items", 1),
+                mapper
+        );
+        ManyToolStreamingModel model = new ManyToolStreamingModel(101);
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                model, backendApiTool, mapper, new OpenAiChatRequestFactory(), "", 0
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest(
+                "持续执行", null, null, "unlimited-session", "auto"))
+                .collectList().block(Duration.ofSeconds(5));
+
+        assertThat(model.calls).isEqualTo(102);
+        assertThat(events).extracting(ChatSseEvent::event).contains("done");
+        assertThat(events.get(events.size() - 1).data()).containsEntry("truncated", false);
+        assertThat(events).noneMatch(event -> event.data().values().stream()
+                .anyMatch(value -> String.valueOf(value).contains("工具步骤已达到上限")));
+    }
+
+    @Test
     void contextUsageFallsBackToMessageEstimateWhenProviderOmitsUsage() {
         ObjectMapper mapper = new ObjectMapper();
         BackendApiTool backendApiTool = new BackendApiTool(
@@ -335,6 +359,121 @@ class LangChainAgentRuntimeTest {
         assertThat(model.requests.get(0).toolSpecifications())
                 .extracting(specification -> specification.name())
                 .containsExactlyInAnyOrder("backend_api", "frontend_api");
+    }
+
+    @Test
+    void greenFrontendNavigationDoesNotPauseInAskMode() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of()),
+                (operation, request) -> Map.of(),
+                mapper
+        );
+        FrontendActionTool frontendActionTool = new FrontendActionTool(mapper);
+        FrontendStreamingModel model = new FrontendStreamingModel();
+        ChatRequestFactory factory = (messages, specifications, thinkingLevel) ->
+                dev.langchain4j.model.chat.request.ChatRequest.builder()
+                        .messages(messages)
+                        .toolSpecifications(specifications)
+                        .build();
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new FixedProviderRuntimeResolver(new ConfiguredChatModel(model, factory)),
+                List.of(backendApiTool, frontendActionTool),
+                mapper,
+                new ConfirmationService("frontend-ask-key".getBytes(java.nio.charset.StandardCharsets.UTF_8), mapper),
+                new InMemoryToolReplayStore(mapper),
+                new NoopChatTranscriptStore(),
+                "system",
+                4
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest(
+                "打开文件", List.of(), List.of(), "frontend-ask-session", "auto", null, null,
+                List.of(Map.of(
+                        "operation", "files.open",
+                        "summary", "打开文件",
+                        "target_tab", "files",
+                        "parameters", Map.of(
+                                "type", "object",
+                                "required", List.of("path"),
+                                "properties", Map.of("path", Map.of("type", "string"))
+                        )
+                )), null, null, "ask", List.of()
+        )).collectList().block(Duration.ofSeconds(2));
+
+        assertThat(events).extracting(ChatSseEvent::event)
+                .containsExactly("tool_start", "tool_trace", "frontend_action", "text", "done");
+        assertThat(events.get(events.size() - 1).data()).doesNotContainKey("pending_confirmation");
+    }
+
+    @Test
+    void planToolProducesPlanTraceAndDonePlan() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of()),
+                (operation, request) -> Map.of(),
+                mapper
+        );
+        PlanTool planTool = new PlanTool(mapper);
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new FixedProviderRuntimeResolver(new ConfiguredChatModel(new PlanStreamingModel(),
+                        (messages, specifications, thinkingLevel) ->
+                                dev.langchain4j.model.chat.request.ChatRequest.builder()
+                                        .messages(messages).toolSpecifications(specifications).build())),
+                List.of(backendApiTool, planTool),
+                mapper,
+                new ConfirmationService("plan-runtime-key".getBytes(java.nio.charset.StandardCharsets.UTF_8), mapper),
+                new InMemoryToolReplayStore(mapper),
+                new NoopChatTranscriptStore(),
+                "system",
+                4
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest(
+                "制定计划", List.of(), List.of(), "plan-session", "auto"))
+                .collectList().block(Duration.ofSeconds(2));
+
+        assertThat(events).extracting(ChatSseEvent::event)
+                .containsExactly("tool_start", "tool_trace", "text", "done");
+        assertThat(events.get(1).data().get("tool")).isEqualTo("plan");
+        assertThat(events.get(events.size() - 1).data().get("plan"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST)
+                .hasSize(2);
+    }
+
+    @Test
+    void emitsToolProgressHeartbeatDuringSlowToolExecution() {
+        ObjectMapper mapper = new ObjectMapper();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.http("GET", "/api/v1/files", "列出文件"))),
+                (operation, request) -> {
+                    try {
+                        Thread.sleep(1400);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("interrupted", interrupted);
+                    }
+                    return Map.of("items", List.of());
+                },
+                mapper
+        );
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new SlowToolStreamingModel(), backendApiTool, mapper, new OpenAiChatRequestFactory()
+        );
+
+        List<ChatSseEvent> events = runtime.stream(new ChatRequest(
+                "执行慢查询", List.of(), List.of(), "progress-session", "auto"))
+                .collectList().block(Duration.ofSeconds(5));
+
+        assertThat(events).extracting(ChatSseEvent::event)
+                .contains("tool_start", "tool_progress", "tool_trace", "done");
+        ChatSseEvent progress = events.stream()
+                .filter(event -> "tool_progress".equals(event.event()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(progress.data()).containsEntry("phase", "running");
+        assertThat(progress.data().get("message")).isEqualTo("正在列出文件");
+        assertThat(progress.data().get("elapsed_ms")).isInstanceOf(Number.class);
     }
 
     @Test
@@ -421,6 +560,85 @@ class LangChainAgentRuntimeTest {
                 handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
                         .aiMessage(AiMessage.from("完成"))
                         .tokenUsage(new TokenUsage(180, 40, 220))
+                        .build());
+            }
+        }
+    }
+
+    private static final class ManyToolStreamingModel implements StreamingChatModel {
+        private final int toolCalls;
+        private int calls;
+
+        private ManyToolStreamingModel(int toolCalls) {
+            this.toolCalls = toolCalls;
+        }
+
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            if (calls++ < toolCalls) {
+                ToolExecutionRequest tool = ToolExecutionRequest.builder()
+                        .id("loop-call-" + calls)
+                        .name("backend_api")
+                        .arguments("{\"action\":\"call\",\"operation\":\"GET /api/v1/files\"}")
+                        .build();
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from(List.of(tool)))
+                        .build());
+            } else {
+                handler.onPartialResponse("完成");
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from("完成"))
+                        .build());
+            }
+        }
+    }
+
+    private static final class PlanStreamingModel implements StreamingChatModel {
+        private int calls;
+
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            if (calls++ == 0) {
+                ToolExecutionRequest tool = ToolExecutionRequest.builder()
+                        .id("plan-call")
+                        .name("plan")
+                        .arguments("{\"action\":\"set\",\"plan\":["
+                                + "{\"text\":\"浏览目录\",\"status\":\"in_progress\"},"
+                                + "{\"text\":\"总结结果\",\"status\":\"pending\"}]}" )
+                        .build();
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from(List.of(tool)))
+                        .build());
+            } else {
+                handler.onPartialResponse("计划已记录");
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from("计划已记录"))
+                        .build());
+            }
+        }
+    }
+
+    private static final class SlowToolStreamingModel implements StreamingChatModel {
+        private int calls;
+
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            if (calls++ == 0) {
+                ToolExecutionRequest tool = ToolExecutionRequest.builder()
+                        .id("slow-call")
+                        .name("backend_api")
+                        .arguments("{\"action\":\"call\",\"operation\":\"GET /api/v1/files\"}")
+                        .build();
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from(List.of(tool)))
+                        .build());
+            } else {
+                handler.onPartialResponse("完成");
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from("完成"))
                         .build());
             }
         }

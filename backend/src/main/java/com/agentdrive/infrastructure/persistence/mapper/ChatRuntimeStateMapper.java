@@ -45,6 +45,19 @@ public interface ChatRuntimeStateMapper {
     /** 覆盖会话上下文窗口用量。 @param sessionId 会话 UUID。 @param usage 用量 JSON。 @return 更新行数。 */
     int updateContextUsage(@Param("sessionId") String sessionId, @Param("usage") String usage);
 
+    /** 创建新的 Agent run 状态。 */
+    int startRun(@Param("sessionId") String sessionId, @Param("state") String state);
+
+    /** 更新 Agent run 阶段或终态。 */
+    int updateRun(@Param("sessionId") String sessionId, @Param("status") String status,
+                  @Param("phase") String phase);
+
+    /** 读取最近 Agent run 状态。 */
+    Map<String, Object> selectRun(@Param("sessionId") String sessionId);
+
+    /** 把进程重启前遗留的 running run 标成 interrupted。 */
+    int interruptRunningRuns();
+
     /** 读取会话 pending confirmation JSON。 @param sessionId 会话 UUID。 @return pending JSON；不存在时为 {@code null}。 */
     String selectPending(@Param("sessionId") String sessionId);
 

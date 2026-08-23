@@ -90,6 +90,43 @@
         WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
     </update>
 
+    <update id="startRun">
+        UPDATE chat_sessions
+        SET run_state = CAST(#{state, jdbcType=LONGVARCHAR} AS jsonb), updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <update id="updateRun">
+        UPDATE chat_sessions
+        SET run_state = coalesce(run_state, '{}'::jsonb)
+                || jsonb_build_object(
+                    'status', #{status, jdbcType=VARCHAR},
+                    'phase', #{phase, jdbcType=VARCHAR},
+                    'updated_at', now()::text
+                ),
+            updated_at = now()
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </update>
+
+    <select id="selectRun" resultType="map">
+        SELECT run_state
+        FROM chat_sessions
+        WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </select>
+
+    <update id="interruptRunningRuns">
+        UPDATE chat_sessions
+        SET run_state = coalesce(run_state, '{}'::jsonb)
+                || jsonb_build_object(
+                    'status', 'interrupted',
+                    'phase', 'process_restart',
+                    'resumable', true,
+                    'updated_at', now()::text
+                ),
+            updated_at = now()
+        WHERE run_state-&gt;&gt;'status' = 'running'
+    </update>
+
     <select id="selectPending" resultType="string">
         SELECT pending_confirmation::text
         FROM chat_sessions

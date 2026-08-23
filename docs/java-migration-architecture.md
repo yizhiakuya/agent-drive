@@ -67,7 +67,7 @@ PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注
 
 ## 5. API、Agent 和任务契约
 
-- Chat SSE 的每个 `data` 都是 JSON object；事件包括 text、reasoning、tool_start、tool_trace、frontend_action、done、error。
+- Chat SSE 的每个 `data` 都是 JSON object；事件包括 text、reasoning、tool_start、tool_progress、tool_trace、frontend_action、done、error。长工具通过 `tool_progress` 回传业务阶段和耗时，前端不显示空的运行结果占位。
 - `thinking_level` 只允许 `auto/low/medium/high`，不发送 temperature；OpenAI 兼容流式模型必须开启 `returnThinking(true)`，reasoning 不进入下一轮 history。
 - `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。discover 以 offset/limit 稳定分页，返回 total_matches、has_more 和 next_offset，单页最多 20 项；非 red 调用按 session/tool/arguments 持久 replay，ask/auto 模式下 red 操作使用签名确认和一次性 nonce，full 模式按用户授权直接执行。
 - `/api/v1/index` 直接执行索引、embedding、vision、失效索引清理和向量清空；错误在当前响应中返回，Agent 不暴露任务创建接口。

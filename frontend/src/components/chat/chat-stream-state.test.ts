@@ -9,6 +9,8 @@ import {
   planFromToolTrace,
   removeEmptyAssistantMessages,
   replaceAssistantMessage,
+  isFailedToolResult,
+  updateToolProgress,
 } from "./chat-stream-state";
 
 describe("chat stream state helpers", () => {
@@ -33,6 +35,21 @@ describe("chat stream state helpers", () => {
       { type: "assistant", content: "完成", reasoning: "思考" },
     ]);
     expect(removeEmptyAssistantMessages(messages)).toHaveLength(2);
+  });
+
+  it("把工具进度更新写入对应的 running 步骤", () => {
+    const messages = appendToolStep([], { step: 2, tool: "backend_api", arguments: {}, started_at: 10 });
+    expect(updateToolProgress(messages, {
+      step: 2,
+      tool: "backend_api",
+      phase: "running",
+      message: "正在生成文件向量",
+      elapsed_ms: 2300,
+    })).toEqual([expect.objectContaining({
+      progressMessage: "正在生成文件向量",
+      progressPhase: "running",
+      elapsedMs: 2300,
+    })]);
   });
 
   it("把上下文注入插入空助手占位之前", () => {
@@ -61,6 +78,15 @@ describe("chat stream state helpers", () => {
     expect(completed[1]).toMatchObject({ status: "error", output: "failed" });
   });
 
+  it("兼容旧版 backend_api 嵌套失败结果", () => {
+    expect(isFailedToolResult({ ok: true, result: { ok: false, error: "provider_failed" } })).toBe(true);
+    const completed = completeToolStep(
+      appendToolStep([], { tool: "backend_api", arguments: {} }),
+      { tool: "backend_api", output: "legacy", parsed: { ok: true, result: { ok: false } } },
+    );
+    expect(completed[0]).toMatchObject({ status: "error", output: "legacy" });
+  });
+
   it("只从计划工具 trace 提取合法计划", () => {
     const event = parseChatStreamEvent("tool_trace", {
       tool: "set_plan",
@@ -70,6 +96,15 @@ describe("chat stream state helpers", () => {
     expect(event?.type).toBe("tool_trace");
     if (event?.type === "tool_trace") {
       expect(planFromToolTrace(event.trace)).toEqual([{ step: "检查", status: "completed" }]);
+    }
+    const productionPlan = parseChatStreamEvent("tool_trace", {
+      tool: "plan",
+      output: "{}",
+      parsed: { plan: [{ text: "读取", status: "in_progress" }] },
+    });
+    expect(productionPlan?.type).toBe("tool_trace");
+    if (productionPlan?.type === "tool_trace") {
+      expect(planFromToolTrace(productionPlan.trace)).toEqual([{ text: "读取", status: "in_progress" }]);
     }
     expect(parseChatStreamEvent("tool_trace", { tool: "list_files" })).toBeNull();
   });
@@ -84,5 +119,24 @@ describe("chat stream state helpers", () => {
       context: { source: "skill-catalog", kind: "skill-catalog", content: "available skills" },
     });
     expect(parseChatStreamEvent("context", { source: "skill-catalog" })).toBeNull();
+  });
+
+  it("解析工具运行进度事件", () => {
+    expect(parseChatStreamEvent("tool_progress", {
+      step: 2,
+      tool: "backend_api",
+      phase: "running",
+      message: "正在生成文件向量",
+      elapsed_ms: 2300,
+    })).toEqual({
+      type: "tool_progress",
+      data: {
+        step: 2,
+        tool: "backend_api",
+        phase: "running",
+        message: "正在生成文件向量",
+        elapsed_ms: 2300,
+      },
+    });
   });
 });

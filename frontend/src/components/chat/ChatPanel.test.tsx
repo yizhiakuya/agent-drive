@@ -145,6 +145,24 @@ describe("ChatPanel 主流程", () => {
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
   });
 
+  it("加载旧版 backend_api 历史时保留嵌套失败状态", async () => {
+    getSession.mockResolvedValue({
+      messages: [{
+        role: "tool_call",
+        content: "{\"ok\":true,\"result\":{\"ok\":false,\"detail\":\"视觉服务不可用\"}}",
+        tool: "backend_api",
+        arguments: { action: "call" },
+        parsed: { ok: true, result: { ok: false, detail: "视觉服务不可用" } },
+      }],
+    } as never);
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-legacy-tool-error"); });
+    const step = await screen.findByText("backend_api");
+    fireEvent.click(step);
+    expect(await screen.findByText(/视觉服务不可用/)).toBeInTheDocument();
+    expect(screen.getByText(/失败/)).toBeInTheDocument();
+  });
+
   it("Agent 运行期间流式内容更新会持续跟随底部", async () => {
     vi.useFakeTimers();
     try {

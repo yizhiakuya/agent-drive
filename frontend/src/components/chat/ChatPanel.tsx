@@ -37,6 +37,7 @@ import type { ContextUsage, InlineImage, Message, PendingConfirmation, Permissio
 import AssistantMarkdown from "./AssistantMarkdown";
 import FileMentionPicker from "./FileMentionPicker";
 import { useModelCatalog } from "./useModelCatalog";
+import { isFailedToolResult } from "./chat-stream-state";
 
 export { chatTextDelta };
 
@@ -251,7 +252,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
         .filter((m) => ["user", "assistant", "tool_call", "context"].includes(m.role))
         .map((m) => {
           if (m.role === "tool_call") {
-            const failed = m.parsed && (m.parsed as { ok?: boolean }).ok === false;
+            const failed = isFailedToolResult(m.parsed);
             return {
               type: "tool_step" as const,
               status: failed ? "error" : "done",
@@ -667,7 +668,18 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
           </div>
         )}
         {messages.map((m, i) => {
-          if (m.type === "tool_step") return <ToolStep key={i} step={{ tool: m.tool || "", arguments: m.arguments, status: m.status || "done", output: m.output, parsed: m.parsed }} />;
+          if (m.type === "tool_step") return <ToolStep key={i} step={{
+            tool: m.tool || "",
+            step: m.step,
+            arguments: m.arguments,
+            status: m.status || "done",
+            startedAt: m.startedAt,
+            progressMessage: m.progressMessage,
+            progressPhase: m.progressPhase,
+            elapsedMs: m.elapsedMs,
+            output: m.output,
+            parsed: m.parsed,
+          }} />;
           if (m.type === "context") return <ContextInjection key={i} source={m.source || "context"} content={m.content} />;
           const isThinking = busy && m.type === "assistant" && m.content === "" && !m.reasoning && i === messages.length - 1;
           const isLatestReasoning = busy && m.type === "assistant" && i === messages.length - 1;

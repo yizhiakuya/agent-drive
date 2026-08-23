@@ -108,6 +108,26 @@ class DefaultChatContextProviderTest {
                 .contains("agent-drive-api", "[已加载]", "不要再次调用 `read_skill`");
     }
 
+    @Test
+    void compilesPersonalDocumentsOutOfSimpleReadOnlyFileRequests() {
+        UUID owner = UUID.randomUUID();
+        SkillRegistry skills = mock(SkillRegistry.class);
+        FileStorageService files = mock(FileStorageService.class);
+        when(files.content(owner, "Agent/AGENT.md", 16 * 1024))
+                .thenReturn(Map.of("content", "File Concierge", "truncated", false));
+        when(skills.discover(owner, "", false, 0, 50))
+                .thenReturn(new SkillPage(List.of(), 0, 0, 0, 50, false, 0));
+
+        DefaultChatContextProvider provider = new DefaultChatContextProvider(skills, files, "system");
+
+        assertThat(provider.contexts(owner, "session-read", List.of(), "相册同步有多少文件"))
+                .extracting(ChatContext::source)
+                .containsExactly("agent-drive-system-prompt", "AGENT.md", "skill-catalog");
+        assertThat(provider.contexts(owner, "session-write", List.of(), "整理资料目录中的合同"))
+                .extracting(ChatContext::source)
+                .containsExactly("agent-drive-system-prompt", "AGENT.md", "USER.md", "MEMORY.md", "skill-catalog");
+    }
+
     private static SkillSummary summary(String name, String description) {
         return new SkillSummary(name, description, true, "builtin", 1, null);
     }

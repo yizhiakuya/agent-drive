@@ -65,6 +65,10 @@ pwsh -File scripts/deploy.ps1 -Target all
 
 生产入口：[https://home.rainaki.top:13311/](https://home.rainaki.top:13311/)
 
+## 许可证
+
+本项目以 MIT License 发布，见 [`LICENSE`](LICENSE)。部署配置中的主机、数据库和密钥均应由使用者自行提供，不要把个人环境文件或凭据提交到仓库。
+
 ## 目录
 
 ```text

@@ -37,6 +37,7 @@ import dev.langchain4j.model.output.TokenUsage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.Disposable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -54,13 +56,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>runtime 从 {@link ProviderRuntimeResolver} 按 owner 取得模型和请求工厂，把系统提示、
  * 客户端历史、当前消息和 {@link ChatContextProvider} 快照组装成模型上下文；后端读写工具经过 {@link BackendApiTool}，
  * 浏览器交互经过 {@link FrontendActionTool}，ask/auto 模式下 red 操作需要确认，full 模式
- * 按用户明确授权直接执行；非 red 操作按 session、工具名和参数执行确定性重放。会话消息和来源化上下文通过 transcript store 脱敏持久化，超过
- * {@code maxSteps} 时结束流并标记 truncated。
+ * 按用户明确授权直接执行；非 red 操作按 session、工具名和参数执行确定性重放。会话消息和来源化上下文通过 transcript store 脱敏持久化。
+ * 生产默认不设置正常步数上限，运行由 ChatRunRegistry 的超时、取消和并发资源边界负责收敛；显式正数 maxSteps 仅作为运维熔断。
  */
 public final class LangChainAgentRuntime implements ChatRuntime {
     private static final Logger LOGGER = LoggerFactory.getLogger(LangChainAgentRuntime.class);
     private static final String TRUNCATION_MESSAGE = "工具步骤已达到上限，请继续发送消息。";
-    private static final int DEFAULT_MAX_STEPS = 100;
+    private static final int DEFAULT_MAX_STEPS = 0;
     private static final int DEFAULT_CONTEXT_WINDOW = 262_144;
 
     private final ProviderRuntimeResolver providerRuntimeResolver;
@@ -82,7 +84,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param objectMapper 解析工具参数和序列化工具结果的映射器。
      * @param requestFactory 将内部消息和思考等级转换为 Provider 请求。
      * @param systemPrompt 可配置系统提示；首尾会自动加 Agent Drive 身份保护。
-     * @param maxSteps 单次对话允许的最大工具步骤数。
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限。
      */
     public LangChainAgentRuntime(
             StreamingChatModel model,
@@ -105,7 +107,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param requestFactory Provider 请求构造器。
      * @param confirmationService 签发、验证和消费 red 工具确认的服务。
      * @param systemPrompt 系统提示正文，首尾会加入身份保护。
-     * @param maxSteps 单次对话的工具步数上限，必须为正数。
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限。
      */
     public LangChainAgentRuntime(
             StreamingChatModel model,
@@ -130,7 +132,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param confirmationService red 操作确认服务。
      * @param replayStore 保存非 red 工具结果以支持确定性重放的存储。
      * @param systemPrompt 系统提示正文。
-     * @param maxSteps 单次对话工具步骤上限。
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限。
      */
     public LangChainAgentRuntime(
             StreamingChatModel model,
@@ -156,7 +158,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param confirmationService red 操作确认服务。
      * @param replayStore 非 red 工具结果重放存储。
      * @param systemPrompt 系统提示正文。
-     * @param maxSteps 单次对话工具步骤上限。
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限。
      */
     public LangChainAgentRuntime(
             ProviderRuntimeResolver providerRuntimeResolver,
@@ -186,9 +188,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param replayStore 持久化非 red 工具调用结果
      * @param transcriptStore 脱敏写入 user、assistant、reasoning 和 tool trace
      * @param systemPrompt 可配置系统提示，首尾会加入身份保护
-     * @param maxSteps 单次会话的工具步骤上限，必须大于 0
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限
      * @throws NullPointerException 必需依赖为空时抛出
-     * @throws IllegalArgumentException 工具名重复或 maxSteps 小于 1 时抛出
+     * @throws IllegalArgumentException 工具名重复或 maxSteps 小于 0 时抛出
      */
     public LangChainAgentRuntime(
             ProviderRuntimeResolver providerRuntimeResolver,
@@ -214,7 +216,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param transcriptStore 会话消息和上下文持久化存储
      * @param contextProvider 系统、Agent 文档和 Skill 目录上下文 provider
      * @param systemPrompt 可配置系统提示
-     * @param maxSteps 单次请求最大工具步骤
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限
      */
     public LangChainAgentRuntime(
             ProviderRuntimeResolver providerRuntimeResolver,
@@ -235,8 +237,8 @@ public final class LangChainAgentRuntime implements ChatRuntime {
         this.contextProvider = Objects.requireNonNull(contextProvider, "contextProvider must not be null");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
         this.systemPrompt = AgentSystemPrompt.normalize(systemPrompt);
-        if (maxSteps < 1) {
-            throw new IllegalArgumentException("maxSteps must be positive");
+        if (maxSteps < 0) {
+            throw new IllegalArgumentException("maxSteps must be zero or positive");
         }
         this.maxSteps = maxSteps;
         Map<String, AgentTool> byName = new LinkedHashMap<>();
@@ -262,9 +264,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
      * @param replayStore 持久化非 red 工具调用结果。
      * @param transcriptStore 脱敏写入 user、assistant、reasoning 和 tool trace。
      * @param systemPrompt 可配置系统提示，首尾会加入身份保护。
-     * @param maxSteps 单次会话的工具步骤上限，必须大于 0。
+     * @param maxSteps 可选的运维步数熔断；0 表示不设正常步数上限。
      * @throws NullPointerException 任一必需依赖为空时抛出。
-     * @throws IllegalArgumentException maxSteps 小于 1 时抛出。
+     * @throws IllegalArgumentException maxSteps 小于 0 时抛出。
      */
     public LangChainAgentRuntime(
             ProviderRuntimeResolver providerRuntimeResolver,
@@ -281,7 +283,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
     }
 
     /**
-     * 创建使用默认系统提示和默认一百步上限的兼容 runtime。
+     * 创建使用默认系统提示和不设正常步数上限的兼容 runtime。
      *
      * @param model 固定的流式聊天模型。
      * @param backendApiTool 模型可调用的 backend_api 工具。
@@ -454,7 +456,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                 messages.add(UserMessage.from(contents));
             }
             for (ChatContext context : contextProvider.contexts(
-                    input.authenticatedUserId(), input.sessionId(), input.fileContext())) {
+                    input.authenticatedUserId(), input.sessionId(), input.fileContext(), input.message())) {
                 if (context.userMessage()) {
                     messages.add(UserMessage.from(context.content()));
                 }
@@ -466,7 +468,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
         }
 
         /**
-         * 在未终止且未超过步数上限时创建下一次 Provider 请求。
+         * 在未终止且未触发可选运维熔断时创建下一次 Provider 请求。
          *
          * <p>请求包含当前消息、已注册工具规格和用户思考等级；达到上限时发送截断正文
          * 并完成会话，不再调用模型。
@@ -475,7 +477,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             if (terminal.get()) {
                 return;
             }
-            if (steps >= maxSteps) {
+            if (maxSteps > 0 && steps >= maxSteps) {
                 emitText(TRUNCATION_MESSAGE);
                 finish(true);
                 return;
@@ -527,9 +529,11 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             }
 
             int step = ++steps;
-            sink.next(ChatSseEvents.toolStart(step, request.name(), arguments));
             OperationDefinition definition = definitionFor(request, arguments);
+            String progressMessage = progressMessage(definition);
             long toolStartedAt = System.nanoTime();
+            sink.next(ChatSseEvents.toolStart(step, request.name(), arguments,
+                    progressMessage, System.currentTimeMillis()));
             LOGGER.info("chat_tool_start request_id={} session_id={} owner={} route={} step={} tool={} action={} operation={} path={} parameter_keys={}",
                     requestId(), safeId(input.sessionId()), ownerId(), route(), step, safeId(request.name()),
                     action(arguments), definition == null ? "-" : safeId(definition.operation()),
@@ -544,6 +548,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                 parsed = replay.parsed();
                 replayed = true;
             } else {
+                Disposable progress = startToolProgress(step, request.name(), progressMessage, toolStartedAt);
                 try {
                     output = invokeTool(request);
                     parsed = parseToolOutput(output);
@@ -554,6 +559,8 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                             ChatLogSupport.safeThrowable(error));
                     output = errorOutput(error);
                     parsed = parseToolOutput(output);
+                } finally {
+                    progress.dispose();
                 }
                 replayStore.save(input.sessionId(), request.name(), arguments, output, parsed);
             }
@@ -583,6 +590,34 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     definition == null ? "-" : safeId(definition.operation()), statusCode(parsed, definition),
                     elapsedMillis(toolStartedAt), replayed);
             return true;
+        }
+
+        /** 为同步工具调用发送每秒心跳，让长操作可见且不伪造百分比。 */
+        private Disposable startToolProgress(int step, String tool, String message, long startedAt) {
+            return Flux.interval(Duration.ofSeconds(1)).subscribe(tick -> {
+                if (!terminal.get()) {
+                    sink.next(ChatSseEvents.toolProgress(step, tool, "running", message, elapsedMillis(startedAt)));
+                }
+            });
+        }
+
+        /** 将登记 operation 映射为用户可理解的运行阶段。 */
+        private String progressMessage(OperationDefinition definition) {
+            if (definition == null) return "正在执行工具";
+            String path = definition.path();
+            if (path.endsWith("/index/file")) return "正在抽取文本并写入索引";
+            if (path.endsWith("/index/vision")) return "正在调用视觉模型分析图片";
+            if (path.endsWith("/index/vectors")) return "正在生成文件向量";
+            if (path.endsWith("/index/rebuild")) return "正在重建全文索引";
+            if (path.endsWith("/config/models") || path.endsWith("/config/vision/models")) {
+                return "正在探测模型目录";
+            }
+            if (path.endsWith("/vision/describe")) return "正在生成图片描述";
+            if (path.endsWith("/files/stats")) return "正在递归统计文件";
+            if (definition.summary() != null && !definition.summary().isBlank()) {
+                return "正在" + definition.summary();
+            }
+            return "正在执行工具";
         }
 
         /**
@@ -617,7 +652,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
         private boolean isReadOnlyOperation(OperationDefinition definition) {
             return "GET".equalsIgnoreCase(definition.method())
                     || "HEAD".equalsIgnoreCase(definition.method())
-                    || "OPTIONS".equalsIgnoreCase(definition.method());
+                    || "OPTIONS".equalsIgnoreCase(definition.method())
+                    || ("INTERNAL".equalsIgnoreCase(definition.method())
+                    && "green".equalsIgnoreCase(definition.risk()));
         }
 
         /**
@@ -778,7 +815,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     input.sessionId(),
                     needsSummary,
                     traces.isEmpty() ? "chat" : "task",
-                    List.of(),
+                    currentPlan(),
                     tokenUsageData(),
                     contextUsage,
                     truncated
@@ -788,6 +825,18 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     requestId(), safeId(input.sessionId()), ownerId(), traces.isEmpty() ? "chat" : "task", steps,
                     modelSteps, traces.size(), truncated, elapsedMillis());
             sink.complete();
+        }
+
+        /** 从最近一次 plan 工具 trace 提取完整计划，供 done 和非流式聚合恢复。 */
+        private List<Map<String, Object>> currentPlan() {
+            for (int index = traces.size() - 1; index >= 0; index--) {
+                Map<String, Object> trace = traces.get(index);
+                if (!"plan".equals(trace.get("tool"))) continue;
+                Map<String, Object> parsed = mapValue(trace.get("parsed"));
+                List<Map<String, Object>> plan = listOfMaps(parsed == null ? null : parsed.get("plan"));
+                if (!plan.isEmpty()) return plan;
+            }
+            return List.of();
         }
 
         /**

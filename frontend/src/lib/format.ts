@@ -47,6 +47,7 @@ const TOOL_ARG_FORMATTERS: Record<string, ToolArgFormatter> = {
   semantic_search: (args, path) => `语义搜索 "${args.query || path}"`,
   set_plan: () => "制定执行计划",
   update_plan: () => "更新执行计划",
+  plan: (args) => args.action === "set" ? "制定执行计划" : "更新执行计划",
   remember: (args) => `记住 "${String(args.content || args.text || "").slice(0, 20)}…"`,
   memory_search: (_args, path) => `记忆检索 ${path}`,
   memory_get: (_args, path) => `记忆检索 ${path}`,
@@ -68,6 +69,68 @@ export function fmtToolArgs(tool: string, args: Record<string, unknown>): string
   const normalized = args || {};
   const path = String(normalized.path ?? normalized.src ?? normalized.query ?? normalized.name ?? "");
   return TOOL_ARG_FORMATTERS[tool]?.(normalized, path) ?? maskSecretsJson(normalized);
+}
+
+/** 将统一 backend_api operation 转成用户可理解的业务步骤标题。 */
+export function fmtToolTitle(tool: string, args: Record<string, unknown> = {}): string {
+  if (tool !== "backend_api") return tool;
+  const operation = typeof args.operation === "string" ? args.operation : "";
+  if (!operation) return args.action === "discover" ? "查找能力" : "执行后端操作";
+  const normalized = operation.toUpperCase();
+  const path = operation.replace(/^[A-Z]+\s+/, "");
+  if (path === "/api/v1/files/stats") return "统计文件";
+  if (path === "/api/v1/files") {
+    const query = args.query_params;
+    const queryValue = query && typeof query === "object"
+      ? (query as Record<string, unknown>).q
+      : null;
+    return typeof queryValue === "string" && queryValue ? "搜索文件" : "浏览文件";
+  }
+  if (path === "/api/v1/files/info") return "查看文件信息";
+  if (path === "/api/v1/files/content") return "读取文件内容";
+  if (/\/api\/v1\/index(?:\/|$)/i.test(path)) return "更新索引";
+  if (/\/api\/v1\/config(?:\/|$)/i.test(path)) return normalized.startsWith("GET") ? "查看服务配置" : "更新服务配置";
+  if (/\/api\/v1\/sessions(?:\/|$)/i.test(path)) return "读取会话";
+  if (/\/api\/v1\/devices(?:\/|$)/i.test(path)) return "读取设备状态";
+  if (/\/api\/v1\/skills(?:\/|$)/i.test(path)) return "管理 Skill";
+  if (/\/api\/v1\/files\//i.test(path)) return normalized.startsWith("GET") ? "查看文件状态" : "修改文件";
+  return "执行后端操作";
+}
+
+/** 返回同步工具运行时的业务阶段提示。 */
+export function fmtToolProgress(tool: string, args: Record<string, unknown> = {}): string {
+  if (tool !== "backend_api") return tool === "plan" ? "正在更新当前会话计划" : "正在执行工具";
+  const operation = typeof args.operation === "string" ? args.operation : "";
+  const path = operation.replace(/^[A-Z]+\s+/, "");
+  if (path.endsWith("/index/file")) return "正在抽取文本并写入索引";
+  if (path.endsWith("/index/vision")) return "正在调用视觉模型分析图片";
+  if (path.endsWith("/index/vectors")) return "正在生成文件向量";
+  if (path.endsWith("/index/rebuild")) return "正在重建全文索引";
+  if (path.endsWith("/config/models") || path.endsWith("/config/vision/models")) return "正在探测模型目录";
+  if (path.endsWith("/vision/describe")) return "正在生成图片描述";
+  if (path.endsWith("/files/stats")) return "正在递归统计文件";
+  return `正在${fmtToolTitle(tool, args)}`;
+}
+
+/** 将工具运行耗时格式化为适合紧凑 Activity 行的文本。 */
+export function fmtElapsedMs(value: number | null | undefined): string {
+  const totalSeconds = Math.max(0, Math.floor((value ?? 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+}
+
+/** 从 backend_api 结果提取文件统计，供 Activity 卡片做一眼可读的摘要。 */
+export function fileStatsSummary(tool: string, args: Record<string, unknown> = {}, parsed: unknown): string | null {
+  if (tool !== "backend_api" || args.operation !== "GET /api/v1/files/stats") return null;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const outer = parsed as Record<string, unknown>;
+  const value = outer.result && typeof outer.result === "object" && !Array.isArray(outer.result)
+    ? outer.result as Record<string, unknown>
+    : outer;
+  if (typeof value.file_count !== "number" || typeof value.folder_count !== "number") return null;
+  const bytes = typeof value.total_size_bytes === "number" ? value.total_size_bytes : null;
+  return `${value.file_count} 个文件 · ${value.folder_count} 个文件夹${bytes === null ? "" : ` · ${fmtSize(bytes)}`}`;
 }
 
 /**

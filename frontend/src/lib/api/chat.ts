@@ -45,7 +45,7 @@ export const cancelChatRun = (sessionId: string) =>
   api<{ cancelled: boolean }>(`/chat/${encodeURIComponent(sessionId)}/cancel`, { method: "POST" });
 
 export const chatRunActive = (sessionId: string) =>
-  api<{ active: boolean }>(`/chat/${encodeURIComponent(sessionId)}/active`, { cache: "no-store" });
+  api<{ active: boolean; status?: string; phase?: string; resumable?: boolean }>(`/chat/${encodeURIComponent(sessionId)}/active`, { cache: "no-store" });
 
 /** 订阅服务端保留的当前会话 relay；没有活跃运行时会自然结束。 */
 export async function chatReconnect(

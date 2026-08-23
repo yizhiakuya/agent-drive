@@ -52,6 +52,7 @@ public class ChatBackendApiOperations {
                 http("PUT", "/api/v1/skills/{name}", "创建、更新或启停自定义 Skill"),
                 http("DELETE", "/api/v1/skills/{name}", "删除自定义 Skill"),
                 http("GET", "/api/v1/files", "列出目录内容；支持名称/语义、类型和修改时间筛选"),
+                http("GET", "/api/v1/files/stats", "服务端递归统计当前 owner 的文件、目录和字节数"),
                 http("GET", "/api/v1/files/info", "读取文件信息和预览摘要"),
                 http("GET", "/api/v1/files/content", "读取文本文件的受限完整内容"),
                 http("GET", "/api/v1/files/dedupe", "按服务端 MD5 查询已上传文件"),

@@ -88,9 +88,16 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
     /** {@inheritDoc} */
     @Override
     public List<ChatContext> contexts(UUID userId, String sessionId, List<String> filePaths) {
+        return contexts(userId, sessionId, filePaths, "");
+    }
+
+    /** 按用户意图只装配当前请求需要的个人文档，保留写操作的完整约束。 */
+    @Override
+    public List<ChatContext> contexts(UUID userId, String sessionId,
+                                      List<String> filePaths, String userMessage) {
         Objects.requireNonNull(userId, "userId must not be null");
         List<ChatContext> result = new ArrayList<>();
-        appendBaseContexts(userId, sessionId, result);
+        appendBaseContexts(userId, sessionId, result, userMessage);
         if (filePaths != null) {
             filePaths.stream().filter(Objects::nonNull).map(String::trim).filter(path -> !path.isBlank())
                     .distinct().limit(16).map(path -> readFileContext(userId, path)).forEach(result::add);
@@ -98,10 +105,12 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
         return List.copyOf(result);
     }
 
-    private void appendBaseContexts(UUID userId, String sessionId, List<ChatContext> result) {
+    private void appendBaseContexts(UUID userId, String sessionId,
+                                    List<ChatContext> result, String userMessage) {
         result.add(new ChatContext("agent-drive-system-prompt", "system",
                 systemPrompt.isBlank() ? "(系统提示为空)" : systemPrompt, false));
         for (AgentDocument document : DOCUMENTS) {
+            if (!includePersonalDocument(document, userMessage)) continue;
             result.add(readDocumentOrPlaceholder(userId, document));
         }
         List<SkillSummary> catalog = readSkillCatalog(userId);
@@ -109,6 +118,19 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
         List<String> activeLoadedSkills = appendLoadedSkills(userId, loadedSkills, result);
         result.add(new ChatContext("skill-catalog", "skill-catalog",
                 renderCatalog(catalog, activeLoadedSkills), true));
+    }
+
+    /**
+     * 只读文件请求不需要把用户偏好和长期记忆重复注入；涉及写入、规则或记忆时完整加载。
+     */
+    private boolean includePersonalDocument(AgentDocument document, String userMessage) {
+        if ("AGENT.md".equals(document.source())) return true;
+        String message = userMessage == null ? "" : userMessage.toLowerCase(java.util.Locale.ROOT);
+        if (message.isBlank()) return true;
+        boolean personalTask = message.matches(".*(整理|移动|复制|重命名|删除|覆盖|规则|偏好|记住|记忆|自动化|分类|命名|归类|创建目录|修改).*" );
+        if (personalTask) return true;
+        boolean readOnlyTask = message.matches(".*(多少|数量|统计|列出|看看|查看|搜索|查找|读取|打开|文件|目录|相册|资料).*" );
+        return !readOnlyTask;
     }
 
     /**

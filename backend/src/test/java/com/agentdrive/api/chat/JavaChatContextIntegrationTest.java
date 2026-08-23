@@ -46,6 +46,7 @@ class JavaChatContextIntegrationTest {
         assertThat(operations.find("POST /api/v1/sessions/{sessionId}/summarize")).isPresent();
         assertThat(operations.find("DELETE /api/v1/sessions/{sessionId}")).isPresent();
         assertThat(operations.find("GET /api/v1/files")).isPresent();
+        assertThat(operations.find("GET /api/v1/files/stats")).isPresent();
         assertThat(operations.find("GET /api/v1/devices")).isPresent();
         assertThat(operations.find("POST /api/v1/devices/register")).isPresent();
         assertThat(operations.find("GET /api/v1/tasks")).isEmpty();

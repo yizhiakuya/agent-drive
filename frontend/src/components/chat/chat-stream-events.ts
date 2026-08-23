@@ -16,6 +16,7 @@ export type ChatStreamEvent =
   | { type: "context"; context: ContextTrace }
   | { type: "frontend_action"; data: Record<string, unknown> }
   | { type: "tool_start"; data: Record<string, unknown> }
+  | { type: "tool_progress"; data: Record<string, unknown> }
   | { type: "tool_trace"; trace: ToolTrace };
 
 /** 从后端事件对象读取文本增量；非文本 payload 按空增量处理。 */
@@ -40,11 +41,19 @@ export function parseChatStreamEvent(event: string, data: Record<string, unknown
       return { type: "frontend_action", data };
     case "tool_start":
       return { type: "tool_start", data };
+    case "tool_progress":
+      return parseToolProgress(data);
     case "tool_trace":
       return parseToolTrace(data);
     default:
       return null;
   }
+}
+
+function parseToolProgress(data: Record<string, unknown>): ChatStreamEvent | null {
+  if (typeof data.tool !== "string" || !data.tool
+      || typeof data.message !== "string" || !data.message) return null;
+  return { type: "tool_progress", data };
 }
 
 function parseContext(data: Record<string, unknown>): ChatStreamEvent | null {

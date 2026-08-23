@@ -165,23 +165,35 @@ public class BackendApiTool implements AgentTool {
     }
 
     /**
-     * 保留原有 backend_api 校验、allowlist 查找和 dispatcher 调用顺序。
+     * 执行 {@code backend_api} 的核心分支逻辑。
      *
-     * @param request 待校验的工具请求
-     * @param userId 当前认证 owner
-     * @return 工具 JSON 响应
+     * <p>这里不接收任意 URL，也不直接拼接 HTTP 请求，而是先根据 {@code action}
+     * 在“能力发现”和“精确 operation 调用”之间分流。调用分支必须命中
+     * {@link OperationCatalog} 的登记项，再交给 owner-aware dispatcher；因此模型只能
+     * 使用已登记、已校验并绑定业务 Handler 的能力。</p>
+     *
+     * @param request 已由工具入口规范化的请求信封
+     * @param userId 当前认证 owner；由服务端注入，不能由模型提交
+     * @return 包含成功结果或结构化业务错误的 JSON
      */
     private String executeWithoutLogging(BackendApiRequest request, UUID userId) {
+        // 防止直接调用入口传入 null；协议错误以工具 JSON 返回，不抛出到模型循环外。
         if (request == null) {
             return jsonError("invalid_request", "request must not be null", null);
         }
+
+        // discover 只查询当前 allowlist，不执行任何文件、配置或索引业务。
         if (request.isDiscover()) {
             OperationCatalog.DiscoveryPage page = catalog.discover(
                     request.query(), request.discoveryOffset(), request.discoveryLimit());
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("ok", true);
             result.put("action", "discover");
-            result.put("operations", page.operations());
+            // operation 描述中同时带风险等级和参数 Schema，帮助模型下一轮正确组装 call。
+            result.put("operations", page.operations().stream()
+                    .map(this::operationDescription)
+                    .toList());
+            // 分页元数据必须原样返回，模型才能继续读取完整的匹配目录。
             result.put("total_matches", page.totalMatches());
             result.put("returned", page.operations().size());
             result.put("offset", page.offset());
@@ -190,41 +202,151 @@ public class BackendApiTool implements AgentTool {
             result.put("next_offset", page.nextOffset());
             return json(result);
         }
+
+        // 除 discover 外只接受 call；其他 action 不进入 dispatcher。
         if (!request.isCall()) {
             return jsonError("invalid_action", "action must be discover or call", null);
         }
+
+        // call 必须携带 discover 返回的精确 operation 名称。
         if (request.operation() == null || request.operation().isBlank()) {
             return jsonError("missing_operation", "operation is required for call", null);
         }
+
+        // 只允许登记目录中的 operation，未知名称不会被当作 URL 或 Java 方法执行。
         OperationDefinition definition = catalog.find(request.operation()).orElse(null);
         if (definition == null) {
             return jsonError("unknown_operation", "operation is not registered", catalog.suggestions(request.operation()));
         }
+
+        // 路径模板参数必须放在 path_params；query_params/body 的业务字段由具体 Handler 再校验。
         String parameterError = validatePathParameters(definition, request);
         if (parameterError != null) {
             return parameterError;
         }
+
+        // 先建立统一 envelope，保留 operation 和 risk，便于 runtime、审计和前端展示。
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("action", "call");
         result.put("operation", definition.operation());
         result.put("risk", definition.risk());
         try {
-            result.put("result", dispatcher.dispatch(definition, request, userId));
+            // dispatcher 使用服务端注入的 userId 路由到 owner-scoped Handler；模型不能越过这层。
+            Map<String, Object> dispatchResult = dispatcher.dispatch(definition, request, userId);
+            result.put("result", dispatchResult);
+
+            // Handler 返回的失败也要提升到外层，否则模型可能把嵌套失败误判为成功。
+            if (dispatchResult == null) {
+                markDispatchFailure(result, null, 500, "operation_failed", "backend operation returned no result");
+            } else if (Boolean.FALSE.equals(dispatchResult.get("ok"))) {
+                markDispatchFailure(result, dispatchResult, dispatchStatus(dispatchResult), null, null);
+            }
             return json(result);
         } catch (RuntimeException error) {
-            // A business failure is a structured tool result, not a thrown tool protocol error.
-            // This lets the model stop and explain the actual operation failure instead of
-            // treating the call as an opaque provider/tool interruption.
+            // 业务失败转换成结构化工具结果，而不是让工具协议异常打断整个模型循环。
+            // 这样模型可以解释真实原因，而不是把一次接口失败误报成 Provider 中断。
             int status = operationStatus(error);
+            String code = status == 400 ? "invalid_business_request" :
+                    status == 503 ? "provider_unavailable" : "operation_failed";
             result.put("ok", false);
             result.put("status", status);
-            result.put("error", status == 400 ? "invalid_business_request" :
-                    status == 503 ? "provider_unavailable" : "operation_failed");
+            result.put("code", code);
+            result.put("error", code);
             result.put("message", ChatLogSupport.message(error));
             result.put("detail", ChatLogSupport.message(error));
             return json(result);
         }
+    }
+
+    /**
+     * 将 owner handler 返回的业务失败提升到 backend_api envelope 顶层。
+     *
+     * <p>dispatcher 的结果仍完整保留在 {@code result} 中供模型和历史回放使用；顶层
+     * {@code ok=false} 则让 SSE、前端工具步骤和日志状态机不会把嵌套失败显示为成功。</p>
+     *
+     * @param envelope backend_api 外层响应
+     * @param failure dispatcher 返回的失败结果，可为空
+     * @param status 推导出的 HTTP 风格状态
+     * @param fallbackCode dispatcher 没有稳定错误码时使用的代码
+     * @param fallbackDetail dispatcher 没有错误说明时使用的详情
+     */
+    private void markDispatchFailure(Map<String, Object> envelope,
+                                     Map<String, Object> failure,
+                                     int status,
+                                     String fallbackCode,
+                                     String fallbackDetail) {
+        envelope.put("ok", false);
+        envelope.put("status", status);
+        String rawCode = failure == null ? null : textValue(failure.get("code"));
+        String rawError = failure == null ? null : textValue(failure.get("error"));
+        String code = stableCode(rawCode) ? rawCode : stableCode(rawError) ? rawError
+                : fallbackCode == null ? "operation_failed" : fallbackCode;
+        String detail = failure == null ? fallbackDetail
+                : firstText(failure.get("detail"), failure.get("message"), failure.get("error"));
+        if (detail == null) detail = fallbackDetail == null ? code : fallbackDetail;
+        envelope.put("code", code);
+        envelope.put("error", code);
+        envelope.put("detail", detail);
+        envelope.put("message", detail);
+    }
+
+    /**
+     * 从 handler 结果推导工具日志和 envelope 使用的数值状态。
+     *
+     * @param failure dispatcher 返回的失败结果
+     * @return 明确的数值状态或按错误内容推导的 4xx/5xx
+     */
+    private int dispatchStatus(Map<String, Object> failure) {
+        Object value = failure.get("status");
+        if (value instanceof Number number && number.intValue() >= 100) {
+            return number.intValue();
+        }
+        String error = firstText(failure.get("code"), failure.get("error"), failure.get("detail"));
+        if (error != null) {
+            String normalized = error.toLowerCase(java.util.Locale.ROOT);
+            if (normalized.contains("provider") || normalized.contains("http ")
+                    || normalized.contains("timeout") || normalized.contains("unavailable")) {
+                return 503;
+            }
+        }
+        return 400;
+    }
+
+    /**
+     * 判断错误码是否为可供机器消费的短标识。
+     *
+     * @param value 候选错误码
+     * @return 候选值是 ASCII slug 时为 true
+     */
+    private boolean stableCode(String value) {
+        return value != null && value.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}");
+    }
+
+    /**
+     * 从多个可能的错误字段中取第一个非空文本。
+     *
+     * @param values handler 返回字段
+     * @return 第一个非空文本，全部为空时返回 null
+     */
+    private String firstText(Object... values) {
+        for (Object value : values) {
+            String text = textValue(value);
+            if (text != null) return text;
+        }
+        return null;
+    }
+
+    /**
+     * 把任意字段安全转换成非空文本。
+     *
+     * @param value 原始字段
+     * @return 去首尾空白后的文本，空值返回 null
+     */
+    private String textValue(Object value) {
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
     }
 
     /**
@@ -385,6 +507,98 @@ public class BackendApiTool implements AgentTool {
             result.put("suggestions", suggestions);
         }
         return json(result);
+    }
+
+    /**
+     * 为 discover 结果补充稳定的参数位置和必填字段提示。
+     *
+     * <p>operation catalog 仍是唯一 allowlist；这里的 schema 只帮助模型把参数放入
+     * 正确的 query/body 容器，避免对版本查询、模型探测和索引调用反复试错。</p>
+     */
+    private Map<String, Object> operationDescription(OperationDefinition operation) {
+        Map<String, Object> description = new LinkedHashMap<>();
+        description.put("operation", operation.operation());
+        description.put("method", operation.method());
+        description.put("path", operation.path());
+        description.put("summary", operation.summary());
+        description.put("risk", operation.risk());
+        description.put("parameter_schema", parameterSchema(operation));
+        return description;
+    }
+
+    private Map<String, Object> parameterSchema(OperationDefinition operation) {
+        String path = operation.path();
+        String method = operation.method();
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("path_params", parameterSet(operation.pathParameterNames(), operation.pathParameterNames()));
+        schema.put("query_params", parameterSet(List.of(), List.of()));
+        schema.put("body", parameterSet(List.of(), List.of()));
+
+        if ("GET".equals(method) && "/api/v1/files".equals(path)) {
+            schema.put("query_params", parameterSet(
+                    List.of("path", "q", "mode", "limit", "min_score", "type", "modified_after", "modified_before"),
+                    List.of()));
+        } else if ("GET".equals(method) && "/api/v1/files/stats".equals(path)) {
+            schema.put("query_params", parameterSet(List.of("path"), List.of()));
+        } else if ("GET".equals(method) && Set.of(
+                "/api/v1/files/info", "/api/v1/files/content", "/api/v1/files/versions",
+                "/api/v1/files/dedupe").contains(path)) {
+            schema.put("query_params", parameterSet(
+                    "/api/v1/files/dedupe".equals(path) ? List.of("md5") : List.of("path", "limit", "max_bytes"),
+                    "/api/v1/files/dedupe".equals(path) ? List.of("md5") : List.of("path")));
+        } else if ("GET".equals(method) && Set.of("/api/v1/files/favorites", "/api/v1/files/recent").contains(path)) {
+            schema.put("query_params", parameterSet(List.of("limit"), List.of()));
+        } else if ("GET".equals(method) && "/api/v1/index".equals(path)) {
+            schema.put("query_params", parameterSet(List.of("prefix", "limit"), List.of()));
+        } else if ("GET".equals(method) && "/api/v1/index/file".equals(path)) {
+            schema.put("query_params", parameterSet(List.of("path"), List.of("path")));
+        } else if ("PUT".equals(method) && Set.of("/api/v1/index/file", "/api/v1/index/vision").contains(path)) {
+            schema.put("query_params", parameterSet(List.of("path"), List.of()));
+            schema.put("body", parameterSet(List.of("paths", "files", "force"), List.of()));
+        } else if ("PUT".equals(method) && "/api/v1/index/vectors".equals(path)) {
+            schema.put("query_params", parameterSet(List.of("path"), List.of()));
+            schema.put("body", parameterSet(List.of("paths", "files", "force", "limit"), List.of()));
+        } else if ("POST".equals(method) && "/api/v1/index/rebuild".equals(path)) {
+            schema.put("body", parameterSet(List.of("prefix"), List.of()));
+        } else if ("POST".equals(method) && "/api/v1/config/models".equals(path)) {
+            schema.put("body", parameterSet(List.of("type", "base_url", "api_key"), List.of("type", "base_url")));
+        } else if ("POST".equals(method) && "/api/v1/config/test".equals(path)) {
+            schema.put("body", parameterSet(List.of("type", "base_url", "api_key"), List.of("type", "base_url", "api_key")));
+        } else if ("POST".equals(method) && "/api/v1/config".equals(path)) {
+            schema.put("body", parameterSet(List.of("type", "base_url", "api_key", "model"), List.of("type", "base_url", "model")));
+        } else if ("POST".equals(method) && "/api/v1/config/vision/models".equals(path)) {
+            schema.put("body", parameterSet(List.of("provider", "base_url", "api_key"), List.of()));
+        } else if ("PUT".equals(method) && "/api/v1/config/vision".equals(path)) {
+            schema.put("body", parameterSet(List.of("provider", "base_url", "api_key", "model"), List.of("model")));
+        } else if ("PUT".equals(method) && "/api/v1/config/embeddings".equals(path)) {
+            schema.put("body", parameterSet(List.of("provider", "base_url", "api_key", "model"), List.of()));
+        } else if ("POST".equals(method) && "/api/v1/vision/describe".equals(path)) {
+            schema.put("body", parameterSet(List.of("files"), List.of("files")));
+        } else if (Set.of("POST", "DELETE").contains(method) && Set.of(
+                "/api/v1/files/favorites", "/api/v1/files/versions/restore", "/api/v1/files/mkdir",
+                "/api/v1/files/delete", "/api/v1/files/trash/restore").contains(path)) {
+            schema.put("body", parameterSet(
+                    switch (path) {
+                        case "/api/v1/files/favorites", "/api/v1/files/mkdir", "/api/v1/files/delete" -> List.of("path");
+                        case "/api/v1/files/versions/restore" -> List.of("path", "version_id");
+                        default -> List.of("trash_id", "path");
+                    }, List.of()));
+        } else if ("POST".equals(method) && Set.of("/api/v1/files/rename", "/api/v1/files/move", "/api/v1/files/copy").contains(path)) {
+            schema.put("body", parameterSet(
+                    switch (path) {
+                        case "/api/v1/files/rename" -> List.of("src", "dst");
+                        case "/api/v1/files/move" -> List.of("src", "dst_dir", "overwrite");
+                        default -> List.of("src", "dst", "overwrite");
+                    }, List.of()));
+        }
+        return schema;
+    }
+
+    private Map<String, Object> parameterSet(List<String> allowed, List<String> required) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("allowed", List.copyOf(allowed));
+        result.put("required", List.copyOf(required));
+        return result;
     }
 
     private int operationStatus(RuntimeException error) {

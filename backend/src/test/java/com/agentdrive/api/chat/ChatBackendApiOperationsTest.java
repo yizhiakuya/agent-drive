@@ -41,6 +41,16 @@ class ChatBackendApiOperationsTest {
     }
 
     @Test
+    void discoversServerSideFileStatisticsForNaturalLanguageCounting() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+
+        OperationCatalog.DiscoveryPage page = catalog.discover("相册同步文件夹里边有多少文件", 0, 20);
+
+        assertThat(page.operations()).extracting(OperationDefinition::operation)
+                .contains("GET /api/v1/files/stats");
+    }
+
+    @Test
     void doesNotExposeApiKeyRevealEndpointsToTheAgentCatalog() {
         OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
 

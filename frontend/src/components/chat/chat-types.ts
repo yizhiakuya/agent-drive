@@ -9,8 +9,13 @@ export interface Message {
   contextKind?: string;
   reasoning?: string;
   tool?: string;
+  step?: number;
   arguments?: Record<string, unknown>;
   status?: "running" | "done" | "error";
+  startedAt?: number;
+  progressMessage?: string;
+  progressPhase?: string;
+  elapsedMs?: number;
   output?: string;
   parsed?: Record<string, unknown> | unknown[];
 }

@@ -38,6 +38,20 @@ public interface ChatContextProvider {
     }
 
     /**
+     * 按当前用户消息编译上下文；旧 provider 默认保留完整上下文行为。
+     *
+     * @param userId 已认证 owner
+     * @param sessionId 当前会话 ID
+     * @param filePaths 本轮引用的 owner 相对路径
+     * @param userMessage 当前用户消息，供上下文策略判断相关性
+     * @return 当前请求需要的上下文快照
+     */
+    default List<ChatContext> contexts(UUID userId, String sessionId,
+                                       List<String> filePaths, String userMessage) {
+        return contexts(userId, sessionId, filePaths);
+    }
+
+    /**
      * 返回不提供额外上下文的实现。
      * @return 空上下文 provider
      */

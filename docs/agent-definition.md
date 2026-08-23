@@ -19,7 +19,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 - 文件列表、名称/路径搜索、语义搜索、预览、受限全文查看、上传、移动、复制、重命名、回收站和恢复。
 - LLM provider、embedding 和 vision 配置、模型目录 probe、连接测试和按文件索引任务。
 - 会话、摘要、用户偏好、reasoning、工具轨迹和确定性 replay 的持久化。
-- 任务状态、进度、取消、重试、schedule、Worker 在线状态和自动化报告。
+- 当前请求内的文件、配置和索引业务结果；长时间运行由运行 relay 的状态和明确终态反馈负责，不向 Agent 暴露旧任务队列。
 - owner-scoped Skill 的发现、读取、创建、编辑、启停和删除；内置 API Skill 与 operation catalog 同源。
 - Web 的 `frontend_api` 动作：只操作当前浏览器 registry 已登记的页面能力。
 - 高风险写操作确认、nonce 防重放、路径安全、结果校验和审计日志。
@@ -27,7 +27,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 ### 不属于当前契约
 
 - 任意 URL、任意 HTTP header、Cookie/Bearer、Python/Java 入口、JavaScript/eval。
-- 在 Agent 请求内执行 embedding、vision 或长时间文件遍历；这些工作必须入队交给 Worker。图片索引不使用 OCR。
+- 在 Agent 请求内接触任意 URL、凭据、源代码执行入口或未登记 operation。图片索引不使用 OCR；长时间运行必须经过业务 Workflow 的状态和超时边界。
 - S3 存储、多用户产品隔离、iOS 客户端、音视频转写和知识图谱问答。
 
 ## 3. 工具边界
@@ -38,7 +38,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 |------|------|----------|
 | `backend_api` | 后端 HTTP 和登记的内部 operation | 先 discover，再调用精确 operation；参数由 Schema 校验 |
 | `frontend_api` | 当前浏览器页面动作 | 只能使用 registry 中 exact operation，结果以 `frontend_action` 交给本地 handler |
-| `plan` | 保存和推进用户目标 | 只记录计划状态，不代替业务 mutation |
+| `plan` | 保存和推进用户目标 | 只记录当前会话完整计划状态，不创建后台任务、不代替业务 mutation |
 | `read_skill` | 分页发现并读取启用 Skill | 只读 owner registry；Skill 只指导已登记工具，不执行任意文件/代码 |
 
 `backend_api` 使用 `action=discover|call` 信封。HTTP operation 标识为 `METHOD /api/v1/path`，内部 operation 标识为 `INTERNAL name`。discover 以 `discovery_offset` 和 `discovery_limit` 分页，默认返回 6 项、单页最多 20 项；每页同时返回完整匹配数、实际窗口、`has_more` 和 `next_offset`。模型必须在分页完成后才能把聚合结果称为完整匹配集。模型不能直接选择 Java 方法、React handler、文件系统绝对路径或未登记能力。
@@ -57,11 +57,11 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 - Provider 原生 tool call 才能产生工具步骤；正文中的 DSML/XML 只是普通文本，不能触发工具，也不应被文档描述为另一套可执行协议。
 - 工具返回结构化成功或失败；瞬时错误按 provider/工具策略退避，永久错误直接反馈原因。
 - ask/auto 模式下 red operation 先保存待确认参数，确认后做确定性签名校验；full 模式按用户授权直接执行；非 red operation 以 session/tool/arguments replay，避免重试再次产生副作用。
-- 每轮有步数、输出和上下文预算；流式输出结束、取消、断开和异常都进入明确终态。聊天 runtime 通过 session relay 与 SSE 客户端解耦，断开只结束订阅，不等于取消 Agent；重新连接先校验 owner，再回放当前 relay。需要跨进程重启继续执行时，使用普通 `chat.run` 业务 API 入队任务，由 Worker 负责租约和状态。
+- Agent 默认不因固定工具步数结束；它可以持续规划和调用工具，直到目标完成、用户取消或运行基础设施熔断。每轮仍记录输出和上下文用量；流式输出结束、取消、断开和异常都进入明确终态。聊天 runtime 通过 session relay 与 SSE 客户端解耦，断开只结束订阅，不等于取消 Agent；重新连接先校验 owner，再回放当前 relay。单次运行仍受 `ChatRunRegistry` 的 10 分钟超时和进程并发上限保护。当前跨进程重启不恢复正在运行的 Agent，也不重新暴露旧任务队列；持久 run state 是下一阶段扩展点。
 
 ## 5. 事件与记忆
 
-Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。context 对应模型可见的规范系统提示、owner Agent 文档和 Skill 目录，首轮固定装配五项基线（缺失文档或空 Skill 目录使用明确占位），按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
+Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_progress`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。`tool_start` 携带业务阶段和开始时间；长工具每秒发送 `tool_progress`，包含阶段、已耗时和面向用户的运行说明，但不伪造未知的百分比。context 对应模型可见的规范系统提示、owner Agent 文档和 Skill 目录，首轮固定装配五项基线（缺失文档或空 Skill 目录使用明确占位），按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
 
 持久状态分为：
 

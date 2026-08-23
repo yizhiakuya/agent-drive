@@ -254,7 +254,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     const key = sessionId;
 
     void chatRunActive(key)
-      .then(({ active }) => {
+      .then(({ active, status }) => {
+        if (status === "interrupted" && !disposed && sessionIdRef.current === key) {
+          setMessages((current) => [...current, {
+            type: "system",
+            content: "上次运行在服务重启时中断，当前没有自动重放未确认操作；如需继续，请回复“继续刚才的任务”。",
+          }]);
+        }
         if (!active || disposed || streams.has(key)) return;
         const frame = createChatStreamFrame({
           isCurrent: () => streamsRef.current.get(key)?.controller === controller

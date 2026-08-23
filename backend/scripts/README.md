@@ -11,10 +11,13 @@ java scripts/HealthCheck.java http://127.0.0.1:8000
 从仓库根目录快速查看服务器上的 Agent Drive 会话：
 
 ```bash
+AGENT_DRIVE_SSH_HOST=user@example.com \
 java backend/scripts/SessionView.java 83565e8b-238d-406e-8a64-3d122c107c4b
+AGENT_DRIVE_SSH_HOST=user@example.com \
 java backend/scripts/SessionView.java 83565e8b-238d-406e-8a64-3d122c107c4b --full
 ```
 
 默认只显示最近 12 条消息和工具 replay 的 action/operation/path，并截断内容；`--full` 显示全部消息和更长的 replay 输出。两种模式都会脱敏常见 token。查看器只读 PostgreSQL，找不到会话返回退出码 3。
+远端主机也可以通过 `--host user@example.com` 传入；数据库环境文件默认读取 `/etc/agent-drive-java/java.env`，可用 `AGENT_DRIVE_DATABASE_ENV` 覆盖。
 
 后端生产代码仍放在 `src/main/java`；本目录只放一次性运维、诊断和发布辅助脚本。每个类、构造器和方法都使用简洁的标准 Javadoc。

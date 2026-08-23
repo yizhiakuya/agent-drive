@@ -69,11 +69,51 @@ public final class ChatSseEvents {
      * @return {@code event=tool_start} 事件。
      */
     public static ChatSseEvent toolStart(int step, String tool, Map<String, Object> arguments) {
+        return toolStart(step, tool, arguments, null, System.currentTimeMillis());
+    }
+
+    /**
+     * 创建带业务阶段和开始时间的工具开始事件。
+     *
+     * @param step Agent 当前执行步数
+     * @param tool 工具名称
+     * @param arguments 工具调用参数
+     * @param progressMessage 工具开始时的业务阶段提示
+     * @param startedAtEpochMillis 工具开始的 Unix 毫秒时间戳
+     * @return 带初始运行状态的 {@code tool_start} 事件
+     */
+    public static ChatSseEvent toolStart(int step, String tool, Map<String, Object> arguments,
+                                         String progressMessage, long startedAtEpochMillis) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("step", step);
         data.put("tool", tool == null ? "" : tool);
         data.put("arguments", arguments == null ? Map.of() : arguments);
+        data.put("started_at", startedAtEpochMillis);
+        if (progressMessage != null && !progressMessage.isBlank()) {
+            data.put("progress_message", progressMessage);
+        }
         return new ChatSseEvent("tool_start", data);
+    }
+
+    /**
+     * 创建工具运行中的阶段/耗时更新事件。
+     *
+     * @param step Agent 当前执行步数
+     * @param tool 工具名称
+     * @param phase 机器可读阶段
+     * @param message 面向用户的阶段说明
+     * @param elapsedMillis 工具已运行毫秒数
+     * @return {@code event=tool_progress} 事件
+     */
+    public static ChatSseEvent toolProgress(int step, String tool, String phase,
+                                            String message, long elapsedMillis) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("step", step);
+        data.put("tool", tool == null ? "" : tool);
+        data.put("phase", phase == null || phase.isBlank() ? "running" : phase);
+        data.put("message", message == null ? "正在执行" : message);
+        data.put("elapsed_ms", Math.max(0L, elapsedMillis));
+        return new ChatSseEvent("tool_progress", data);
     }
 
     /**

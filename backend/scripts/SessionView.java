@@ -7,11 +7,13 @@ import java.util.Base64;
 import java.util.UUID;
 
 /**
- * 通过 SSH 查询 Megumin 上指定 Agent Drive 会话的脱敏诊断摘要。
+ * 通过 SSH 查询指定 Agent Drive 会话的脱敏诊断摘要。
  */
 public final class SessionView {
-    private static final String DEFAULT_HOST = "root@192.168.0.109";
-    private static final String DATABASE_ENV = "/opt/agent-drive-java/.env";
+    private static final String DEFAULT_HOST = System.getenv()
+            .getOrDefault("AGENT_DRIVE_SSH_HOST", "localhost");
+    private static final String DATABASE_ENV = System.getenv()
+            .getOrDefault("AGENT_DRIVE_DATABASE_ENV", "/etc/agent-drive-java/java.env");
     private static final int DEFAULT_MESSAGE_LIMIT = 12;
     private static final int DEFAULT_CONTENT_LIMIT = 260;
     private static final int FULL_CONTENT_LIMIT = 1600;

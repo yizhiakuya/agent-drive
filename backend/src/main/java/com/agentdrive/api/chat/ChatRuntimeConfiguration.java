@@ -7,6 +7,7 @@ import com.agentdrive.agent.AgentTool;
 import com.agentdrive.agent.FrontendActionTool;
 import com.agentdrive.agent.OperationCatalog;
 import com.agentdrive.agent.ProviderRuntimeResolver;
+import com.agentdrive.agent.PlanTool;
 import com.agentdrive.files.FileStorageService;
 import com.agentdrive.infrastructure.AppProperties;
 import com.agentdrive.infrastructure.PersistentChatRuntimeStateStore;
@@ -69,6 +70,12 @@ public class ChatRuntimeConfiguration {
         return new FrontendActionTool(objectMapper);
     }
 
+    /** 创建只记录当前会话可视化计划的绿色辅助工具。 */
+    @Bean
+    PlanTool planTool(ObjectMapper objectMapper) {
+        return new PlanTool(objectMapper);
+    }
+
     /**
      * 创建系统提示、Agent 文档和 Skill 目录上下文 provider。
      * @param skillRegistry 当前 owner 的 Skill registry
@@ -99,7 +106,7 @@ public class ChatRuntimeConfiguration {
      * @param confirmationService red 操作确认服务。
      * @param stateStore 同时实现工具重放和 transcript 持久化的状态存储。
      * @param contextProvider owner-scoped 上下文装配器。
-     * @param properties 提供系统提示和最大 Agent 步数。
+     * @param properties 提供系统提示和可选的 Agent 运维步数熔断。
      * @return 生产用 {@link ChatRuntime}。
      */
     @Bean

@@ -29,7 +29,7 @@ frontend/src/
 
 ## 2. 页面与状态
 
-`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。启动检查把 401/403 与服务故障分开：前者进入 web 登录或原生重扫码，5xx、网络、JSON 解析和布尔字段契约错误进入保留凭据的 `server-error`，通过同一入口重新执行完整认证与配置检查。整页 Skeleton 只由初次 `authMode=loading` 控制；下拉刷新仍更新 store.loading，但工作区继续挂载，因此未发送草稿、SSE 和工具步骤不会丢失。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。
+`app/page.tsx` 负责认证门控和 Chat/File/Settings 三个主视图的切换。启动检查把 401/403 与服务故障分开：前者进入 web 登录或原生重扫码，5xx、网络、JSON 解析和布尔字段契约错误进入保留凭据的 `server-error`，通过同一入口重新执行完整认证与配置检查。整页 Skeleton 只由初次 `authMode=loading` 控制；下拉刷新仍更新 store.loading，但工作区继续挂载，因此未发送草稿、SSE 和工具步骤不会丢失。对话主区使用 CSS hidden 保持 `ChatPanel` 挂载。会话列表按 session ID 去重，并在空标题摘要完成后按请求序列重新加载。工具轨迹默认以用户级 Activity 标题展示（例如“统计文件”“读取文件内容”“更新索引”），原始 `backend_api` operation 仅作为次级技术标识，展开后仍可审计完整参数和结构化结果。
 
 对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。完整会话侧栏在 `xl` 以下隐藏并改用抽屉，文件栏同样在 `xl` 以下隐藏，避免中等宽度挤压聊天 composer；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。设置页的 `SystemStatusCenter` 负责并行健康探测和局部错误展示。
 
@@ -46,7 +46,7 @@ frontend/src/
 
 `useChatStream` 负责编排请求生命周期，纯逻辑按职责拆分。流式忙碌状态只由这个 hook 持有，ChatPanel 不再维护第二份 `busy` 状态，避免发送按钮、停止按钮和流结束回调出现状态分叉：
 
-- `chat-stream-events.ts`：context/text/reasoning/tool 等 SSE 事件校验和映射；
+- `chat-stream-events.ts`：context/text/reasoning/tool_start/tool_progress/tool_trace 等 SSE 事件校验和映射；
 - `chat-stream-state.ts`：上下文注入顺序、消息、reasoning、工具轮次和终态状态转换；
 - `chat-stream-frame.ts`：80ms 批量刷新、工具轮次边界和最终冲刷。
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
@@ -55,7 +55,7 @@ frontend/src/
 - ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；响应同时提供按模型 ID 编排的 `model_capabilities`，显式 Provider 能力字段优先，未知模型保守视为不支持图片。选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。Onboarding 使用同一目录接口完成首次模型选择，并在协议、地址或 API key 变化时使旧请求失效；协议或地址变化还会销毁旧 key 草稿。
 - Skill 正文由后端按会话恢复：前端不把工具轨迹伪装成客户端 history；服务端从 owner transcript 识别已成功读取的 Skill，下一轮直接注入当前版本正文，目录标记为“已加载”，因此模型不会重复调用 `read_skill`。
 - 输入区的 `@` 选择器通过 name 搜索加载 owner 文件/文件夹：文件点击即引用，文件夹点击进入目录浏览，目录行和浏览头部另提供“引用文件夹”动作；浏览状态用路径栈和请求代次隔离迟到响应，Escape 返回上级或关闭候选层。文件选择器附件走普通上传接口后加入 `file_context`；剪贴板图片只读入内存并以受限 Base64 `inline_images` 随本轮请求发送，不创建聊天附件路径，发送前按当前模型图片能力校验。回答中的 `[[file:path]]` / `[[folder:path]]` 使用固定内部 HTTPS 哨兵链接，经 origin、kind 和路径校验后派发已登记的文件打开动作。
-- 输入区权限控件支持 `请求批准`、`帮我批准`（默认）和 `完全访问` 三档，选择保存在当前浏览器并随 `/chat/stream` 的 `permission_mode` 发送。后端按读写方法和 `green/yellow/red` 风险决定确认：请求批准模式拦截所有非读取调用，帮我批准模式只拦截 red，完全访问按用户授权直接执行已登记 operation；ask/auto 下 red 仍走服务端一次性签名确认。
+- 输入区权限控件支持 `请求批准`、`帮我批准`（默认）和 `完全访问` 三档，选择保存在当前浏览器并随 `/chat/stream` 的 `permission_mode` 发送。后端按读写方法和 `green/yellow/red` 风险决定确认：请求批准模式拦截非读取调用，但绿色内部前端导航和会话 `plan` 辅助工具不拦截；帮我批准模式只拦截 red，完全访问按用户授权直接执行已登记 operation；ask/auto 下 red 仍走服务端一次性签名确认。
 - 上下文使用量紧跟输入区顶部的推理层级，以紧凑圆环、已用/总量和下拉箭头显示；默认只占一个控制位，点击原生 `<details>` 后展开窗口上限、已用、可用空间和本轮输入/输出详情。Java runtime 优先使用 Provider 返回的 `TokenUsage.inputTokenCount`，流式 Provider 未回传时按已组装消息做保守估算，不能伪报 0；点击外部区域或 Escape 会关闭浮层。颜色按 50%/80% 阈值映射 warn/danger，完整数据保留在可访问标签和悬浮提示中。
 
 解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。活动流以 session key 保存在 hook 的 Map 中；切换会话标记 detached 但保持网络读取，text/reasoning 帧用当前 session 检查隔离 UI 写入，context/tool 事件只写所属会话视图，返回原会话或结束后从持久历史收敛。初始请求从 `X-Session-ID` 收养服务端 session，页面把当前 ID 持久化；重新挂载时先查询 `/chat/{sessionId}/active`，活动 relay 通过 `/chat/{sessionId}/stream` 回放并继续渲染，结束后重新读取 `no-store` 历史。当前会话 stop 才调用 cancel；组件卸载只 Abort 浏览器订阅，不能把刷新误报为用户取消。流异常收尾仍先同步 flush/cancel，再清理空助手占位和追加错误消息；错误事件带服务端 session ID 时，新会话立即收养该 ID，后台会话只刷新列表而不污染当前视图。

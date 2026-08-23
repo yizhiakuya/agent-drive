@@ -82,4 +82,25 @@ class MybatisFileStorageServiceListTest {
         verify(mapper).upsertMetadataBatch(eq(owner.toString()), org.mockito.ArgumentMatchers.argThat(
                 entries -> entries.size() == 1_000));
     }
+
+    @Test
+    void statisticsCountsVisibleFilesAndFoldersWithoutInternalArtifacts() throws Exception {
+        Path ownerRoot = root.resolve(owner.toString());
+        Files.createDirectories(ownerRoot.resolve("photos/2026-07-01"));
+        Files.writeString(ownerRoot.resolve("photos/2026-07-01/a.txt"), "abc");
+        Files.writeString(ownerRoot.resolve("photos/2026-07-01/b.txt"), "12345");
+        Files.createDirectories(ownerRoot.resolve("photos/.trash"));
+        Files.writeString(ownerRoot.resolve("photos/.trash/hidden.txt"), "hidden");
+
+        Map<String, Object> result = files.statistics(owner, "photos");
+
+        assertThat(result)
+                .containsEntry("path", "photos")
+                .containsEntry("recursive", true)
+                .containsEntry("file_count", 2L)
+                .containsEntry("folder_count", 1L)
+                .containsEntry("total_size_bytes", 8L)
+                .containsEntry("complete", true)
+                .containsKey("snapshot_at");
+    }
 }

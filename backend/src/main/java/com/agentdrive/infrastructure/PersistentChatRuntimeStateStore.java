@@ -1,6 +1,7 @@
 package com.agentdrive.infrastructure;
 
 import com.agentdrive.agent.ChatTranscriptStore;
+import com.agentdrive.agent.ChatRunStateStore;
 import com.agentdrive.agent.ConfirmationStateStore;
 import com.agentdrive.agent.ToolReplayStore;
 
@@ -23,5 +24,5 @@ import com.agentdrive.agent.ToolReplayStore;
  * transcript 或 {@code last_trace}。</p>
  */
 public interface PersistentChatRuntimeStateStore
-        extends ToolReplayStore, ConfirmationStateStore, ChatTranscriptStore {
+        extends ToolReplayStore, ConfirmationStateStore, ChatTranscriptStore, ChatRunStateStore {
 }

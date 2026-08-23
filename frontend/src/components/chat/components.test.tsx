@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { fmtSize, fmtTokens, fmtToolArgs } from "@/lib/format";
+import { fileStatsSummary, fmtSize, fmtTokens, fmtToolArgs, fmtToolTitle } from "@/lib/format";
 import { ToolStep } from "./ToolStep";
 import { ContextBar } from "./ContextBar";
 import { PlanCard } from "./PlanCard";
@@ -37,6 +37,8 @@ describe("fmtToolArgs 工具参数人类可读", () => {
     expect(fmtToolArgs("semantic_search", { query: "预算" })).toBe('语义搜索 "预算"');
     expect(fmtToolArgs("read_skill", { action: "read", name: "weekly-report" })).toBe("加载 Skill weekly-report");
     expect(fmtToolArgs("read_skill", { action: "discover", query: "周报" })).toBe("查找 Skill “周报”");
+    expect(fmtToolArgs("plan", { action: "set" })).toBe("制定执行计划");
+    expect(fmtToolArgs("plan", { action: "update" })).toBe("更新执行计划");
   });
   it("未知工具回退 JSON", () => {
     expect(fmtToolArgs("unknown_tool", { x: 1 })).toBe('{"x":1}');
@@ -76,6 +78,27 @@ describe("ContextBar 上下文圆环", () => {
   });
 });
 
+describe("fmtToolTitle 业务步骤标题", () => {
+  it("将 backend_api operation 映射为用户级标题", () => {
+    expect(fmtToolTitle("backend_api", {
+      action: "call",
+      operation: "GET /api/v1/files/stats",
+    })).toBe("统计文件");
+    expect(fmtToolTitle("backend_api", {
+      action: "call",
+      operation: "GET /api/v1/files",
+      query_params: { q: "合同" },
+    })).toBe("搜索文件");
+  });
+
+  it("从 stats 结果生成文件统计摘要", () => {
+    expect(fileStatsSummary("backend_api", { operation: "GET /api/v1/files/stats" }, {
+      ok: true,
+      result: { file_count: 777, folder_count: 97, total_size_bytes: 2048 },
+    })).toBe("777 个文件 · 97 个文件夹 · 2.0 KB");
+  });
+});
+
 describe("PlanCard 计划卡片", () => {
   it("显示完成进度", () => {
     const plan = [
@@ -85,11 +108,26 @@ describe("PlanCard 计划卡片", () => {
     ];
     render(<PlanCard plan={plan} />);
     expect(screen.getByText(/执行计划（1\/3）/)).toBeInTheDocument();
+    expect(screen.getByText("当前会话")).toBeInTheDocument();
     expect(screen.getByText("扫描文件")).toBeInTheDocument();
   });
 });
 
 describe("ToolStep 工具步骤", () => {
+  it("运行中的长工具显示业务阶段和运行计时", () => {
+    render(<ToolStep step={{
+      tool: "backend_api",
+      arguments: { operation: "PUT /api/v1/index/vectors" },
+      status: "running",
+      progressMessage: "正在生成文件向量",
+      elapsedMs: 2300,
+    }} />);
+    expect(screen.getByText("正在生成文件向量")).toBeInTheDocument();
+    expect(screen.getByText("00:02")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: /正在生成文件向量/ })).toBeInTheDocument();
+    expect(screen.queryByText("此步骤没有可展示的返回内容")).not.toBeInTheDocument();
+  });
+
   it("running 状态显示执行中", () => {
     render(<ToolStep step={{ tool: "list_files", arguments: {}, status: "running" }} />);
     expect(screen.getByText(/执行中/)).toBeInTheDocument();
@@ -104,6 +142,29 @@ describe("ToolStep 工具步骤", () => {
   it("error 状态显示失败", () => {
     render(<ToolStep step={{ tool: "read_file", arguments: { path: "x" }, status: "error", output: "{\"ok\":false,\"error\":\"文件不存在\"}", parsed: { ok: false, error: "文件不存在" } }} />);
     expect(screen.getByText(/失败/)).toBeInTheDocument();
+  });
+
+  it("历史 backend_api 嵌套失败结果显示失败详情", () => {
+    render(<ToolStep step={{
+      tool: "backend_api",
+      arguments: { action: "call" },
+      status: "done",
+      parsed: { ok: true, result: { ok: false, error: "provider_failed", detail: "视觉服务不可用" } },
+    }} />);
+    fireEvent.click(screen.getByText("backend_api"));
+    expect(screen.getByText(/视觉服务不可用/)).toBeInTheDocument();
+    expect(screen.getByText(/失败/)).toBeInTheDocument();
+  });
+
+  it("文件统计步骤直接显示业务摘要", () => {
+    render(<ToolStep step={{
+      tool: "backend_api",
+      arguments: { action: "call", operation: "GET /api/v1/files/stats" },
+      status: "done",
+      parsed: { ok: true, result: { file_count: 777, folder_count: 97, total_size_bytes: 2048 } },
+    }} />);
+    fireEvent.click(screen.getByText("统计文件"));
+    expect(screen.getByText("777 个文件 · 97 个文件夹 · 2.0 KB")).toBeInTheDocument();
   });
   it("对象型 parsed 渲染为完整 JSON 而非截断原文", () => {
     const parsed = { llm_configured: true, embeddings: { configured: false, model: "" } };

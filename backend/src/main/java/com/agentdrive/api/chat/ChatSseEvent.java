@@ -13,7 +13,7 @@ public record ChatSseEvent(String event, Map<String, Object> data) {
     /**
      * 校验并冻结一个聊天 SSE 事件。
      *
-     * @param event SSE 事件名，例如 text、reasoning、tool_trace、done 或 error。
+     * @param event SSE 事件名，例如 text、reasoning、tool_progress、tool_trace、done 或 error。
      * @param data 事件 JSON 对象，不能为 {@code null}。
      * @throws IllegalArgumentException 事件名为空时抛出。
      * @throws NullPointerException data 为 {@code null} 时抛出。

@@ -111,6 +111,19 @@ public final class FileController {
     }
 
     /**
+     * 响应 {@code GET /api/v1/files/stats}，在服务端递归统计当前 owner 的可见文件。
+     *
+     * @param path owner 根目录下的相对统计目录，默认表示根目录。
+     * @param exchange 用于解析文件所有者的请求上下文。
+     * @return 文件数、目录数、字节数和统计快照时间。
+     */
+    @GetMapping("/stats")
+    public Mono<Map<String, Object>> statistics(@RequestParam(defaultValue = "") String path,
+                                                ServerWebExchange exchange) {
+        return authenticated(exchange, owner -> files.statistics(owner, path));
+    }
+
+    /**
      * 响应 {@code GET /api/v1/files/dedupe}，查询当前用户是否已有经服务端验证的 MD5 文件。
      *
      * @param md5 待查询的十六进制 MD5；服务层会按当前文件 revision 验证索引命中。

@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { appendContextMessage, appendToolStep, completeToolStep, planFromToolTrace } from "./chat-stream-state";
+import { appendContextMessage, appendToolStep, completeToolStep, planFromToolTrace, updateToolProgress } from "./chat-stream-state";
 import type { PlanStep } from "./PlanCard";
 import type { Message } from "./chat-types";
 import type { ChatStreamEvent, ToolTrace } from "./chat-stream-events";
@@ -64,6 +64,9 @@ export function dispatchChatStreamEvent(
     case "tool_start":
       frame.beginToolStep();
       setMessages((messages) => appendToolStep(messages, event.data));
+      break;
+    case "tool_progress":
+      setMessages((messages) => updateToolProgress(messages, event.data));
       break;
     case "tool_trace": {
       setMessages((messages) => completeToolStep(messages, event.trace));

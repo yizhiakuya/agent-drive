@@ -48,13 +48,16 @@ describe("dispatchChatStreamEvent", () => {
   it("updates tool steps and plans without changing stream parsing", () => {
     const target = handlers();
     dispatchChatStreamEvent({ type: "tool_start", data: { tool: "list_files", arguments: {} } }, target);
+    dispatchChatStreamEvent({ type: "tool_progress", data: {
+      step: 1, tool: "list_files", phase: "running", message: "正在列出文件", elapsed_ms: 1200,
+    } }, target);
     dispatchChatStreamEvent({
       type: "tool_trace",
       trace: { tool: "set_plan", output: "{}", parsed: { plan: [{ step: "读取文件", status: "in_progress" }] } },
     }, target);
 
     expect(target.frame.beginToolStep).toHaveBeenCalledTimes(1);
-    expect(target.setMessages).toHaveBeenCalledTimes(2);
+    expect(target.setMessages).toHaveBeenCalledTimes(3);
     expect(target.setPlan).toHaveBeenCalledWith([{ step: "读取文件", status: "in_progress" }]);
   });
 

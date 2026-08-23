@@ -15,6 +15,7 @@ final class ChatBackendApiFileHandler implements BackendApiOperationHandler {
     private static final Set<String> OPERATIONS = Set.of(
             "INTERNAL write_text",
             "GET /api/v1/files",
+            "GET /api/v1/files/stats",
             "GET /api/v1/files/info",
             "GET /api/v1/files/content",
             "GET /api/v1/files/dedupe",
@@ -61,6 +62,8 @@ final class ChatBackendApiFileHandler implements BackendApiOperationHandler {
                     BackendApiParams.parameter(request, "type", "all"),
                     optionalDouble(request, "modified_after"),
                     optionalDouble(request, "modified_before"));
+            case "GET /api/v1/files/stats" -> files.statistics(userId,
+                    BackendApiParams.parameter(request, "path", ""));
             case "GET /api/v1/files/info" -> files.info(userId, BackendApiParams.required(request, "path"));
             case "GET /api/v1/files/content" -> files.content(userId,
                     BackendApiParams.required(request, "path"),

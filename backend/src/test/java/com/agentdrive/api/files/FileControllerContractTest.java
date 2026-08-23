@@ -120,6 +120,24 @@ class FileControllerContractTest {
     }
 
     @Test
+    void authenticatedStatsPassesOwnerAndPath() {
+        UUID owner = UUID.randomUUID();
+        StubFiles files = new StubFiles(owner);
+
+        client(owner, files).get()
+                .uri("/api/v1/files/stats?path=相册同步")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.path").isEqualTo("相册同步")
+                .jsonPath("$.file_count").isEqualTo(777)
+                .jsonPath("$.folder_count").isEqualTo(97)
+                .jsonPath("$.complete").isEqualTo(true);
+        assertThat(files.lastStatisticsPath).isEqualTo("相册同步");
+    }
+
+    @Test
     void authenticatedListPassesProductivityFiltersAndCollections() {
         UUID owner = UUID.randomUUID();
         StubFiles files = new StubFiles(owner);
@@ -209,6 +227,7 @@ class FileControllerContractTest {
         private Double lastMinScore;
         private Double lastModifiedAfter;
         private Double lastModifiedBefore;
+        private String lastStatisticsPath;
         private int lastTrackingLimit;
         private String favoritePath;
         private boolean favoriteValue;
@@ -245,6 +264,21 @@ class FileControllerContractTest {
             lastModifiedAfter = modifiedAfter;
             lastModifiedBefore = modifiedBefore;
             return list(userId, path, query, mode);
+        }
+
+        @Override
+        public Map<String, Object> statistics(UUID userId, String path) {
+            assertThat(userId).isEqualTo(owner);
+            lastStatisticsPath = path;
+            return Map.of(
+                    "path", path,
+                    "recursive", true,
+                    "file_count", 777,
+                    "folder_count", 97,
+                    "total_size_bytes", 1234,
+                    "complete", true,
+                    "snapshot_at", "2026-08-23T04:00:00Z"
+            );
         }
 
         @Override

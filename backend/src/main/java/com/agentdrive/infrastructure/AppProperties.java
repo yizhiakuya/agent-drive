@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * 绑定 {@code app.*} 配置并提供运行时使用的规范化值。
- * <p>记录组件在绑定时补齐空字符串、默认数据目录、聊天步数和上传大小；
+ * <p>记录组件在绑定时补齐空字符串、默认数据目录、聊天运行步数策略和上传大小；
  * 两个密钥仍以 Base64 文本保存，只有密钥访问方法被调用时才校验并解码。</p>
  */
 @ConfigurationProperties(prefix = "app")
@@ -25,19 +25,19 @@ public record AppProperties(
      * @param cookieSecure 是否为 Cookie 设置 Secure 标志。
      */
     public AppProperties(String mode, Boolean cookieSecure) {
-        this(mode, cookieSecure, "", "", "", 100, "data", 300);
+        this(mode, cookieSecure, "", "", "", 0, "data", 300);
     }
 
     /**
      * 绑定完整的 {@code app.*} 配置并在边界处固定默认值。
-     * <p>密钥去除首尾空白；提示词只把 {@code null} 转为空字符串；数值默认值分别为 100、
+     * <p>密钥去除首尾空白；提示词只把 {@code null} 转为空字符串；聊天步数为 0 时不设正常上限；数值默认值分别为 0、
      * {@code data} 和 300。</p>
      * @param mode 运行模式，例如 {@code api} 或 {@code migrate}。
      * @param cookieSecure 是否只通过 HTTPS 发送 Cookie。
      * @param confirmationKey 用于确认重放签名的 Base64 密钥文本。
      * @param llmConfigEncryptionKey 用于加密模型 API key 的 Base64 密钥文本。
      * @param systemPrompt Agent 使用的附加系统提示词。
-     * @param maxChatSteps 单次 Agent 对话允许执行的最大步数；空值默认 100。
+     * @param maxChatSteps 单次 Agent 对话的可选运维步数熔断；0 表示不设正常步数上限，空值默认 0。
      * @param dataDir 文件和迁移数据根目录；空值默认 {@code data}。
      * @param maxUploadMb 单个上传的 MB 上限；空值默认 300。
      */
@@ -46,7 +46,7 @@ public record AppProperties(
         confirmationKey = confirmationKey == null ? "" : confirmationKey.trim();
         llmConfigEncryptionKey = llmConfigEncryptionKey == null ? "" : llmConfigEncryptionKey.trim();
         systemPrompt = systemPrompt == null ? "" : systemPrompt;
-        maxChatSteps = maxChatSteps == null ? 100 : maxChatSteps;
+        maxChatSteps = maxChatSteps == null ? 0 : maxChatSteps;
         dataDir = dataDir == null || dataDir.isBlank() ? "data" : dataDir.trim();
         maxUploadMb = maxUploadMb == null ? 300 : maxUploadMb;
     }

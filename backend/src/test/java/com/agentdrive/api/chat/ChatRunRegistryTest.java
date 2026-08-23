@@ -5,6 +5,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.time.Duration;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -13,6 +15,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ChatRunRegistryTest {
+    @Test
+    void reportsPersistedInterruptedStateAfterProcessRestart() {
+        RecordingStateStore stateStore = new RecordingStateStore();
+        ChatRunRegistry registry = new ChatRunRegistry(2, Duration.ofSeconds(30), stateStore);
+        stateStore.state.put("status", "interrupted");
+        stateStore.state.put("phase", "process_restart");
+        stateStore.state.put("resumable", true);
+
+        registry.markStaleRunsInterrupted();
+
+        assertThat(stateStore.interruptedCalls).isEqualTo(1);
+        assertThat(registry.state(UUID.randomUUID().toString()))
+                .containsEntry("status", "interrupted")
+                .containsEntry("phase", "process_restart")
+                .containsEntry("resumable", true)
+                .containsEntry("active", false);
+        registry.close();
+    }
+
     @Test
     void keepsRuntimeActiveAfterClientSubscriptionIsDisposedAndAllowsReconnect() {
         ChatRunRegistry registry = new ChatRunRegistry();
@@ -104,5 +125,32 @@ class ChatRunRegistryTest {
         assertThatThrownBy(() -> registry.start(second, runtime).subscribe())
                 .isInstanceOf(ChatRunRegistry.ActiveChatRunException.class);
         registry.close();
+    }
+
+    private static final class RecordingStateStore implements com.agentdrive.agent.ChatRunStateStore {
+        private final Map<String, Object> state = new LinkedHashMap<>();
+        private int interruptedCalls;
+
+        @Override
+        public void start(String sessionId) {
+            state.put("status", "running");
+            state.put("phase", "starting");
+        }
+
+        @Override
+        public void update(String sessionId, String status, String phase) {
+            state.put("status", status);
+            state.put("phase", phase);
+        }
+
+        @Override
+        public Map<String, Object> find(String sessionId) {
+            return new LinkedHashMap<>(state);
+        }
+
+        @Override
+        public void markInterrupted() {
+            interruptedCalls++;
+        }
     }
 }

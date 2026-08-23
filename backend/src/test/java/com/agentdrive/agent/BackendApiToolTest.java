@@ -49,6 +49,25 @@ class BackendApiToolTest {
     }
 
     @Test
+    void discoverIncludesParameterSchemaForHighFrictionOperations() throws Exception {
+        BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> Map.of(), mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "model", null, 20, null, null, null, null, null)));
+
+        JsonNode models = null;
+        for (JsonNode operation : result.path("operations")) {
+            if ("POST /api/v1/config/models".equals(operation.path("operation").asText())) {
+                models = operation;
+                break;
+            }
+        }
+        assertThat(models).isNotNull();
+        assertThat(models.path("parameter_schema").path("body").path("required").toString())
+                .contains("type", "base_url");
+    }
+
+    @Test
     void paginatesDiscoveryAndReportsTheCompleteMatchWindow() throws Exception {
         OperationCatalog pagedCatalog = new OperationCatalog(IntStream.range(0, 23)
                 .mapToObj(index -> OperationDefinition.http(
@@ -215,8 +234,26 @@ class BackendApiToolTest {
 
         assertThat(result.path("ok").asBoolean()).isFalse();
         assertThat(result.path("status").asInt()).isEqualTo(400);
+        assertThat(result.path("code").asText()).isEqualTo("invalid_business_request");
         assertThat(result.path("error").asText()).isEqualTo("invalid_business_request");
         assertThat(result.path("detail").asText()).contains("vision provider returned HTTP 404");
+    }
+
+    @Test
+    void promotesDispatcherBusinessFailuresToTheEnvelope() throws Exception {
+        BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> Map.of(
+                "ok", false,
+                "error", "视觉模型 API Key 为空：请先填写"
+        ), mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "call", null, "POST /api/v1/config/models", null, null, null, null)));
+
+        assertThat(result.path("ok").asBoolean()).isFalse();
+        assertThat(result.path("status").asInt()).isEqualTo(400);
+        assertThat(result.path("code").asText()).isEqualTo("operation_failed");
+        assertThat(result.path("detail").asText()).contains("视觉模型 API Key 为空");
+        assertThat(result.path("result").path("ok").asBoolean()).isFalse();
     }
 
     @Test

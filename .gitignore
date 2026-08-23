@@ -19,6 +19,7 @@ backend/.env
 .DS_Store
 *.tar
 .cgr-*
+.idea/
 
 # 覆盖率产物
 .coverage

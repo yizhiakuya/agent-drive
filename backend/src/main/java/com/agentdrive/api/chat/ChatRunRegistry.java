@@ -1,5 +1,8 @@
 package com.agentdrive.api.chat;
 
+import com.agentdrive.agent.ChatRunStateStore;
+import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -9,6 +12,7 @@ import reactor.core.scheduler.Schedulers;
 import java.util.Map;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 将聊天 runtime 订阅与单个 HTTP/SSE 客户端解耦。
@@ -21,10 +25,17 @@ public final class ChatRunRegistry implements AutoCloseable {
     private final Map<String, ActiveRun> runs = new ConcurrentHashMap<>();
     private final int maxActiveRuns;
     private final Duration runTimeout;
+    private final ChatRunStateStore stateStore;
 
     /** 使用生产默认并发上限和单次运行时限。 */
     public ChatRunRegistry() {
-        this(DEFAULT_MAX_ACTIVE_RUNS, DEFAULT_RUN_TIMEOUT);
+        this(DEFAULT_MAX_ACTIVE_RUNS, DEFAULT_RUN_TIMEOUT, ChatRunStateStore.noop());
+    }
+
+    /** 创建生产注册表并连接 owner-scoped 的持久 run 状态。 */
+    @Autowired
+    public ChatRunRegistry(ChatRunStateStore stateStore) {
+        this(DEFAULT_MAX_ACTIVE_RUNS, DEFAULT_RUN_TIMEOUT, stateStore);
     }
 
     /**
@@ -33,12 +44,24 @@ public final class ChatRunRegistry implements AutoCloseable {
      * @param runTimeout 单次 Agent 运行的最大时长
      */
     ChatRunRegistry(int maxActiveRuns, Duration runTimeout) {
+        this(maxActiveRuns, runTimeout, ChatRunStateStore.noop());
+    }
+
+    ChatRunRegistry(int maxActiveRuns, Duration runTimeout, ChatRunStateStore stateStore) {
         if (maxActiveRuns < 1) throw new IllegalArgumentException("maxActiveRuns must be positive");
         if (runTimeout == null || runTimeout.isZero() || runTimeout.isNegative()) {
             throw new IllegalArgumentException("runTimeout must be positive");
         }
+        if (stateStore == null) throw new IllegalArgumentException("stateStore must not be null");
         this.maxActiveRuns = maxActiveRuns;
         this.runTimeout = runTimeout;
+        this.stateStore = stateStore;
+    }
+
+    /** 进程启动时收敛上一进程遗留的 running 状态。 */
+    @PostConstruct
+    void markStaleRunsInterrupted() {
+        safeState(() -> stateStore.markInterrupted());
     }
 
     /**
@@ -63,18 +86,28 @@ public final class ChatRunRegistry implements AutoCloseable {
                 throw new ActiveChatRunException("chat session already has a running agent");
             }
         }
+        safeState(() -> stateStore.start(sessionId));
         try {
             run.subscription = runtime.stream(request)
                     .timeout(runTimeout)
                     .subscribeOn(Schedulers.boundedElastic())
+                    .doOnNext(event -> {
+                        if ("tool_start".equals(event.event())) safeState(() -> stateStore.update(sessionId, "running", "tool"));
+                        else if ("tool_trace".equals(event.event())) safeState(() -> stateStore.update(sessionId, "running", "tool_result"));
+                        else if ("done".equals(event.event())) safeState(() -> stateStore.update(sessionId, "running", "finalizing"));
+                    })
                     .subscribe(
                             run.events::tryEmitNext,
                             error -> {
                                 run.events.tryEmitError(error);
+                                safeState(() -> stateStore.update(sessionId,
+                                        error instanceof TimeoutException ? "timed_out" : "failed",
+                                        error instanceof TimeoutException ? "run_timeout" : "error"));
                                 runs.remove(sessionId, run);
                             },
                             () -> {
                                 run.events.tryEmitComplete();
+                                safeState(() -> stateStore.update(sessionId, "completed", "done"));
                                 runs.remove(sessionId, run);
                             }
                     );
@@ -100,6 +133,23 @@ public final class ChatRunRegistry implements AutoCloseable {
         return sessionId != null && runs.containsKey(sessionId);
     }
 
+    /** 返回内存 active 与持久 run 状态合并后的诊断视图。 */
+    public Map<String, Object> state(String sessionId) {
+        Map<String, Object> persisted = stateStore.find(sessionId);
+        Map<String, Object> state = new java.util.LinkedHashMap<>();
+        if (persisted != null) state.putAll(persisted);
+        boolean active = active(sessionId);
+        state.put("active", active);
+        if (active) {
+            state.put("status", "running");
+            state.putIfAbsent("phase", "running");
+        } else {
+            state.putIfAbsent("status", "idle");
+            state.putIfAbsent("phase", "idle");
+        }
+        return Map.copyOf(state);
+    }
+
     /**
      * 主动取消某个会话的运行，并让 runtime 收到订阅取消信号。
      * @param sessionId owner 已确认的会话 ID
@@ -110,6 +160,7 @@ public final class ChatRunRegistry implements AutoCloseable {
         if (run == null) return false;
         run.subscription.dispose();
         run.events.tryEmitComplete();
+        safeState(() -> stateStore.update(sessionId, "cancelled", "cancelled"));
         return true;
     }
 
@@ -123,8 +174,17 @@ public final class ChatRunRegistry implements AutoCloseable {
         runs.forEach((sessionId, run) -> {
             run.subscription.dispose();
             run.events.tryEmitComplete();
+            safeState(() -> stateStore.update(sessionId, "cancelled", "shutdown"));
         });
         runs.clear();
+    }
+
+    private void safeState(Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException ignored) {
+            // Run state is diagnostic/recovery metadata; a database outage cannot break the live relay.
+        }
     }
 
     /** 当前运行实例的回放 relay 和 runtime subscription。 */

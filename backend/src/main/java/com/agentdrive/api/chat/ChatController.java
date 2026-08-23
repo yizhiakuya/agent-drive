@@ -27,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -47,6 +48,7 @@ import static com.agentdrive.api.ReactiveExecution.blocking;
 public final class ChatController {
     private static final Logger LOGGER = LoggerFactory.getLogger(ChatController.class);
     private static final String SESSION_ID_HEADER = "X-Session-ID";
+    private static final Duration COMPLETE_RUN_TIMEOUT = Duration.ofMinutes(10);
     private final ChatRuntime runtime;
     private final ChatSseEncoder encoder;
     private final ConversationSessionService sessionService;
@@ -108,7 +110,8 @@ public final class ChatController {
     public Mono<ChatResponse> complete(@Valid @RequestBody ChatRequest request,
                                        ServerWebExchange exchange) {
         return prepare(request, exchange)
-                .flatMap(normalized -> ReactiveExecution.onBlockingScheduler(() -> runtime.complete(normalized)));
+                .flatMap(normalized -> ReactiveExecution.onBlockingScheduler(
+                        () -> runtime.complete(normalized).timeout(COMPLETE_RUN_TIMEOUT)));
     }
 
     /**
@@ -139,7 +142,7 @@ public final class ChatController {
         return principalResolver.resolve(exchange).flatMap(principal ->
                 blocking(() -> {
                     sessionService.getOwned(principal.userId(), sessionId);
-                    return Map.of("active", runRegistry.active(sessionId));
+                    return runRegistry.state(sessionId);
                 }));
     }
 

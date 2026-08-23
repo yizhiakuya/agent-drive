@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.time.Instant;
 
 /**
  * 将 Agent 运行时状态持久化到 PostgreSQL/MyBatis。
@@ -231,6 +232,43 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
             return;
         }
         mapper.updateContextUsage(sessionId, json(usage));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void start(String sessionId) {
+        if (parseUuid(sessionId) == null) return;
+        mapper.startRun(sessionId, json(Map.of(
+                "status", "running",
+                "phase", "starting",
+                "resumable", true,
+                "started_at", Instant.now().toString(),
+                "updated_at", Instant.now().toString()
+        )));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void update(String sessionId, String status, String phase) {
+        if (parseUuid(sessionId) == null || status == null || status.isBlank()) return;
+        mapper.updateRun(sessionId, status, phase == null || phase.isBlank() ? status : phase);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public Map<String, Object> find(String sessionId) {
+        if (parseUuid(sessionId) == null) return Map.of();
+        Map<String, Object> row = mapper.selectRun(sessionId);
+        if (row == null) return Map.of();
+        Object value = row.containsKey("run_state") ? row.get("run_state") : row;
+        Map<String, Object> state = readMap(value);
+        return state == null ? Map.of() : Map.copyOf(state);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void markInterrupted() {
+        mapper.interruptRunningRuns();
     }
 
     /**

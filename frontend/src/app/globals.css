@@ -231,4 +231,8 @@ body {
   html {
     @apply font-sans;
   }
+  @keyframes progress-slide {
+    0% { transform: translateX(-120%); }
+    100% { transform: translateX(360%); }
+  }
 }

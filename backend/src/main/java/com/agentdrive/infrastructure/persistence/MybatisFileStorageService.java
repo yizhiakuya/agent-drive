@@ -26,6 +26,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
@@ -33,6 +34,8 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -390,6 +393,63 @@ public class MybatisFileStorageService implements FileStorageService {
     @Override
     public Map<String, Object> list(UUID ownerId, String path, String query) {
         return listByName(ownerId, path, query, FILE_LIST_LIMIT, "all", null, null);
+    }
+
+    /**
+     * 在完整 storage lock 内递归统计可见文件树，避免列表请求的逐目录 N+1 计数和漏目录。
+     *
+     * @param ownerId 文件归属 owner。
+     * @param path 统计根目录；空值表示 owner 根目录。
+     * @return 服务端一次性生成的文件、目录和字节统计快照。
+     */
+    @Override
+    public Map<String, Object> statistics(UUID ownerId, String path) {
+        Path directory = safePath(ownerId, path, false);
+        long[] counts = {0L, 0L, 0L};
+        try (StorageLock ignored = storageLock()) {
+            if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+                throw new FileStorageException(404, "目录不存在");
+            }
+            Files.walkFileTree(directory, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path current, BasicFileAttributes attributes)
+                        throws IOException {
+                    if (!current.equals(directory) && isInternal(current.getFileName().toString())) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                    rejectSpecial(current);
+                    if (!current.equals(directory)) counts[1]++;
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFile(Path current, BasicFileAttributes attributes)
+                        throws IOException {
+                    rejectSpecial(current);
+                    if (attributes.isRegularFile()) {
+                        counts[0]++;
+                        counts[2] = Math.addExact(counts[2], attributes.size());
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFileFailed(Path current, IOException error) throws IOException {
+                    throw error;
+                }
+            });
+        } catch (IOException | ArithmeticException error) {
+            throw new FileStorageException(500, "统计目录失败", error);
+        }
+        return mapOf(
+                "path", normalizePath(path),
+                "recursive", true,
+                "file_count", counts[0],
+                "folder_count", counts[1],
+                "total_size_bytes", counts[2],
+                "complete", true,
+                "snapshot_at", Instant.now().toString()
+        );
     }
 
     private Map<String, Object> listByName(UUID ownerId, String path, String query, int requestedLimit,

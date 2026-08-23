@@ -20,7 +20,7 @@ export function PlanCard({ plan }: { plan: PlanStep[] }) {
     <div className="rounded-lg border border-border bg-panel px-4 py-3 text-sm">
       <div className="mb-2 flex items-center justify-between font-semibold">
         <span className="flex items-center gap-1.5"><ListChecks className="size-3.5 text-muted" /> 执行计划（{doneCount}/{plan.length}）</span>
-        <span className="font-mono text-[10px] text-muted">后台执行</span>
+        <span className="font-mono text-[10px] text-muted">当前会话</span>
       </div>
       {plan.map((s, i) => (
         <div key={i} className={`flex items-center gap-2 border-t border-border/70 py-1.5 ${s.status === "failed" ? "text-danger" : s.status === "in_progress" ? "text-warn" : ""}`}>

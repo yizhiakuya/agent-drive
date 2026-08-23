@@ -76,6 +76,19 @@ public interface FileStorageService {
     }
 
     /**
+     * 在服务端递归统计当前 owner 目录下的可见文件、目录和字节数。
+     * 统计不返回条目列表，避免 Agent 为了计数逐层发起请求；实现应跳过内部存储路径。
+     *
+     * @param ownerId 文件归属用户的 UUID。
+     * @param path 统计根目录；空值表示 owner 根目录。
+     * @return 包含 file_count、folder_count、total_size_bytes 和 snapshot_at 的完整统计；
+     *         folder_count 不包含统计根目录本身。
+     */
+    default Map<String, Object> statistics(UUID ownerId, String path) {
+        throw new UnsupportedOperationException("file statistics are not supported");
+    }
+
+    /**
      * 列出当前 owner 最近收藏的可见文件/目录。
      * 失效或已删除的收藏由实现过滤，不把孤儿路径返回给客户端。
      */

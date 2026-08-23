@@ -83,11 +83,11 @@ final class ChatBackendApiConfigHandler implements BackendApiOperationHandler {
             case "GET /api/v1/config/vision" -> visionConfig.currentForOwner(userId);
             case "POST /api/v1/config/vision/models" -> visionConfig.modelsForOwner(userId,
                     BackendApiParams.parameter(request, "provider", "openai_compat"),
-                    BackendApiParams.parameter(request, "base_url", ""),
+                    visionBaseUrl(request, userId),
                     BackendApiParams.parameter(request, "api_key", ""));
             case "PUT /api/v1/config/vision" -> visionConfig.saveForOwner(userId,
                     BackendApiParams.parameter(request, "provider", "openai_compat"),
-                    BackendApiParams.parameter(request, "base_url", ""),
+                    visionBaseUrl(request, userId),
                     BackendApiParams.parameter(request, "api_key", ""),
                     BackendApiParams.required(request, "model"));
             case "POST /api/v1/vision/describe" -> describeImages(request, userId);
@@ -98,6 +98,25 @@ final class ChatBackendApiConfigHandler implements BackendApiOperationHandler {
                     BackendApiParams.parameter(request, "model", ""));
             default -> throw new IllegalArgumentException("Unsupported config operation: " + operation);
         };
+    }
+
+    /**
+     * Agent 调用省略视觉地址时沿用当前 owner 的已保存地址。
+     *
+     * <p>设置页直接提交空地址仍由视觉配置服务按公开 API 默认值处理；这里仅为
+     * backend_api 的“只改模型/探测当前模型”语义补齐当前凭据边界，避免空地址把已存 key
+     * 错发到默认 OpenAI 地址。</p>
+     *
+     * @param request Agent backend_api 请求
+     * @param userId 当前 owner
+     * @return 显式地址或当前视觉配置地址；没有配置时返回空值让服务使用默认值
+     */
+    private String visionBaseUrl(BackendApiRequest request, UUID userId) {
+        String requested = BackendApiParams.parameter(request, "base_url", "");
+        if (!requested.isBlank()) return requested;
+        Map<String, Object> current = visionConfig.currentForOwner(userId);
+        Object saved = current == null ? null : current.get("base_url");
+        return saved == null ? "" : String.valueOf(saved);
     }
 
     private Map<String, Object> providerConfig(LlmProviderConfigService service, UUID userId) {

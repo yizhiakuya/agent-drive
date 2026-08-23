@@ -44,6 +44,10 @@ public final class OperationCatalog {
             Map.entry("审计", "audit"),
             Map.entry("创建", "create"),
             Map.entry("查询", "query"),
+            Map.entry("统计", "stats"),
+            Map.entry("数量", "count"),
+            Map.entry("多少", "count"),
+            Map.entry("相册", "files"),
             Map.entry("设置", "setting"),
             Map.entry("技能", "skill")
     );
