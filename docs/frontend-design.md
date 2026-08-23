@@ -18,7 +18,7 @@
 | 输入框 | `ui/input` | 全站唯一输入实现；需要内嵌图标/按钮用 `ui/input-group` |
 | 密钥输入 | `ui/secret-input` | 模型 API Key 默认隐藏；有草稿时切换可见性，有已存掩码且配置边界匹配时，小眼睛按需读取并回显完整值；读取中显示加载态，清空或边界变化后恢复隐藏 |
 | 下拉 | `ui/select` | 多选一场景；**单值场景禁用**（见反模式 1）；选中/键盘高亮使用 `accent-soft + text-text`，不要直接用深色品牌 `accent` 做背景。可搜索选择使用 `ui/combobox`，其高亮项遵循同一对比度规则 |
-| 组合框 | `ui/combobox` | 可过滤选择 + 自由文本并存场景（模型名）。Base UI 底座：Root 受控 `value/onValueChange`，`items=[{value,label}]` 或 ComboboxCollection/Item，`ComboboxInput/Content/List/Empty/Trigger/Clear` |
+| 组合框 | `ui/combobox` | 可过滤选择 + 自由文本并存场景（模型名）。Base UI 底座：Root 受控 `value/onValueChange`，`items=[{value,label}]`，业务层使用 `ComboboxInput/Content/List/Item/Empty`；触发器和清除按钮由输入组件内部组合 |
 | 卡片 | `ui/card` | `Card/CardHeader/CardTitle/CardDescription/CardContent/CardFooter`，bg-panel |
 | 状态标签 | `ui/badge` | 任务状态/设备/索引等；variant default/secondary/destructive/outline |
 | 开关 | `ui/switch` | 布尔设置（PhotoSync 等） |
