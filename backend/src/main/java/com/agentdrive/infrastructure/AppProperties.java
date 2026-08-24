@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * 绑定 {@code app.*} 配置并提供运行时使用的规范化值。
- * <p>记录组件在绑定时补齐空字符串、默认数据目录、聊天运行步数策略和上传大小；
+ * <p>记录组件在绑定时补齐空字符串、默认数据目录、聊天运行步数策略和上传大小，以及可选的内容/文件服务地址；
  * 两个密钥仍以 Base64 文本保存，只有密钥访问方法被调用时才校验并解码。</p>
  */
 @ConfigurationProperties(prefix = "app")
@@ -44,6 +44,10 @@ public record AppProperties(
      * @param maxChatSteps 单次 Agent 对话的可选运维步数熔断；0 表示不设正常步数上限，空值默认 0。
      * @param dataDir 文件和迁移数据根目录；空值默认 {@code data}。
      * @param maxUploadMb 单个上传的 MB 上限；空值默认 300。
+     * @param contentServiceUrl 可选 Content Service 根地址；为空时使用本地视觉实现。
+     * @param contentServiceToken API 与 Content Service 的内部令牌。
+     * @param fileServiceUrl 可选 File Service 根地址；为空时使用本地文件内容端口。
+     * @param fileServiceToken API 与 File Service 的内部令牌。
      */
     @ConstructorBinding
     public AppProperties {

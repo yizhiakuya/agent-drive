@@ -44,8 +44,11 @@ public final class FileContentService {
     public Map<String, Object> read(ReadRequest request) {
         UUID owner = parseOwner(request.ownerId());
         String path = normalizeRelative(request.path());
+        if (request.maxBytes() != null && request.maxBytes() <= 0) {
+            throw new IllegalArgumentException("max_bytes is invalid");
+        }
         long limit = request.maxBytes() == null ? properties.maxReadBytes()
-                : Math.min(properties.maxReadBytes(), Math.max(1, request.maxBytes()));
+                : Math.min(properties.maxReadBytes(), request.maxBytes());
         Path file = resolve(owner, path);
         try {
             long size = Files.size(file);
