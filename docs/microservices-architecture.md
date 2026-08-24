@@ -1,10 +1,10 @@
 # 微服务演进架构
 
-> 当前主 API 仍保持 Java 模块化单体；Content Service 已具备独立 jar、HTTP 契约和 systemd 发布入口，默认不接管视觉请求。只有配置 `AGENT_DRIVE_CONTENT_SERVICE_URL` 和内部令牌后，主 API 才切换到远程视觉实现。
+> 当前主 API 仍保持 Java 模块化单体；Content Service 已独立部署并在生产接管视觉调用，开发环境未配置 URL 时仍回退本地实现。File Service 已独立部署但尚未切流，必须先完成 owner 数据原子迁移和 mutation 同步。
 
 ## 1. 当前基线
 
-当前生产拓扑只有一个 Java API 进程：
+当前生产拓扑由 Java API 和独立 Content/File 进程组成；只有 Content Service 已接入业务请求：
 
 ```text
 Browser / Android
@@ -12,10 +12,13 @@ Browser / Android
       nginx
         |
 Java API :8000
-   |             |
-PostgreSQL    owner 文件根
-   |
- pgvector
+   |              |
+PostgreSQL     owner 文件根
+   |              |
+ pgvector    Content Service :8010
+                           |
+                       Vision Provider
+       File Service :8020（已部署，待数据迁移后切流）
 ```
 
 后端源码已经形成若干逻辑模块，但模块之间主要通过进程内调用、同一 PostgreSQL 和同一 owner 文件根连接。当前 `backend_api` 是 Agent 内部 dispatcher，不能把模型看到的工具名直接当作服务边界。
@@ -134,4 +137,4 @@ index.updated
 
 ## 10. 当前阶段验收
 
-当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 可独立构建、测试、部署和回滚；URL 未配置时生产仍只有一个实际承载业务的 Java API。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为真正的多服务生产拓扑。
+当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 已独立构建、测试、部署、回滚并接管生产视觉请求；File Service 可独立构建、测试、部署和回滚但未在数据迁移前切流。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为完整多服务生产拓扑。

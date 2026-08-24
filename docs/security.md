@@ -20,7 +20,7 @@
 - `/api/v1/health` 用于探活；认证初始化端点按认证规则公开；其他业务 API 默认需要当前 owner。
 - 静态资源和 `.well-known/assetlinks.json` 可公开读取，但 SPA fallback 不能越过 `frontend/out` 目录边界。
 - nginx 对公网上传限制 200 MB，Java API 还有 `max_upload_mb=300` 的直连兜底；聊天剪贴板内联图片单张限制 50 MiB，JSON 请求体限制 80 MiB，避免把大图片限制误认为普通文件上传限制。API 只读取 `/etc/agent-drive/proxy.env` 中的 HTTP(S) 代理，并清除 `ALL_PROXY/all_proxy`。
-- Content/File Service 只绑定 loopback，不由 nginx 暴露；主 API 只有在 URL 和独立内部 token 同时配置时才使用远程端口。Content Service 的 owner provider 快照和图片请求、File Service 的 owner/path 内容请求都必须带固定 token header，服务端再次校验 owner、路径、大小和响应校验和。token 不进入 Agent catalog、响应正文或普通日志。
+- Content/File Service 只绑定 loopback，不由 nginx 暴露；主 API 只有在 URL 和独立内部 token 同时配置时才使用远程端口。生产当前已启用 Content Service，File Service 保持未切流。Content Service 的 owner provider 快照和图片请求、File Service 的 owner/path 内容请求都必须带固定 token header，服务端再次校验 owner、路径、大小和响应校验和。token 不进入 Agent catalog、响应正文或普通日志。
 
 ## 2. 认证模型
 
