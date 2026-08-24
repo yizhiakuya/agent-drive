@@ -74,13 +74,13 @@ public class IndexDocumentService {
         if (request.chunks().size() > properties.maxChunksPerDocument()) {
             throw new IllegalArgumentException("too_many_chunks");
         }
-        String documentId = jdbc.query("""
+        UUID documentId = jdbc.query("""
                 SELECT id FROM index_documents
                 WHERE owner_id = ? AND file_id = ? AND source_revision = ? AND document_type = ?
-                """, rs -> rs.next() ? rs.getString("id") : null,
+                """, rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                 owner, file, request.sourceRevision(), request.documentType());
         if (documentId == null) {
-            documentId = UUID.randomUUID().toString();
+            documentId = UUID.randomUUID();
             jdbc.update("""
                     INSERT INTO index_documents(id, owner_id, file_id, source_revision,
                       document_type, extractor_version, content, chunk_version, updated_at)
@@ -106,7 +106,7 @@ public class IndexDocumentService {
         }
         return Map.of("ok", true, "owner_id", owner.toString(), "file_id", file.toString(),
                 "source_revision", request.sourceRevision(), "document_type", request.documentType(),
-                "document_id", documentId, "chunk_count", request.chunks().size());
+                "document_id", documentId.toString(), "chunk_count", request.chunks().size());
     }
 
     /** 在当前 owner 范围内执行受限文本检索，作为向量切换前的迁移校验路径。 */
