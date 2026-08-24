@@ -1,6 +1,7 @@
 package com.agentdrive.content;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /** Content Service 的 Provider、内部认证和资源上限配置。 */
 @ConfigurationProperties(prefix = "content")
@@ -22,6 +23,7 @@ public record ContentServiceProperties(
     }
 
     /** 在配置边界固定默认值并清理文本字段。 */
+    @ConstructorBinding
     public ContentServiceProperties {
         internalToken = clean(internalToken);
         provider = clean(provider).isBlank() ? "openai_compat" : clean(provider);
