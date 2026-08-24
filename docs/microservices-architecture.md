@@ -150,6 +150,7 @@ index.updated
 - 当前服务预留 `embedding_fingerprint`/`embedding` 字段，真正 pgvector 检索和 `RemoteIndexStore` 适配器在数据迁移完成后接入；主 API 仍使用本地 IndexStore。
 - 主 API 已提供 `RemoteIndexDocumentClient` 和 `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 配置；配置后只创建迁移客户端并验证远程 readiness，不会自动替换本地索引流量。
 - `scripts/deploy.ps1 -Target index` 要求预置独立数据库和 0600 `index.env`，不会被 `-Target all` 隐式安装。
+- Java backup timer 会在 `index.env` 提供数据库用户/名称时把 Index Service dump 放进同一份归档；Index Service 不允许在没有备份覆盖的情况下切流。
 
 ## 12. 当前阶段验收
 

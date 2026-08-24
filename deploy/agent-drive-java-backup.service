@@ -8,6 +8,7 @@ Type=oneshot
 WorkingDirectory=/opt/agent-drive-java
 ExecStart=/root/projects/agent-drive/scripts/backup-java.sh
 EnvironmentFile=/etc/agent-drive-java/java.env
+EnvironmentFile=-/etc/agent-drive-index/index.env
 Environment=AGENT_DRIVE_BACKUP_DIR=/opt/agent-drive-java/backups
 Environment=AGENT_DRIVE_POSTGRES_CONTAINER=agent-drive-java-postgres
 Environment=AGENT_DRIVE_DATABASE_NAME=agent_drive
