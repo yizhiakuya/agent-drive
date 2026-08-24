@@ -3,7 +3,7 @@ package com.agentdrive.api.vision;
 import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.index.IndexPaths;
-import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.VisionDescriptionPort;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,7 +28,7 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 @Profile({"java-files", "java-auth", "java-chat"})
 @RequestMapping("/api/v1/vision")
 public final class VisionController {
-    private final VisionDescriptionService vision;
+    private final VisionDescriptionPort vision;
     private final WebRequestPrincipalResolver principalResolver;
 
     /**
@@ -36,7 +36,7 @@ public final class VisionController {
      * @param vision 图片读取和视觉模型调用服务。
      * @param principalResolver 解析请求 owner 的认证组件。
      */
-    public VisionController(VisionDescriptionService vision, WebRequestPrincipalResolver principalResolver) {
+    public VisionController(VisionDescriptionPort vision, WebRequestPrincipalResolver principalResolver) {
         this.vision = vision;
         this.principalResolver = principalResolver;
     }

@@ -24,7 +24,7 @@ import java.util.UUID;
  */
 @Service
 @Profile({"java-files", "java-auth", "java-chat"})
-public final class VisionDescriptionService {
+public final class VisionDescriptionService implements VisionDescriptionPort {
     private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
     private static final long MAX_BATCH_BYTES = 20L * 1024 * 1024;
     private static final int MAX_BATCH_IMAGES = 4;

@@ -1,6 +1,6 @@
 package com.agentdrive.index;
 
-import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.VisionDescriptionPort;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -42,7 +42,7 @@ class IndexDomainServiceTest {
         when(embeddings.embed(owner, List.of("docs/a.md"), 64, false))
                 .thenReturn(Map.of("vectorized", true, "embedded", 1));
         IndexDomainService service = new IndexDomainService(index, mock(IndexingService.class), embeddings,
-                config, mock(VisionDescriptionService.class));
+                config, mock(VisionDescriptionPort.class));
 
         assertThat(service.overview(owner, "docs", 10))
                 .containsEntry("prefix", "docs")
@@ -56,7 +56,7 @@ class IndexDomainServiceTest {
     void executesBatchVisionDirectlyWithoutTaskMonitor() {
         IndexStore index = mock(IndexStore.class);
         IndexingService indexing = mock(IndexingService.class);
-        VisionDescriptionService vision = mock(VisionDescriptionService.class);
+        VisionDescriptionPort vision = mock(VisionDescriptionPort.class);
         EmbeddingService embeddings = mock(EmbeddingService.class);
         UUID owner = UUID.randomUUID();
         when(vision.describeFiles(eq(owner), eq(List.of("photos/a.png", "photos/b.png")))).thenReturn(Map.of(
@@ -94,7 +94,7 @@ class IndexDomainServiceTest {
         when(indexing.indexFile(owner, "broken.txt")).thenThrow(new IllegalStateException("extract failed"));
 
         Map<String, Object> result = new IndexDomainService(index, indexing, embeddings,
-                emptyConfig(), mock(VisionDescriptionService.class))
+                emptyConfig(), mock(VisionDescriptionPort.class))
                 .indexFiles(owner, List.of("ok.txt", "broken.txt"), false);
 
         assertThat(result).containsEntry("ok", false)
@@ -113,7 +113,7 @@ class IndexDomainServiceTest {
                 .thenReturn(Map.of("vectorized", true, "embedded", 3));
 
         Map<String, Object> result = new IndexDomainService(index, mock(IndexingService.class), embeddings,
-                config, mock(VisionDescriptionService.class))
+                config, mock(VisionDescriptionPort.class))
                 .vectorize(owner, List.of(), false, 64);
 
         assertThat(result).containsEntry("vectorized", true).containsEntry("embedded", 3);
@@ -123,7 +123,7 @@ class IndexDomainServiceTest {
     private static IndexDomainService service(IndexStore index, IndexingService indexing, EmbeddingService embeddings) {
         EmbeddingRuntimeConfig config = emptyConfig();
         return new IndexDomainService(index, indexing, embeddings, config,
-                mock(VisionDescriptionService.class));
+                mock(VisionDescriptionPort.class));
     }
 
     private static EmbeddingRuntimeConfig emptyConfig() {

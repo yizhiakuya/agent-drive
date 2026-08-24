@@ -15,6 +15,8 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
 
 当前只运行 API 模式：API 负责 HTTP、SSE、静态前端以及索引/视觉/向量业务的直接执行。后台任务、计划队列、outbox 和独立 Worker 已移除；当前 Agent 的 `plan` 仅是会话内可视化状态，不创建持久任务；历史任务表仅保留在已有数据库中，不再由运行时写入。
 
+微服务演进边界、服务数据所有权和拆分顺序见 [`microservices-architecture.md`](microservices-architecture.md)。当前仍保持模块化单体，只有端口抽象和契约准备，不代表生产已经拆成多个网络服务。
+
 ## 2. 后端模块
 
 源码位于 `backend/src/main/java/com/agentdrive`：

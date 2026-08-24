@@ -8,7 +8,7 @@ import com.agentdrive.infrastructure.EmbeddingConfigStore;
 import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.LlmProviderConfigService;
 import com.agentdrive.infrastructure.LlmProviderConfigView;
-import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.VisionDescriptionPort;
 import com.agentdrive.index.IndexPaths;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -32,14 +32,14 @@ final class ChatBackendApiConfigHandler implements BackendApiOperationHandler {
 
     private final ProviderConfigController providerConfig;
     private final VisionConfigController visionConfig;
-    private final VisionDescriptionService vision;
+    private final VisionDescriptionPort vision;
     private final LlmProviderConfigService configs;
     private final EmbeddingConfigStore embeddingConfigs;
     private final LlmApiKeyCipher keyCipher;
 
     ChatBackendApiConfigHandler(ProviderConfigController providerConfig,
                                 VisionConfigController visionConfig,
-                                VisionDescriptionService vision,
+                                VisionDescriptionPort vision,
                                 LlmProviderConfigService configs,
                                 EmbeddingConfigStore embeddingConfigs,
                                 LlmApiKeyCipher keyCipher) {

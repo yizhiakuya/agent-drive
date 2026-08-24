@@ -15,6 +15,7 @@
 | [`frontend-architecture.md`](frontend-architecture.md) | Next.js 前端分层、状态和请求生命周期 |
 | [`frontend-design.md`](frontend-design.md) | UI 控件、主题、响应式和可访问性约定 |
 | [`java-migration-architecture.md`](java-migration-architecture.md) | Java 后端现行边界及已完成迁移/切换记录 |
+| [`microservices-architecture.md`](microservices-architecture.md) | 从模块化单体演进到微服务的边界、数据所有权和迁移顺序 |
 | [`agent-definition.md`](agent-definition.md) | Agent 工具边界、循环、可靠性和安全契约 |
 | [`quality-analysis.md`](quality-analysis.md) | 工程质量分析协议和当前基线 |
 

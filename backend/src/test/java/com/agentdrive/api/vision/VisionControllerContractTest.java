@@ -4,7 +4,7 @@ import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.auth.AuthenticatedPrincipal;
 import com.agentdrive.auth.CredentialAuthenticator;
 import com.agentdrive.files.FileStorageService;
-import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.VisionDescriptionPort;
 import com.agentdrive.vision.VisionModelClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -58,12 +58,12 @@ class VisionControllerContractTest {
      * 创建不会被非法请求触发的视觉服务替身。
      * 代理只用于满足存储服务依赖，路径校验异常应在服务调用之前返回。
      */
-    private VisionDescriptionService visionService() {
+    private VisionDescriptionPort visionService() {
         FileStorageService files = (FileStorageService) Proxy.newProxyInstance(
                 FileStorageService.class.getClassLoader(),
                 new Class<?>[]{FileStorageService.class},
                 (proxy, method, args) -> null);
-        return new VisionDescriptionService(
+        return new com.agentdrive.vision.VisionDescriptionService(
                 userId -> Optional.empty(), files, new VisionModelClient(new ObjectMapper()));
     }
 }

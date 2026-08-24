@@ -1,6 +1,6 @@
 package com.agentdrive.index;
 
-import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.VisionDescriptionPort;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -24,13 +24,13 @@ public final class IndexDomainService {
     private final IndexingService indexing;
     private final EmbeddingService embeddings;
     private final EmbeddingRuntimeConfig embeddingConfig;
-    private final VisionDescriptionService vision;
+    private final VisionDescriptionPort vision;
 
     public IndexDomainService(IndexStore index,
                               IndexingService indexing,
                               EmbeddingService embeddings,
                               EmbeddingRuntimeConfig embeddingConfig,
-                              VisionDescriptionService vision) {
+                              VisionDescriptionPort vision) {
         this.index = index;
         this.indexing = indexing;
         this.embeddings = embeddings;

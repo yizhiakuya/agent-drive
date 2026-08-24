@@ -5,7 +5,7 @@ import com.agentdrive.api.config.VisionConfigController;
 import com.agentdrive.infrastructure.EmbeddingConfigStore;
 import com.agentdrive.infrastructure.LlmApiKeyCipher;
 import com.agentdrive.infrastructure.LlmProviderConfigService;
-import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.VisionDescriptionPort;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -17,7 +17,7 @@ class ChatBackendApiConfigHandlerTest {
         ChatBackendApiConfigHandler handler = new ChatBackendApiConfigHandler(
                 mock(ProviderConfigController.class),
                 mock(VisionConfigController.class),
-                mock(VisionDescriptionService.class),
+                mock(VisionDescriptionPort.class),
                 mock(LlmProviderConfigService.class),
                 mock(EmbeddingConfigStore.class),
                 mock(LlmApiKeyCipher.class));
