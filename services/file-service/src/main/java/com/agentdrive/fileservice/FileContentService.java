@@ -24,6 +24,7 @@ import java.util.UUID;
 @Service
 public final class FileContentService {
     private static final int MAX_MANIFEST_ENTRIES = 100_000;
+    private static final java.util.regex.Pattern MD5 = java.util.regex.Pattern.compile("[0-9a-fA-F]{32}");
     private final FileServiceProperties properties;
 
     /** 创建文件内容服务并确保存储根存在。 */
@@ -110,6 +111,72 @@ public final class FileContentService {
                 "file_count", entries.size(), "total_size_bytes", totalBytes);
     }
 
+    /**
+     * 原子写入一个 owner 普通文件的镜像内容。
+     * 请求方必须提供 revision 和 MD5；File Service 会重新计算 MD5，拒绝目录、内部路径和过大内容。
+     *
+     * @param request 受内部 token 保护的镜像请求
+     * @return 写入后的路径、revision、大小和 MD5
+     */
+    public Map<String, Object> mirror(MirrorRequest request) {
+        UUID owner = parseOwner(request.ownerId());
+        if (request.revision() < 1 || !MD5.matcher(request.contentMd5()).matches()) {
+            throw new IllegalArgumentException("mirror metadata is invalid");
+        }
+        String path = normalizeRelative(request.path());
+        byte[] bytes;
+        try {
+            bytes = Base64.getDecoder().decode(request.data());
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("mirror data is not valid Base64", error);
+        }
+        if (bytes.length == 0 || bytes.length > properties.maxReadBytes()) {
+            throw new IllegalArgumentException("file_too_large");
+        }
+        String actual = HexFormat.of().formatHex(md5Bytes(bytes));
+        if (!actual.equalsIgnoreCase(request.contentMd5())) {
+            throw new IllegalArgumentException("content_md5 does not match data");
+        }
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        Path target = ownerRoot.resolve(path).normalize();
+        if (!target.startsWith(ownerRoot) || (Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                && Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS))) {
+            throw new IllegalArgumentException("mirror target is invalid");
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            Path temp = Files.createTempFile(target.getParent(), ".mirror.", ".tmp");
+            try {
+                Files.write(temp, bytes);
+                try {
+                    Files.move(temp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                    Files.move(temp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temp);
+            }
+            return Map.of("ok", true, "owner_id", owner.toString(), "path", path,
+                    "revision", request.revision(), "size_bytes", bytes.length, "content_md5", actual);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_write_failed", error);
+        }
+    }
+
+    /** 删除一个 owner 镜像文件；目录和内部路径不会被删除。 */
+    public Map<String, Object> deleteMirror(String ownerId, String path) {
+        UUID owner = parseOwner(ownerId);
+        String normalized = normalizeRelative(path);
+        Path target = resolve(owner, normalized);
+        try {
+            Files.deleteIfExists(target);
+            return Map.of("ok", true, "owner_id", owner.toString(), "path", normalized, "deleted", true);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_delete_failed", error);
+        }
+    }
+
     private Path resolve(UUID owner, String path) {
         Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
         if (!Files.isDirectory(ownerRoot, LinkOption.NOFOLLOW_LINKS)) {
@@ -153,6 +220,14 @@ public final class FileContentService {
                 if (count > 0) digest.update(buffer, 0, count);
             }
             return HexFormat.of().formatHex(digest.digest());
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new IllegalStateException("MD5 is unavailable", error);
+        }
+    }
+
+    private byte[] md5Bytes(byte[] bytes) {
+        try {
+            return MessageDigest.getInstance("MD5").digest(bytes);
         } catch (java.security.NoSuchAlgorithmException error) {
             throw new IllegalStateException("MD5 is unavailable", error);
         }

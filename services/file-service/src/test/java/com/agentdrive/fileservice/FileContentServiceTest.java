@@ -85,4 +85,21 @@ class FileContentServiceTest {
         assertThat(result).containsEntry("file_count", 1);
         assertThat(result.get("entries").toString()).contains("docs/a.txt").doesNotContain(".versions");
     }
+
+    @Test
+    void mirrorsBytesOnlyWhenMd5Matches(@TempDir Path root) throws Exception {
+        UUID owner = UUID.randomUUID();
+        FileContentService service = new FileContentService(
+                new FileServiceProperties("internal", root.toString(), 1024L));
+        byte[] bytes = "mirror".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String data = Base64.getEncoder().encodeToString(bytes);
+        String md5 = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("MD5").digest(bytes));
+
+        var result = service.mirror(new MirrorRequest(owner.toString(), "docs/mirror.txt", 3, md5, data));
+
+        assertThat(result).containsEntry("revision", 3L);
+        assertThat(Files.readString(root.resolve(owner.toString()).resolve("docs/mirror.txt")))
+                .isEqualTo("mirror");
+    }
 }

@@ -2,6 +2,7 @@ package com.agentdrive.infrastructure.persistence;
 
 import com.agentdrive.files.FileStorageException;
 import com.agentdrive.files.FileStorageService;
+import com.agentdrive.files.FileMirrorPort;
 import com.agentdrive.index.EmbeddingFingerprint;
 import com.agentdrive.index.EmbeddingRuntimeConfig;
 import com.agentdrive.index.SemanticSearchService;
@@ -94,21 +95,31 @@ public class MybatisFileStorageService implements FileStorageService {
     private final long maxUploadBytes;
     private final EmbeddingRuntimeConfig embeddingConfigs;
     private final SemanticSearchService semanticSearch;
+    private final FileMirrorPort mirror;
     private final ReentrantLock mutationLock = new ReentrantLock();
 
     public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes) {
-        this(mapper, root, maxUploadBytes, null, null);
+        this(mapper, root, maxUploadBytes, null, null, FileMirrorPort.noop());
     }
 
     /** Create a file service with the optional semantic search dependencies. */
     public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
                                      EmbeddingRuntimeConfig embeddingConfigs,
                                      SemanticSearchService semanticSearch) {
+        this(mapper, root, maxUploadBytes, embeddingConfigs, semanticSearch, FileMirrorPort.noop());
+    }
+
+    /** Create a file service with optional semantic search and remote mirror dependencies. */
+    public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
+                                     EmbeddingRuntimeConfig embeddingConfigs,
+                                     SemanticSearchService semanticSearch,
+                                     FileMirrorPort mirror) {
         this.mapper = mapper;
         this.root = root.toAbsolutePath().normalize();
         this.maxUploadBytes = maxUploadBytes;
         this.embeddingConfigs = embeddingConfigs;
         this.semanticSearch = semanticSearch;
+        this.mirror = mirror == null ? FileMirrorPort.noop() : mirror;
         try {
             Files.createDirectories(this.root);
         } catch (IOException error) {
@@ -849,6 +860,7 @@ public class MybatisFileStorageService implements FileStorageService {
                         ? 1 : longValue(metadata.get("revision"));
                 String publishedPath = relative(ownerId, target);
                 mapper.upsertDedupe(ownerId.toString(), digests.md5(), publishedPath, revision, true);
+                mirror.syncFile(ownerId, publishedPath, revision, Files.readAllBytes(target), digests.md5());
                 mutation.complete();
                 return mapOf("uploaded", mapOf("path", publishedPath, "size", size), "indexed", null);
             }

@@ -7,7 +7,9 @@ import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -61,6 +63,23 @@ public final class FileContentController {
                                         @RequestParam("owner_id") String ownerId) {
         authorize(token);
         return service.manifest(ownerId);
+    }
+
+    /** 原子写入一个 owner 文件镜像。 */
+    @PutMapping("/files/mirror")
+    public Map<String, Object> mirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                      @Valid @RequestBody MirrorRequest request) {
+        authorize(token);
+        return service.mirror(request);
+    }
+
+    /** 删除一个 owner 文件镜像。 */
+    @DeleteMapping("/files/mirror")
+    public Map<String, Object> deleteMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                             @RequestParam("owner_id") String ownerId,
+                                             @RequestParam("path") String path) {
+        authorize(token);
+        return service.deleteMirror(ownerId, path);
     }
 
     private void authorize(String token) {

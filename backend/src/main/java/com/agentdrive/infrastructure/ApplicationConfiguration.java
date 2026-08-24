@@ -17,6 +17,8 @@ import com.agentdrive.auth.PasswordHasher;
 import com.agentdrive.files.FileStorageService;
 import com.agentdrive.files.FileContentPort;
 import com.agentdrive.files.RemoteFileContentPort;
+import com.agentdrive.files.FileMirrorPort;
+import com.agentdrive.files.RemoteFileMirror;
 import com.agentdrive.skills.SkillRepository;
 import com.agentdrive.infrastructure.persistence.MybatisAuthAccountStore;
 import com.agentdrive.infrastructure.persistence.MybatisChatRuntimeStateStore;
@@ -287,9 +289,17 @@ public class ApplicationConfiguration {
     @Profile({"java-files", "java-auth", "java-chat"})
     FileStorageService fileStorageService(FileMapper mapper, AppProperties properties,
                                           EmbeddingRuntimeConfig embeddingConfigs,
-                                          SemanticSearchService semanticSearch) {
+                                          SemanticSearchService semanticSearch,
+                                          ObjectMapper objectMapper) {
+        FileMirrorPort mirror = FileMirrorPort.noop();
+        if (!properties.fileServiceUrl().isBlank()) {
+            if (properties.fileServiceToken().isBlank()) {
+                throw new IllegalStateException("app.file-service-token is required when file-service-url is configured");
+            }
+            mirror = new RemoteFileMirror(properties.fileServiceUrl(), properties.fileServiceToken(), objectMapper);
+        }
         return new MybatisFileStorageService(mapper, Path.of(properties.dataDir()), properties.maxUploadBytes(),
-                embeddingConfigs, semanticSearch);
+                embeddingConfigs, semanticSearch, mirror);
     }
 
     /**

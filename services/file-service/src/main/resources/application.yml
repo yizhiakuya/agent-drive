@@ -2,7 +2,8 @@ spring:
   application:
     name: agent-drive-file-service
   codec:
-    max-in-memory-size: ${FILE_MAX_REQUEST_BYTES:1048576}B
+    # Mirror requests carry up to 50 MiB raw bytes plus Base64/JSON overhead.
+    max-in-memory-size: ${FILE_MAX_REQUEST_BYTES:83886080}B
 
 server:
   address: ${FILE_BIND_ADDRESS:127.0.0.1}
