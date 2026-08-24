@@ -15,6 +15,11 @@ public interface FileMirrorPort {
     /** 删除一个远程文件镜像。 */
     void deleteFile(UUID ownerId, String path);
 
+    /** 删除远程文件或目录镜像树。 */
+    default void deletePath(UUID ownerId, String path) {
+        deleteFile(ownerId, path);
+    }
+
     /** 镜像移动文件或目录。 */
     default void movePath(UUID ownerId, String source, String destination, boolean overwrite) {
         throw new UnsupportedOperationException("file mirror move is not supported");
@@ -34,6 +39,10 @@ public interface FileMirrorPort {
 
             @Override
             public void deleteFile(UUID ownerId, String path) {
+            }
+
+            @Override
+            public void deletePath(UUID ownerId, String path) {
             }
 
             @Override

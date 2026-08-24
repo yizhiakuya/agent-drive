@@ -177,6 +177,25 @@ public final class FileContentService {
         }
     }
 
+    /** 删除一个 owner 文件或目录镜像树。 */
+    public Map<String, Object> deleteMirrorTree(String ownerId, String path) {
+        UUID owner = parseOwner(ownerId);
+        String normalized = normalizeRelative(path);
+        Path target = resolveExisting(properties.rootPath().resolve(owner.toString()).normalize(), normalized);
+        try {
+            if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+                try (var paths = Files.walk(target).sorted(java.util.Comparator.reverseOrder())) {
+                    for (Path item : paths.toList()) Files.deleteIfExists(item);
+                }
+            } else {
+                Files.deleteIfExists(target);
+            }
+            return Map.of("ok", true, "owner_id", owner.toString(), "path", normalized, "deleted", true);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_tree_delete_failed", error);
+        }
+    }
+
     /** 在 owner 存储内原子移动文件或目录镜像。 */
     public Map<String, Object> moveMirror(MirrorPathRequest request) {
         UUID owner = parseOwner(request.ownerId());

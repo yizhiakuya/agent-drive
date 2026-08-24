@@ -82,6 +82,15 @@ public final class FileContentController {
         return service.deleteMirror(ownerId, path);
     }
 
+    /** 删除一个 owner 文件或目录镜像树。 */
+    @DeleteMapping("/files/mirror/tree")
+    public Map<String, Object> deleteMirrorTree(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                                 @RequestParam("owner_id") String ownerId,
+                                                 @RequestParam("path") String path) {
+        authorize(token);
+        return service.deleteMirrorTree(ownerId, path);
+    }
+
     /** 原子移动文件或目录镜像。 */
     @PostMapping("/files/mirror/move")
     public Map<String, Object> moveMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,

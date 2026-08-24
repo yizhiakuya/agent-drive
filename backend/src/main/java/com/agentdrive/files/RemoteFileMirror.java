@@ -90,6 +90,29 @@ public final class RemoteFileMirror implements FileMirrorPort {
         }
     }
 
+    /** 删除远程文件或目录镜像树。 */
+    @Override
+    public void deletePath(UUID ownerId, String path) {
+        try {
+            String query = "?owner_id=" + java.net.URLEncoder.encode(ownerId.toString(), StandardCharsets.UTF_8)
+                    + "&path=" + java.net.URLEncoder.encode(path, StandardCharsets.UTF_8);
+            HttpRequest request = HttpRequest.newBuilder(URI.create(deleteEndpoint + "/tree" + query))
+                    .timeout(TIMEOUT)
+                    .header(TOKEN_HEADER, token)
+                    .header("Accept", "application/json")
+                    .DELETE()
+                    .build();
+            HttpResponse<String> response = client.send(request,
+                    HttpClientSupport.limitedUtf8BodyHandler(64 * 1024));
+            requireOk(response);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new FileStorageException(502, "文件镜像树删除中断", error);
+        } catch (IOException error) {
+            throw new FileStorageException(502, "文件镜像树删除失败", error);
+        }
+    }
+
     /** 镜像移动文件或目录。 */
     @Override
     public void movePath(UUID ownerId, String source, String destination, boolean overwrite) {

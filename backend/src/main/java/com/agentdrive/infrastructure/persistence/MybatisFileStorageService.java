@@ -1012,11 +1012,18 @@ public class MybatisFileStorageService implements FileStorageService {
                 throw new FileStorageException(409, "文件和目录类型不兼容");
             }
             CopyTransaction transaction = stageAndPublishCopy(ownerId, sourcePath, target);
+            boolean[] mirrored = {false};
+            String targetRelative = relative(ownerId, target);
+            mutation.onPublished(() -> { }, () -> {
+                if (mirrored[0]) mirror.deletePath(ownerId, targetRelative);
+            });
             mutation.onPublished(
                     () -> cleanupPublishedCopyStrict(transaction),
                     () -> rollbackPublishedCopy(transaction));
             mapper.deletePrefix(ownerId.toString(), relative(ownerId, target));
             refreshMetadata(ownerId, target);
+            mirror.copyPath(ownerId, relative(ownerId, sourcePath), targetRelative, overwrite);
+            mirrored[0] = true;
             mutation.complete();
             return mapOf("copied", normalizePath(source) + " → " + normalizePath(destination));
         } catch (IOException error) {

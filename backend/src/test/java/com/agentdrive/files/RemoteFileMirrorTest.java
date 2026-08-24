@@ -63,6 +63,22 @@ class RemoteFileMirrorTest {
         mirror.movePath(owner, "source.txt", "moved.txt", false);
     }
 
+    @Test
+    void sendsTreeDeleteMutation() throws IOException {
+        UUID owner = UUID.randomUUID();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/internal/v1/files/mirror/tree", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("DELETE");
+            assertThat(exchange.getRequestURI().getQuery()).contains(owner.toString()).contains("folder");
+            respond(exchange, 200, "{\"ok\":true}");
+        });
+        server.start();
+
+        RemoteFileMirror mirror = new RemoteFileMirror(
+                "http://127.0.0.1:" + server.getAddress().getPort(), "internal", new ObjectMapper());
+        mirror.deletePath(owner, "folder");
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
