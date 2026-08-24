@@ -7,12 +7,16 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
+import java.util.List;
+import java.util.Set;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 将聊天 runtime 订阅与单个 HTTP/SSE 客户端解耦。
@@ -127,8 +131,48 @@ public final class ChatRunRegistry implements AutoCloseable {
     public Flux<ChatSseEvent> reconnect(String sessionId) {
         ActiveRun run = runs.get(sessionId);
         if (run != null) return run.events.asFlux();
-        return Flux.fromIterable(stateStore.loadEvents(sessionId, 4096))
-                .map(event -> new ChatSseEvent(event.event(), event.data()));
+        return durableReconnect(sessionId);
+    }
+
+    /**
+     * 跨进程轮询持久化事件；只在当前 JVM 没有本地 relay 时启用。
+     * 数据库异常不会伪造事件，轮询最多持续一个 run timeout，终态事件到达后立即结束。
+     */
+    private Flux<ChatSseEvent> durableReconnect(String sessionId) {
+        AtomicLong cursor = new AtomicLong(0);
+        return Flux.interval(Duration.ZERO, Duration.ofMillis(250))
+                .flatMap(tick -> Mono.fromCallable(() -> durableBatch(sessionId, cursor.get()))
+                        .subscribeOn(Schedulers.boundedElastic()))
+                .concatMap(batch -> {
+                    Flux<ChatSseEvent> events = Flux.fromIterable(batch.events())
+                            .map(event -> {
+                                cursor.set(Math.max(cursor.get(), event.id()));
+                                return new ChatSseEvent(event.event(), event.data());
+                            });
+                    return batch.terminal()
+                            ? events.concatWithValues(DURABLE_TERMINAL)
+                            : events;
+                })
+                .takeUntil(event -> DURABLE_TERMINAL.event().equals(event.event()))
+                .filter(event -> !DURABLE_TERMINAL.event().equals(event.event()))
+                .take(runTimeout);
+    }
+
+    private static final ChatSseEvent DURABLE_TERMINAL = new ChatSseEvent(
+            "__durable_reconnect_terminal__", Map.of());
+
+    private DurableBatch durableBatch(String sessionId, long cursor) {
+        List<ChatRunStateStore.RunEvent> events = stateStore.loadEvents(sessionId, 4096).stream()
+                .filter(event -> event.id() > cursor)
+                .toList();
+        Map<String, Object> state = stateStore.find(sessionId);
+        String status = state == null ? "" : String.valueOf(state.getOrDefault("status", ""));
+        boolean terminal = Set.of("completed", "failed", "cancelled", "timed_out", "interrupted")
+                .contains(status) && events.isEmpty();
+        if (events.stream().anyMatch(event -> Set.of("done", "error").contains(event.event()))) {
+            terminal = true;
+        }
+        return new DurableBatch(events, terminal);
     }
 
     /** @return 当前 session 是否存在仍在执行的 Agent。 */
@@ -194,6 +238,9 @@ public final class ChatRunRegistry implements AutoCloseable {
     private static final class ActiveRun {
         private final Sinks.Many<ChatSseEvent> events = Sinks.many().replay().limit(4096);
         private volatile Disposable subscription = () -> { };
+    }
+
+    private record DurableBatch(List<ChatRunStateStore.RunEvent> events, boolean terminal) {
     }
 
     /** 表示同一会话已有一个运行中的聊天 Agent。 */
