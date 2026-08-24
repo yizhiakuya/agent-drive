@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.ResponseEntity;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -106,9 +107,14 @@ public final class IndexController {
 
     /** 转换数据库/业务失败。 */
     @ExceptionHandler(RuntimeException.class)
-    @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    public Map<String, Object> failure(RuntimeException error) {
-        return Map.of("ok", false, "status", 502, "code", "index_service_failure", "detail", safe(error));
+    public ResponseEntity<Map<String, Object>> failure(RuntimeException error) {
+        if (error instanceof ResponseStatusException status) {
+            int code = status.getStatusCode().value();
+            return ResponseEntity.status(code).body(Map.of("ok", false, "status", code,
+                    "code", "unauthorized", "detail", "index service token is invalid"));
+        }
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(Map.of("ok", false, "status", 502, "code", "index_service_failure", "detail", safe(error)));
     }
 
     private String safe(Exception error) {
