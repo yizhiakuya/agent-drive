@@ -3,6 +3,8 @@ package com.agentdrive.infrastructure;
 import com.agentdrive.auth.AuthAccountStore;
 import com.agentdrive.auth.AuthRateLimiter;
 import com.agentdrive.auth.AuthService;
+import com.agentdrive.auth.CredentialAuthenticator;
+import com.agentdrive.auth.RemoteCredentialAuthenticator;
 import com.agentdrive.auth.ConversationSessionService;
 import com.agentdrive.auth.SessionTitleGenerator;
 import com.agentdrive.agent.ProviderRuntimeResolver;
@@ -292,7 +294,15 @@ public class ApplicationConfiguration {
      * @return 只向上层返回 owner UUID 和凭据类型的认证器。
      */
     @Bean
-    MybatisCredentialAuthenticator mybatisCredentialAuthenticator(CredentialMapper mapper) {
+    CredentialAuthenticator credentialAuthenticator(CredentialMapper mapper, AppProperties properties,
+                                                    ObjectMapper objectMapper) {
+        if (!properties.identityServiceUrl().isBlank()) {
+            if (properties.identityServiceToken().isBlank()) {
+                throw new IllegalStateException("app.identity-service-token is required when identity-service-url is configured");
+            }
+            return new RemoteCredentialAuthenticator(properties.identityServiceUrl(),
+                    properties.identityServiceToken(), objectMapper);
+        }
         return new MybatisCredentialAuthenticator(mapper);
     }
 

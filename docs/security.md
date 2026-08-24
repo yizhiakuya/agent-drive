@@ -12,7 +12,8 @@
         ├── PostgreSQL/pgvector（仅受限地址）
         └── owner-scoped 本地文件系统
         ├──（可选）127.0.0.1:8010 Content Service
-        └──（可选）127.0.0.1:8020 File Service
+        ├──（可选）127.0.0.1:8020 File Service
+        └──（待认证迁移）127.0.0.1:8030 Identity Service
 ```
 
 - nginx 是唯一公网入口，API 只绑定 `127.0.0.1:8000`；当前没有独立 Java Worker HTTP 入口。

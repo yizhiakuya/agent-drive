@@ -1,0 +1,29 @@
+[Unit]
+Description=Agent Drive Identity Service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-drive-identity
+ExecStart=/usr/bin/java -jar /opt/agent-drive-identity/identity-service.jar --server.address=127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=90
+TimeoutStopSec=30
+SuccessExitStatus=143
+EnvironmentFile=-/etc/agent-drive-identity/identity.env
+Environment=IDENTITY_BIND_ADDRESS=127.0.0.1
+Environment=IDENTITY_PORT=8030
+UnsetEnvironment=ALL_PROXY all_proxy
+UMask=077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectHome=true
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

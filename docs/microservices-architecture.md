@@ -135,6 +135,13 @@ index.updated
 - `RemoteFileContentPort` 可按 `AGENT_DRIVE_FILE_SERVICE_URL` 和 `AGENT_DRIVE_FILE_SERVICE_TOKEN` 启用。当前只把视觉描述链路切换到该端口，普通文件 mutation 和文本索引仍保留在单体，避免在数据迁移前产生双写或空目录误读。
 - `deploy/agent-drive-file.service` 和 `scripts/deploy.ps1 -Target file|all` 负责独立发布、健康检查和回滚；服务默认监听 `127.0.0.1:8020`。
 
-## 10. 当前阶段验收
+## 10. Identity Service 当前实现
 
-当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 已独立构建、测试、部署、回滚并接管生产视觉请求；File Service 可独立构建、测试、部署和回滚但未在数据迁移前切流。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为完整多服务生产拓扑。
+- 源码位于 `services/identity-service`，自有 `identity_owner`、`identity_credentials` schema，提供 setup/login/logout、`/internal/v1/introspect` 和 token 保护的 readiness。
+- 密码仍使用 PBKDF2-HMAC-SHA256 600,000 次迭代；session token 只返回当前响应，数据库保存 SHA-256 摘要。服务不读取主 API 的认证表。
+- 主 API 已具备 `RemoteCredentialAuthenticator` 和 `AGENT_DRIVE_IDENTITY_SERVICE_URL/TOKEN` 配置切换，但当前生产未启用，必须先迁移 owner/session/device 数据并完成登录、登出、pairing 回归后再切流。
+- `scripts/deploy.ps1 -Target identity` 要求服务器预置独立数据库和 0600 `identity.env`，不会被 `-Target all` 隐式安装，避免未迁移数据时误切认证。
+
+## 11. 当前阶段验收
+
+当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 已独立构建、测试、部署、回滚并接管生产视觉请求；File Service 和 Identity Service 可独立构建、测试、部署和回滚，但分别在文件/认证数据迁移前保持未切流。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为完整多服务生产拓扑。

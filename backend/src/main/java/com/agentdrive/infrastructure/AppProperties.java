@@ -21,7 +21,9 @@ public record AppProperties(
         String contentServiceUrl,
         String contentServiceToken,
         String fileServiceUrl,
-        String fileServiceToken
+        String fileServiceToken,
+        String identityServiceUrl,
+        String identityServiceToken
 ) {
     /**
      * 创建面向最小启动配置的属性对象，其余配置使用完整绑定构造器的默认值。
@@ -29,7 +31,7 @@ public record AppProperties(
      * @param cookieSecure 是否为 Cookie 设置 Secure 标志。
      */
     public AppProperties(String mode, Boolean cookieSecure) {
-        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "", "", "");
+        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "", "", "", "", "");
     }
 
     /**
@@ -48,6 +50,8 @@ public record AppProperties(
      * @param contentServiceToken API 与 Content Service 的内部令牌。
      * @param fileServiceUrl 可选 File Service 根地址；为空时使用本地文件内容端口。
      * @param fileServiceToken API 与 File Service 的内部令牌。
+     * @param identityServiceUrl 可选 Identity Service 根地址；为空时使用本地认证存储。
+     * @param identityServiceToken API 与 Identity Service 的内部令牌。
      */
     @ConstructorBinding
     public AppProperties {
@@ -61,6 +65,8 @@ public record AppProperties(
         contentServiceToken = contentServiceToken == null ? "" : contentServiceToken.trim();
         fileServiceUrl = fileServiceUrl == null ? "" : fileServiceUrl.trim();
         fileServiceToken = fileServiceToken == null ? "" : fileServiceToken.trim();
+        identityServiceUrl = identityServiceUrl == null ? "" : identityServiceUrl.trim();
+        identityServiceToken = identityServiceToken == null ? "" : identityServiceToken.trim();
     }
 
     /**
