@@ -1,6 +1,8 @@
 package com.agentdrive.files;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
 
@@ -9,7 +11,7 @@ import java.util.UUID;
  * 路径参数均是用户存储根目录下的相对路径；实现负责拒绝越界、符号链接和内部 staging 路径，
  * 并在写入、移动、删除等可见变更后刷新元数据和索引通知。上传先写临时文件，只有发布方法成功后才进入用户目录。
  */
-public interface FileStorageService {
+public interface FileStorageService extends FileContentPort {
     /**
      * 列出用户目录下指定目录的直接子项，并附带名称、类型、大小和修改时间等元数据。
      * 空路径表示用户根目录；目录外路径和内部目录应被拒绝。
@@ -196,6 +198,30 @@ public interface FileStorageService {
      * @throws FileStorageException 路径非法、目标不是文件或文件不存在时抛出。
      */
     Path fileForRead(UUID ownerId, String path);
+
+    /**
+     * 读取受控文件内容；默认适配器只依赖现有的安全路径端口，远程存储实现应覆盖此方法。
+     * @param ownerId 文件归属 owner UUID
+     * @param path owner-relative POSIX 路径
+     * @param maxBytes 最大读取字节数
+     * @return 文件原始字节
+     */
+    @Override
+    default byte[] readBytes(UUID ownerId, String path, long maxBytes) {
+        if (maxBytes <= 0 || maxBytes > Integer.MAX_VALUE) {
+            throw new FileStorageException(400, "读取大小上限无效");
+        }
+        Path file = fileForRead(ownerId, path);
+        try {
+            long size = Files.size(file);
+            if (size > maxBytes) throw new FileStorageException(413, "文件超过读取大小上限");
+            return Files.readAllBytes(file);
+        } catch (FileStorageException error) {
+            throw error;
+        } catch (IOException error) {
+            throw new FileStorageException(500, "读取文件内容失败", error);
+        }
+    }
 
     /**
      * 在受保护的上传 staging 区创建一个权限受限的临时文件。

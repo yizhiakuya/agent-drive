@@ -1,6 +1,6 @@
 package com.agentdrive.index;
 
-import com.agentdrive.files.FileStorageService;
+import com.agentdrive.files.FileContentPort;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -26,7 +26,7 @@ class IndexingServiceTest {
 
     @Test
     void extractsTextChunksAndPassesOwnerToPersistence() throws Exception {
-        FileStorageService files = mock(FileStorageService.class);
+        FileContentPort files = mock(FileContentPort.class);
         IndexStore index = mock(IndexStore.class);
         UUID owner = UUID.randomUUID();
         UUID fileId = UUID.randomUUID();
@@ -36,7 +36,7 @@ class IndexingServiceTest {
         when(index.file(owner, "notes.txt")).thenReturn(Map.of(
                 "id", fileId.toString(), "size_bytes", content.length(), "revision", 3L
         ));
-        when(files.fileForRead(owner, "notes.txt")).thenReturn(source);
+        when(files.readBytes(owner, "notes.txt", 20 * 1024 * 1024L)).thenReturn(Files.readAllBytes(source));
         IndexingService service = new IndexingService(files, index);
 
         Map<String, Object> result = service.indexFile(owner, "notes.txt");
@@ -52,7 +52,7 @@ class IndexingServiceTest {
 
     @Test
     void routesImagesToVisionInsteadOfTikaOrOcr() throws Exception {
-        FileStorageService files = mock(FileStorageService.class);
+        FileContentPort files = mock(FileContentPort.class);
         IndexStore index = mock(IndexStore.class);
         UUID owner = UUID.randomUUID();
         when(index.file(owner, "broken.jpg")).thenReturn(Map.of(
@@ -64,7 +64,7 @@ class IndexingServiceTest {
         assertThat(result).containsEntry("indexed", false)
                 .containsEntry("status", "vision_required")
                 .containsEntry("vector_type", "vision");
-        verify(files, org.mockito.Mockito.never()).fileForRead(owner, "broken.jpg");
+        verify(files, org.mockito.Mockito.never()).readBytes(org.mockito.ArgumentMatchers.any(), eq("broken.jpg"), org.mockito.ArgumentMatchers.anyLong());
         verify(index, org.mockito.Mockito.never()).replaceDocument(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
@@ -73,7 +73,7 @@ class IndexingServiceTest {
 
     @Test
     void storesVisionDescriptionAsVisionDocumentType() {
-        FileStorageService files = mock(FileStorageService.class);
+        FileContentPort files = mock(FileContentPort.class);
         IndexStore index = mock(IndexStore.class);
         UUID owner = UUID.randomUUID();
         UUID fileId = UUID.randomUUID();
@@ -94,7 +94,7 @@ class IndexingServiceTest {
 
     @Test
     void decodesGbkTextWithoutReplacementCharacters() throws Exception {
-        FileStorageService files = mock(FileStorageService.class);
+        FileContentPort files = mock(FileContentPort.class);
         IndexStore index = mock(IndexStore.class);
         UUID owner = UUID.randomUUID();
         UUID fileId = UUID.randomUUID();
@@ -103,7 +103,7 @@ class IndexingServiceTest {
         when(index.file(owner, "legacy.txt")).thenReturn(Map.of(
                 "id", fileId.toString(), "size_bytes", Files.size(source), "revision", 1L
         ));
-        when(files.fileForRead(owner, "legacy.txt")).thenReturn(source);
+        when(files.readBytes(owner, "legacy.txt", 20 * 1024 * 1024L)).thenReturn(Files.readAllBytes(source));
 
         Map<String, Object> result = new IndexingService(files, index).indexFile(owner, "legacy.txt");
 

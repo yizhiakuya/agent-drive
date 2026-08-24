@@ -3,7 +3,7 @@ package com.agentdrive.api.vision;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.auth.AuthenticatedPrincipal;
 import com.agentdrive.auth.CredentialAuthenticator;
-import com.agentdrive.files.FileStorageService;
+import com.agentdrive.files.FileContentPort;
 import com.agentdrive.vision.VisionDescriptionPort;
 import com.agentdrive.vision.VisionModelClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,9 +59,9 @@ class VisionControllerContractTest {
      * 代理只用于满足存储服务依赖，路径校验异常应在服务调用之前返回。
      */
     private VisionDescriptionPort visionService() {
-        FileStorageService files = (FileStorageService) Proxy.newProxyInstance(
-                FileStorageService.class.getClassLoader(),
-                new Class<?>[]{FileStorageService.class},
+        FileContentPort files = (FileContentPort) Proxy.newProxyInstance(
+                FileContentPort.class.getClassLoader(),
+                new Class<?>[]{FileContentPort.class},
                 (proxy, method, args) -> null);
         return new com.agentdrive.vision.VisionDescriptionService(
                 userId -> Optional.empty(), files, new VisionModelClient(new ObjectMapper()));

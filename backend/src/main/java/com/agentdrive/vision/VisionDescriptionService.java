@@ -1,7 +1,7 @@
 package com.agentdrive.vision;
 
+import com.agentdrive.files.FileContentPort;
 import com.agentdrive.files.FileStorageException;
-import com.agentdrive.files.FileStorageService;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -38,7 +38,7 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
     );
 
     private final VisionRuntimeConfig configs;
-    private final FileStorageService files;
+    private final FileContentPort files;
     private final VisionModelClient client;
 
     private record PreparedImage(String path, String mediaType, byte[] bytes, String imageId) {
@@ -50,7 +50,7 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
      * @param files 执行路径安全校验和文件读取的存储服务。
      * @param client 调用 OpenAI 兼容视觉模型的客户端。
      */
-    public VisionDescriptionService(VisionRuntimeConfig configs, FileStorageService files, VisionModelClient client) {
+    public VisionDescriptionService(VisionRuntimeConfig configs, FileContentPort files, VisionModelClient client) {
         this.configs = configs;
         this.files = files;
         this.client = client;
@@ -151,10 +151,8 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
     private PreparedImage prepareImage(UUID userId, String path, String imageId) throws IOException {
         String mediaType = IMAGE_TYPES.get(extension(path));
         if (mediaType == null) throw new IllegalArgumentException("unsupported_image_type");
-        Path file = files.fileForRead(userId, path);
-        long size = Files.size(file);
-        if (size > MAX_IMAGE_BYTES) throw new IllegalArgumentException("image_too_large");
-        return new PreparedImage(path, mediaType, Files.readAllBytes(file), imageId);
+        byte[] bytes = files.readBytes(userId, path, MAX_IMAGE_BYTES);
+        return new PreparedImage(path, mediaType, bytes, imageId);
     }
 
     private Map<String, Object> failure(String path, Exception error) {

@@ -1,6 +1,6 @@
 package com.agentdrive.vision;
 
-import com.agentdrive.files.FileStorageService;
+import com.agentdrive.files.FileContentPort;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -34,10 +34,10 @@ class VisionDescriptionServiceTest {
         VisionRuntimeConfig.Config config = new VisionRuntimeConfig.Config(
                 "openai_compat", "http://127.0.0.1:1/v1", "vision-model", "secret");
         VisionRuntimeConfig configs = user -> Optional.of(config);
-        FileStorageService files = mock(FileStorageService.class);
+        FileContentPort files = mock(FileContentPort.class);
         VisionModelClient client = mock(VisionModelClient.class);
-        when(files.fileForRead(owner, "first.png")).thenReturn(first);
-        when(files.fileForRead(owner, "second.png")).thenReturn(second);
+        when(files.readBytes(owner, "first.png", 10L * 1024 * 1024)).thenReturn(Files.readAllBytes(first));
+        when(files.readBytes(owner, "second.png", 10L * 1024 * 1024)).thenReturn(Files.readAllBytes(second));
         when(client.describeBatch(eq(config), anyList())).thenReturn(Map.of(
                 "image-0", "一张收据的截图，包含商品和金额信息。",
                 "image-1", "一个产品包装盒，正面有品牌和规格文字。"));

@@ -1,6 +1,6 @@
 package com.agentdrive.index;
 
-import com.agentdrive.files.FileStorageService;
+import com.agentdrive.files.FileContentPort;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
@@ -16,8 +16,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -43,7 +42,7 @@ public class IndexingService {
     private static final Set<String> IMAGE_EXTENSIONS = Set.of(
             ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp");
 
-    private final FileStorageService files;
+    private final FileContentPort files;
     private final IndexStore index;
 
     /**
@@ -52,7 +51,7 @@ public class IndexingService {
      * @param files 用于执行安全路径解析和读取文件内容的存储服务。
      * @param index 用于读取文件 revision、写入全文分块及清理失效记录的索引存储。
      */
-    public IndexingService(FileStorageService files, IndexStore index) {
+    public IndexingService(FileContentPort files, IndexStore index) {
         this.files = files;
         this.index = index;
     }
@@ -74,7 +73,7 @@ public class IndexingService {
         if (isImagePath(path)) return result(path, false, "vision_required", 0L, IndexStore.VISION_DOCUMENT_TYPE);
         long size = number(metadata.get("size_bytes"));
         if (size > MAX_TEXT_BYTES) return result(path, false, "too_large", size);
-        Path source = files.fileForRead(userId, path);
+        byte[] source = files.readBytes(userId, path, MAX_TEXT_BYTES);
         String content;
         try {
             content = extract(source, path);
@@ -176,12 +175,12 @@ public class IndexingService {
      * 根据文件扩展名选择文本读取或 Tika 抽取策略。图片在调用方已被识别并拒绝进入此方法，
      * 因此这里不会把图片字节伪装成文本。
      *
-     * @param source 已通过存储层安全校验的本地文件路径。
+     * @param source 已通过存储层安全校验的原始文件字节。
      * @param path 文件相对路径，用于扩展名判断和异常信息。
      * @return 抽取出的纯文本内容。
      * @throws IllegalStateException 文件读取或格式抽取失败时抛出。
      */
-    private String extract(Path source, String path) {
+    private String extract(byte[] source, String path) {
         String lower = path.toLowerCase(java.util.Locale.ROOT);
         boolean plainText = lower.endsWith(".txt") || lower.endsWith(".md") || lower.endsWith(".markdown")
                 || lower.endsWith(".csv") || lower.endsWith(".json") || lower.endsWith(".xml")
@@ -190,20 +189,20 @@ public class IndexingService {
                 || lower.endsWith(".py") || lower.endsWith(".yaml") || lower.endsWith(".yml")
                 || lower.endsWith(".log") || lower.endsWith(".properties");
         if (!plainText) return extractWithTika(source, path);
-        return decodeText(readLimited(source));
+        return decodeText(source);
     }
 
     /**
      * 使用 Tika 自动识别非图片文档格式并抽取正文。Tika handler 受 20 MiB 限制，
      * 不配置或调用图片文字识别 parser。
      *
-     * @param source 待读取的本地文档路径。
+     * @param source 待读取的原始文档字节。
      * @param path 文档相对路径，用作 Tika 资源名和错误上下文。
      * @return Tika handler 收集到的正文。
      * @throws IllegalStateException 文件读取、SAX 解析或 Tika 解析失败时抛出。
      */
-    private String extractWithTika(Path source, String path) {
-        try (InputStream input = Files.newInputStream(source)) {
+    private String extractWithTika(byte[] source, String path) {
+        try (InputStream input = new ByteArrayInputStream(source)) {
             Metadata metadata = new Metadata();
             metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, path);
             BodyContentHandler handler = new BodyContentHandler(MAX_TEXT_BYTES);
@@ -212,25 +211,6 @@ public class IndexingService {
             return handler.toString();
         } catch (IOException | SAXException | TikaException error) {
             throw new IllegalStateException("cannot extract document text from " + path, error);
-        }
-    }
-
-    /**
-     * 读取文件字节并执行正文大小上限检查。
-     * 该方法只作为非法 UTF-8 文本的有限回退，不绕过索引服务的 20 MiB 限制。
-     *
-     * @param source 待读取的本地文件路径。
-     * @return 文件的原始字节。
-     * @throws IllegalArgumentException 文件超过 20 MiB 时抛出。
-     * @throws IllegalStateException 文件读取失败时抛出。
-     */
-    private byte[] readLimited(Path source) {
-        try {
-            byte[] bytes = Files.readAllBytes(source);
-            if (bytes.length > MAX_TEXT_BYTES) throw new IllegalArgumentException("file is too large to index");
-            return bytes;
-        } catch (IOException error) {
-            throw new IllegalStateException("cannot read file for indexing", error);
         }
     }
 

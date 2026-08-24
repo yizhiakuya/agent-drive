@@ -101,7 +101,7 @@ index.updated
 
 ## 6. 迁移顺序
 
-1. **端口化**：当前单体内先使用 `VisionDescriptionPort`、File/Index application port 和 DTO，禁止跨模块直接依赖实现类。
+1. **端口化**：当前单体内先使用 `VisionDescriptionPort`、`FileContentPort`、File/Index application port 和 DTO，禁止跨模块直接依赖实现类；视觉和文本抽取只请求受限原始字节，不接触本地绝对路径。
 2. **Gateway/Identity 边界**：统一 owner、scope、request-id 和内部服务认证；先不拆数据表。
 3. **对象存储**：将 owner 文件根抽象为对象存储，保留 revision、MD5、版本和回收站不变量。
 4. **Content Service**：先外置视觉/内容理解，保留同步调用和原有业务结果；失败仍返回当前响应。
