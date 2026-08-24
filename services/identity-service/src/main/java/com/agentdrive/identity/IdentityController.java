@@ -87,6 +87,15 @@ public final class IdentityController {
         return service.introspect(request.credential());
     }
 
+    /** 注册过渡期 API 已生成的 credential hash。 */
+    @PostMapping("/credentials/register")
+    public Map<String, Object> registerCredential(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                                   @Valid @RequestBody RegisterBody request) {
+        authorize(token);
+        return service.registerCredential(new IdentityApplicationService.RegisterRequest(
+                request.ownerId(), request.kind(), request.tokenHash(), request.expiresAt()));
+    }
+
     private void authorize(String token) {
         if (properties.internalToken().isBlank() || token == null || !MessageDigest.isEqual(
                 properties.internalToken().getBytes(StandardCharsets.UTF_8),
@@ -105,6 +114,15 @@ public final class IdentityController {
 
     /** introspection JSON 请求体。 */
     public record CredentialBody(@JsonProperty("credential") @NotBlank @Size(max = 512) String credential) {
+    }
+
+    /** 仅内部迁移/双写使用的 credential hash 请求体。 */
+    public record RegisterBody(
+            @JsonProperty("owner_id") @NotBlank @Size(max = 64) String ownerId,
+            @JsonProperty("kind") @NotBlank @Size(max = 16) String kind,
+            @JsonProperty("token_hash") @NotBlank @Size(max = 128) String tokenHash,
+            @JsonProperty("expires_at") java.time.Instant expiresAt
+    ) {
     }
 
     /** 返回稳定身份业务错误 envelope。 */

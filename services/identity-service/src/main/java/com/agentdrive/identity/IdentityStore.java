@@ -42,6 +42,19 @@ public class IdentityStore {
                 ownerId.toString(), tokenHash, expiresAt);
     }
 
+    /** 注册一个已由过渡期 API 签发的 session/device credential 摘要。 */
+    public void registerCredential(UUID ownerId, String kind, String tokenHash, Instant expiresAt) {
+        if (!"SESSION".equals(kind) && !"DEVICE".equals(kind)) {
+            throw new IllegalArgumentException("credential kind is invalid");
+        }
+        jdbc.update("""
+                INSERT INTO identity_credentials(owner_id, kind, token_hash, expires_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (token_hash) DO UPDATE SET owner_id = EXCLUDED.owner_id,
+                  kind = EXCLUDED.kind, expires_at = EXCLUDED.expires_at, revoked_at = NULL
+                """, ownerId, kind.toLowerCase(java.util.Locale.ROOT), tokenHash, expiresAt);
+    }
+
     /** 按 hash 撤销尚未撤销的 credential。 */
     public boolean revoke(String tokenHash) {
         return jdbc.update("UPDATE identity_credentials SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL",

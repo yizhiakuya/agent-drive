@@ -16,3 +16,12 @@ CREATE TABLE IF NOT EXISTS identity_credentials (
 
 CREATE INDEX IF NOT EXISTS identity_credentials_owner_idx ON identity_credentials(owner_id);
 CREATE INDEX IF NOT EXISTS identity_credentials_active_idx ON identity_credentials(token_hash, revoked_at, expires_at);
+
+CREATE TABLE IF NOT EXISTS identity_pairings (
+    id UUID PRIMARY KEY,
+    owner_id UUID NOT NULL REFERENCES identity_owner(id),
+    code_hash VARCHAR(128) NOT NULL UNIQUE,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    consumed_at TIMESTAMP WITH TIME ZONE NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

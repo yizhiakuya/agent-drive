@@ -76,6 +76,20 @@ public class IdentityApplicationService {
                 .orElseGet(() -> Map.of("authenticated", false));
     }
 
+    /** 接收过渡期 API 已签发的 credential 摘要，供远程 introspection 使用。 */
+    @Transactional
+    public Map<String, Object> registerCredential(RegisterRequest request) {
+        UUID owner = UUID.fromString(request.ownerId());
+        if (request.expiresAt() == null || request.expiresAt().isBefore(Instant.now())) {
+            throw new IdentityException(400, "credential_expired", "credential expiry is invalid");
+        }
+        if (request.tokenHash() == null || request.tokenHash().isBlank()) {
+            throw new IdentityException(400, "credential_hash_missing", "credential hash is required");
+        }
+        store.registerCredential(owner, request.kind(), request.tokenHash(), request.expiresAt());
+        return Map.of("ok", true, "owner_id", owner.toString(), "kind", request.kind());
+    }
+
     private Map<String, Object> issueSession(UUID owner) {
         Instant expiresAt = Instant.now().plus(SESSION_TTL);
         String token = randomToken();
@@ -88,6 +102,10 @@ public class IdentityApplicationService {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /** 过渡期 credential 注册请求。 */
+    public record RegisterRequest(String ownerId, String kind, String tokenHash, Instant expiresAt) {
     }
 
     /** 稳定的身份业务错误。 */
