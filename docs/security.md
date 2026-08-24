@@ -11,6 +11,8 @@
 127.0.0.1:8000 Java API
         ├── PostgreSQL/pgvector（仅受限地址）
         └── owner-scoped 本地文件系统
+        ├──（可选）127.0.0.1:8010 Content Service
+        └──（可选）127.0.0.1:8020 File Service
 ```
 
 - nginx 是唯一公网入口，API 只绑定 `127.0.0.1:8000`；当前没有独立 Java Worker HTTP 入口。
@@ -18,6 +20,7 @@
 - `/api/v1/health` 用于探活；认证初始化端点按认证规则公开；其他业务 API 默认需要当前 owner。
 - 静态资源和 `.well-known/assetlinks.json` 可公开读取，但 SPA fallback 不能越过 `frontend/out` 目录边界。
 - nginx 对公网上传限制 200 MB，Java API 还有 `max_upload_mb=300` 的直连兜底；聊天剪贴板内联图片单张限制 50 MiB，JSON 请求体限制 80 MiB，避免把大图片限制误认为普通文件上传限制。API 只读取 `/etc/agent-drive/proxy.env` 中的 HTTP(S) 代理，并清除 `ALL_PROXY/all_proxy`。
+- Content/File Service 只绑定 loopback，不由 nginx 暴露；主 API 只有在 URL 和独立内部 token 同时配置时才使用远程端口。Content Service 的 owner provider 快照和图片请求、File Service 的 owner/path 内容请求都必须带固定 token header，服务端再次校验 owner、路径、大小和响应校验和。token 不进入 Agent catalog、响应正文或普通日志。
 
 ## 2. 认证模型
 
@@ -49,6 +52,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 覆盖上传/文本写入前，旧普通文件复制到 owner 私有 `.versions` 目录并在 `file_version_snapshots` 登记；版本列表只返回当前 owner 且仍存在的快照元数据，恢复通过原子上传产生新 revision，不允许客户端直接读取快照路径。
 - Chat 文件上下文只接受当前 owner 的相对 POSIX 路径，后端重新读取文件/文件夹内容，不信任客户端传入正文；文件选择器附件写入 owner-scoped `聊天附件` 目录并沿用上传 MD5、路径和索引边界，剪贴板图片只允许受限 Base64 内联到支持图片的当前模型请求，不持久化。
 - 聊天 relay 按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件，不提供跨进程后台任务入口。
+- File Service 的独立存储根不能与 API owner 文件根共享路径；迁移前 `AGENT_DRIVE_FILE_SERVICE_URL` 保持为空，视觉链路才会继续读取主 API 本地文件。远程读取响应必须重新验证 owner、相对路径、大小和 MD5，失败返回结构化错误而不是空内容。
 
 ## 4. Agent 和外部 provider
 
