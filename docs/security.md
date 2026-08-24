@@ -14,6 +14,7 @@
         ├──（可选）127.0.0.1:8010 Content Service
         ├──（可选）127.0.0.1:8020 File Service
         └──（待认证迁移）127.0.0.1:8030 Identity Service
+        └──（待索引迁移）127.0.0.1:8040 Index Service
 ```
 
 - nginx 是唯一公网入口，API 只绑定 `127.0.0.1:8000`；当前没有独立 Java Worker HTTP 入口。
@@ -55,6 +56,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 聊天 relay 按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件，不提供跨进程后台任务入口。
 - File Service 的独立存储根不能与 API owner 文件根共享路径；迁移前 `AGENT_DRIVE_FILE_SERVICE_URL` 保持为空，视觉链路才会继续读取主 API 本地文件。配置远程 URL 后，主 API 启动期必须先验证 File Service readiness；远程读取响应还必须重新验证 owner、相对路径、大小和 MD5，失败返回结构化错误而不是空内容。
 - File Service manifest 只用于受控迁移校验，必须经过内部 token；它不返回文件正文，不改变文件 revision，也不能被 Agent catalog 调用。
+- Index Service 的 manifest、文档写入和迁移期检索只允许 loopback + 内部 token；服务不读取主 API 索引表，owner/file/revision 由请求边界重新校验。
 
 ## 4. Agent 和外部 provider
 

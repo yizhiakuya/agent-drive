@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: agent-drive-index-service
+  sql:
+    init:
+      mode: always
+  datasource:
+    url: ${INDEX_DATABASE_URL:jdbc:postgresql://127.0.0.1:5432/agent_drive_index}
+    username: ${INDEX_DATABASE_USERNAME:agent_drive}
+    password: ${INDEX_DATABASE_PASSWORD:}
+
+server:
+  address: ${INDEX_BIND_ADDRESS:127.0.0.1}
+  port: ${INDEX_PORT:8040}
+
+index:
+  internal-token: ${INDEX_INTERNAL_TOKEN:}
+  max-chunks-per-document: ${INDEX_MAX_CHUNKS_PER_DOCUMENT:4096}

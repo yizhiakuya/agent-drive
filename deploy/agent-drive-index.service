@@ -1,0 +1,29 @@
+[Unit]
+Description=Agent Drive Index Service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-drive-index
+ExecStart=/usr/bin/java -jar /opt/agent-drive-index/index-service.jar --server.address=127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=90
+TimeoutStopSec=30
+SuccessExitStatus=143
+EnvironmentFile=-/etc/agent-drive-index/index.env
+Environment=INDEX_BIND_ADDRESS=127.0.0.1
+Environment=INDEX_PORT=8040
+UnsetEnvironment=ALL_PROXY all_proxy
+UMask=077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectHome=true
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

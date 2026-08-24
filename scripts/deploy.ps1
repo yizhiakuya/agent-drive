@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("frontend", "backend", "content", "file", "identity", "all")]
+    [ValidateSet("frontend", "backend", "content", "file", "identity", "index", "all")]
     [string]$Target = "frontend",
     [ValidatePattern("^[A-Za-z0-9_.@:-]+$")]
     [string]$RemoteHost = "megumin",
@@ -19,6 +19,7 @@ $BackendRoot = Join-Path $RepoRoot "backend"
 $ContentRoot = Join-Path $RepoRoot "services/content-service"
 $FileServiceRoot = Join-Path $RepoRoot "services/file-service"
 $IdentityServiceRoot = Join-Path $RepoRoot "services/identity-service"
+$IndexServiceRoot = Join-Path $RepoRoot "services/index-service"
 $DeployId = [Guid]::NewGuid().ToString("N")
 $RemoteArchive = "/tmp/agent-drive-out-$DeployId.tar"
 $RemoteJar = "/tmp/agent-drive-backend-$DeployId.jar"
@@ -29,6 +30,8 @@ $RemoteFileJar = "/tmp/agent-drive-file-$DeployId.jar"
 $RemoteFileUnit = "/tmp/agent-drive-file-$DeployId.service"
 $RemoteIdentityJar = "/tmp/agent-drive-identity-$DeployId.jar"
 $RemoteIdentityUnit = "/tmp/agent-drive-identity-$DeployId.service"
+$RemoteIndexJar = "/tmp/agent-drive-index-$DeployId.jar"
+$RemoteIndexUnit = "/tmp/agent-drive-index-$DeployId.service"
 $RemoteBackupScript = "/tmp/agent-drive-java-backup-$DeployId.sh"
 $RemoteBackupUnit = "/tmp/agent-drive-java-backup-$DeployId.service"
 $RemoteBackupTimer = "/tmp/agent-drive-java-backup-$DeployId.timer"
@@ -733,6 +736,120 @@ printf 'Identity Service ready; release=%s previous=%s\n' "$release" "${previous
     }
 }
 
+function Invoke-IndexServiceBuild {
+    Push-Location $IndexServiceRoot
+    try {
+        if (-not $SkipBuild) {
+            if (-not $SkipTests) {
+                Invoke-Checked "mvn" @("-q", "test")
+            }
+            Invoke-Checked "mvn" @("-q", "-DskipTests", "package")
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $artifact = Get-ChildItem -LiteralPath (Join-Path $IndexServiceRoot "target") -Filter "*.jar" -File |
+        Where-Object { $_.Name -notlike "*-plain.jar" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($null -eq $artifact) {
+        throw "Index Service artifact not found under $IndexServiceRoot/target"
+    }
+    return $artifact.FullName
+}
+
+function Deploy-IndexService {
+    param([Parameter(Mandatory)][string]$Artifact)
+
+    $unit = Join-Path $RepoRoot "deploy/agent-drive-index.service"
+    if (-not (Test-Path $unit)) {
+        throw "Index Service systemd unit is missing: $unit"
+    }
+
+    Invoke-Checked "scp" @($Artifact, "${RemoteHost}:$RemoteIndexJar")
+    Invoke-Checked "scp" @($unit, "${RemoteHost}:$RemoteIndexUnit")
+
+    $remoteScript = @'
+set -euo pipefail
+artifact='__REMOTE_INDEX_JAR__'
+unit='__REMOTE_INDEX_UNIT__'
+release_dir='/opt/agent-drive-index/releases'
+current_link='/opt/agent-drive-index/index-service.jar'
+release="$release_dir/index-service-__DEPLOY_ID__.jar"
+previous_target=''
+rollback_needed=0
+
+test -s "$artifact"
+test -f "$unit"
+mkdir -p /opt/agent-drive-index "$release_dir" /etc/agent-drive-index
+if [ ! -f /etc/agent-drive-index/index.env ]; then
+  printf 'Index Service env is missing; install index.env before deployment\n' >&2
+  exit 2
+fi
+
+rollback() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rollback_needed" -eq 1 ]; then
+    if [ -n "$previous_target" ] && [ -f "$previous_target" ]; then
+      ln -s "$previous_target" "${current_link}.rollback.$$"
+      mv -Tf "${current_link}.rollback.$$" "$current_link"
+      systemctl restart agent-drive-index.service || true
+    else
+      systemctl stop agent-drive-index.service || true
+    fi
+  fi
+  exit "$rc"
+}
+trap rollback EXIT
+
+if [ -L "$current_link" ]; then
+  previous_target="$(readlink -f "$current_link")"
+elif [ -f "$current_link" ]; then
+  previous_target="$release_dir/index-service-legacy-$(date +%Y%m%d%H%M%S).jar"
+  mv "$current_link" "$previous_target"
+fi
+
+install -m 0644 "$artifact" "$release"
+install -m 0644 "$unit" /etc/systemd/system/agent-drive-index.service
+systemd-analyze verify /etc/systemd/system/agent-drive-index.service
+systemctl daemon-reload
+systemctl enable agent-drive-index.service
+ln -s "$release" "${current_link}.new.$$"
+mv -Tf "${current_link}.new.$$" "$current_link"
+rollback_needed=1
+systemctl restart agent-drive-index.service
+
+ready=0
+for _ in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8040/internal/v1/health \
+      | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  journalctl -u agent-drive-index.service -n 80 --no-pager
+  exit 1
+fi
+rollback_needed=0
+rm -f "$artifact" "$unit"
+printf 'Index Service ready; release=%s previous=%s\n' "$release" "${previous_target:-none}"
+'@
+    $remoteScript = $remoteScript.Replace("__REMOTE_INDEX_JAR__", $RemoteIndexJar)
+    $remoteScript = $remoteScript.Replace("__REMOTE_INDEX_UNIT__", $RemoteIndexUnit)
+    $remoteScript = $remoteScript.Replace("__DEPLOY_ID__", $DeployId)
+    try {
+        Invoke-RemoteBash $remoteScript
+    }
+    finally {
+        $cleanup = "rm -f '$RemoteIndexJar' '$RemoteIndexUnit'"
+        try { Invoke-RemoteBash $cleanup } catch { Write-Warning $_.Exception.Message }
+    }
+}
+
 Require-Command "ssh"
 Require-Command "scp"
 
@@ -741,6 +858,7 @@ $backendArtifact = $null
 $contentArtifact = $null
 $fileArtifact = $null
 $identityArtifact = $null
+$indexArtifact = $null
 if ($Target -in @("frontend", "all")) {
     Require-Command "npm"
     Require-Command "tar"
@@ -762,6 +880,10 @@ if ($Target -eq "identity") {
     Require-Command "mvn"
     $identityArtifact = Invoke-IdentityServiceBuild
 }
+if ($Target -eq "index") {
+    Require-Command "mvn"
+    $indexArtifact = Invoke-IndexServiceBuild
+}
 
 if ($Target -in @("frontend", "all")) {
     Deploy-Frontend $frontendOut
@@ -774,6 +896,9 @@ if ($Target -in @("file", "all")) {
 }
 if ($Target -eq "identity") {
     Deploy-IdentityService $identityArtifact
+}
+if ($Target -eq "index") {
+    Deploy-IndexService $indexArtifact
 }
 if ($Target -in @("backend", "all")) {
     Deploy-Backend $backendArtifact

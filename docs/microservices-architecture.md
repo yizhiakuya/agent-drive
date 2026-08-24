@@ -143,6 +143,13 @@ index.updated
 - 主 API 已具备 `RemoteCredentialAuthenticator` 和 `AGENT_DRIVE_IDENTITY_SERVICE_URL/TOKEN` 配置切换，但当前生产未启用，必须先迁移 owner/session/device 数据并完成登录、登出、pairing 回归后再切流。
 - `scripts/deploy.ps1 -Target identity` 要求服务器预置独立数据库和 0600 `identity.env`，不会被 `-Target all` 隐式安装，避免未迁移数据时误切认证。
 
-## 11. 当前阶段验收
+## 11. Index Service 当前实现
 
-当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 已独立构建、测试、部署、回滚并接管生产视觉请求；File Service 和 Identity Service 可独立构建、测试、部署和回滚，但分别在文件/认证数据迁移前保持未切流。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为完整多服务生产拓扑。
+- 源码位于 `services/index-service`，自有 `index_documents/index_chunks` schema，提供文档/视觉描述替换、owner manifest 和迁移期 lexical search。
+- 文档写入以 `owner_id/file_id/source_revision/document_type` 为边界，替换正文和 chunks 在同一事务内完成；manifest 不返回正文或向量。
+- 当前服务预留 `embedding_fingerprint`/`embedding` 字段，真正 pgvector 检索和 `RemoteIndexStore` 适配器在数据迁移完成后接入；主 API 仍使用本地 IndexStore。
+- `scripts/deploy.ps1 -Target index` 要求预置独立数据库和 0600 `index.env`，不会被 `-Target all` 隐式安装。
+
+## 12. 当前阶段验收
+
+当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 已独立构建、测试、部署、回滚并接管生产视觉请求；File、Identity、Index Service 可独立构建、测试、部署和回滚，但分别在文件/认证/索引数据迁移前保持未切流。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Index/Agent 迁移为完整多服务生产拓扑。
