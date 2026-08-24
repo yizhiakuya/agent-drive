@@ -151,6 +151,7 @@ index.updated
 - 主 API 已提供 `RemoteIndexDocumentClient` 和 `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 配置；配置后只创建迁移客户端并验证远程 readiness，不会自动替换本地索引流量。
 - `scripts/deploy.ps1 -Target index` 要求预置独立数据库和 0600 `index.env`，不会被 `-Target all` 隐式安装。
 - Java backup timer 会在 `index.env` 提供数据库用户/名称时把 Index Service dump 放进同一份归档；Index Service 不允许在没有备份覆盖的情况下切流。
+- 2026-08-24 已完成首批只读迁移：主库 `23 documents / 22 chunks` 与 Index DB 完全一致，manifest 和 lexical migration check 已验证。迁移保留历史 vision v1/v2 文档作为比对快照，正式切流前必须按当前 `vision-description-v3` 重新生成视觉描述和向量。
 
 ## 12. 当前阶段验收
 

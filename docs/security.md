@@ -58,6 +58,7 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - File Service manifest 只用于受控迁移校验，必须经过内部 token；它不返回文件正文，不改变文件 revision，也不能被 Agent catalog 调用。
 - Index Service 的 manifest、文档写入和迁移期检索只允许 loopback + 内部 token；服务不读取主 API 索引表，owner/file/revision 由请求边界重新校验。
 - `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 只启用迁移客户端和 readiness 校验，不会让 Agent 获得 Index Service URL/token，也不会自动绕过本地 IndexStore。
+- Index Service 初始迁移完成后仍保持未切流；历史 vision v1/v2 文档不是当前视觉描述真相源，必须重新描述并校验 source revision 后才能参与正式向量检索。
 
 ## 4. Agent 和外部 provider
 
