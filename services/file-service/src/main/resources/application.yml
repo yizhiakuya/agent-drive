@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: agent-drive-file-service
+  codec:
+    max-in-memory-size: ${FILE_MAX_REQUEST_BYTES:1048576}B
+
+server:
+  address: ${FILE_BIND_ADDRESS:127.0.0.1}
+  port: ${FILE_PORT:8020}
+
+file:
+  internal-token: ${FILE_INTERNAL_TOKEN:}
+  storage-root: ${FILE_STORAGE_ROOT:/opt/agent-drive-file/data}
+  max-read-bytes: ${FILE_MAX_READ_BYTES:52428800}

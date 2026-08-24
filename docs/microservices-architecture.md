@@ -48,6 +48,7 @@ API Gateway
   +-- Content Service ---------- Vision Provider
   |                              |
   |                          Index DB/pgvector
+  +-- File Service ------------- owner object/content storage
   +-- Device Sync（可选，初期可留在 File Service）
 ```
 
@@ -124,6 +125,13 @@ index.updated
 - owner 当前视觉 provider 快照只在一次内网请求中传递；服务环境变量仅作为独立运行时默认配置。响应不会包含 API key，Provider URL 禁止 userInfo/query/fragment，JDK HTTP 客户端禁止跟随重定向。
 - `deploy/agent-drive-content.service` 和 `scripts/deploy.ps1 -Target content|all` 负责独立发布、健康检查和上一版本回滚；服务默认监听 `127.0.0.1:8010`。
 
-## 9. 当前阶段验收
+## 9. File Service 当前实现
+
+- 源码位于 `services/file-service`，当前提供 `POST /internal/v1/files/content` 和 `/internal/v1/ready`；服务拥有独立的 owner UUID 分区，不读取主 API 数据库或主 API 本地路径。
+- 每次读取都重新校验 owner、相对路径、符号链接、内部目录、文件大小和 MD5；返回只包含当前请求的 Base64 原始 bytes，不缓存内容。
+- `RemoteFileContentPort` 可按 `AGENT_DRIVE_FILE_SERVICE_URL` 和 `AGENT_DRIVE_FILE_SERVICE_TOKEN` 启用。当前只把视觉描述链路切换到该端口，普通文件 mutation 和文本索引仍保留在单体，避免在数据迁移前产生双写或空目录误读。
+- `deploy/agent-drive-file.service` 和 `scripts/deploy.ps1 -Target file|all` 负责独立发布、健康检查和回滚；服务默认监听 `127.0.0.1:8020`。
+
+## 10. 当前阶段验收
 
 当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 可独立构建、测试、部署和回滚；URL 未配置时生产仍只有一个实际承载业务的 Java API。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为真正的多服务生产拓扑。

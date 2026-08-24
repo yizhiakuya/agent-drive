@@ -13,6 +13,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
       └── frontend/out               └── 结构化状态、索引
                  │
                  └──（可选）Content Service 127.0.0.1:8010 ── Vision Provider
+                 └──（可选）File Service 127.0.0.1:8020 ── owner storage
 ```
 
 当前 API 负责 HTTP、SSE、静态前端以及索引/视觉/向量业务的直接执行。Content Service 是可选的独立内容理解进程：只有配置 `AGENT_DRIVE_CONTENT_SERVICE_URL` 与内部令牌时，视觉端口才通过 HTTP 调用它；否则仍使用 API 内本地实现。后台任务、计划队列、outbox 和独立 Worker 已移除；当前 Agent 的 `plan` 仅是会话内可视化状态，不创建持久任务；历史任务表仅保留在已有数据库中，不再由运行时写入。
@@ -34,6 +35,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
 | `skills` | owner Skill registry、内置 provider、校验和分页 | 自定义 Skill 在 PostgreSQL；内置 Skill 由代码动态生成 |
 | `index` | Tika 文档抽取、文本 chunk/Jina 向量、视觉内容语义描述/Jina 向量 | 由索引业务 API 直接执行；图片不走独立 OCR |
 | `services/content-service` | 独立视觉内容理解 HTTP 服务 | 只接收受限原始图片和 owner provider 快照，不读主库/本地路径，不持久化描述 |
+| `services/file-service` | 独立 owner 文件内容读取 HTTP 服务 | 只读取自己的 owner 分区；路径、符号链接、大小和 MD5 在服务边界重新校验 |
 | `infrastructure` | MyBatis、Flyway、PostgreSQL、HTTP client、加密和启动适配器 | 为上层提供实现，不反向承载业务决策 |
 
 跨模块写操作通过 application service 和 PostgreSQL 事务连接。带方法级 `@Transactional` 的持久化适配器保持可代理，当前 Spring 类代理模式要求实现类非 `final`。

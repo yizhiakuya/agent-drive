@@ -12,6 +12,8 @@ import com.agentdrive.index.SemanticSearchService;
 import com.agentdrive.devices.DeviceStore;
 import com.agentdrive.auth.PasswordHasher;
 import com.agentdrive.files.FileStorageService;
+import com.agentdrive.files.FileContentPort;
+import com.agentdrive.files.RemoteFileContentPort;
 import com.agentdrive.skills.SkillRepository;
 import com.agentdrive.infrastructure.persistence.MybatisAuthAccountStore;
 import com.agentdrive.infrastructure.persistence.MybatisChatRuntimeStateStore;
@@ -204,14 +206,22 @@ public class ApplicationConfiguration {
                                                  FileStorageService files,
                                                  VisionModelClient client,
                                                  ObjectMapper objectMapper) {
+        FileContentPort contentFiles = files;
+        if (!properties.fileServiceUrl().isBlank()) {
+            if (properties.fileServiceToken().isBlank()) {
+                throw new IllegalStateException("app.file-service-token is required when file-service-url is configured");
+            }
+            contentFiles = new RemoteFileContentPort(properties.fileServiceUrl(),
+                    properties.fileServiceToken(), objectMapper);
+        }
         if (properties.contentServiceUrl().isBlank()) {
-            return new VisionDescriptionService(configs, files, client);
+            return new VisionDescriptionService(configs, contentFiles, client);
         }
         if (properties.contentServiceToken().isBlank()) {
             throw new IllegalStateException("app.content-service-token is required when content-service-url is configured");
         }
         return new RemoteVisionDescriptionService(properties.contentServiceUrl(),
-                properties.contentServiceToken(), configs, files, objectMapper);
+                properties.contentServiceToken(), configs, contentFiles, objectMapper);
     }
 
     /**

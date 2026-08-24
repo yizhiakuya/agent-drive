@@ -1,0 +1,30 @@
+[Unit]
+Description=Agent Drive File Content Service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-drive-file
+ExecStart=/usr/bin/java -jar /opt/agent-drive-file/file-service.jar --server.address=127.0.0.1
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=90
+TimeoutStopSec=30
+SuccessExitStatus=143
+EnvironmentFile=-/etc/agent-drive-file/file.env
+Environment=FILE_BIND_ADDRESS=127.0.0.1
+Environment=FILE_PORT=8020
+Environment=FILE_STORAGE_ROOT=/opt/agent-drive-file/data
+UnsetEnvironment=ALL_PROXY all_proxy
+UMask=077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectHome=true
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

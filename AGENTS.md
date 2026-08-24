@@ -46,6 +46,11 @@ cd services/content-service
 mvn -q test
 mvn -q -DskipTests package
 
+# File Service
+cd services/file-service
+mvn -q test
+mvn -q -DskipTests package
+
 # 生产 smoke 通过 systemd units、API health 和 nginx health 验证；legacy-python-data/ 只供显式 migrate/人工恢复，不进入生产运行时
 
 # 前端
@@ -63,7 +68,7 @@ cd frontend/android && gradlew.bat assembleRelease
 ## 3. 部署与发布流程
 
 1. **固化版本**：先检查工作区并提交可复现的变更；禁止把未核对的历史迁移改动与当前修复混在一次提交中。部署脚本不会自动 `commit` 或 `push`。
-2. **推荐发布**：执行 `pwsh -File scripts/deploy.ps1 -Target frontend`、`-Target content`、`-Target backend` 或 `-Target all`。脚本从当前工作区构建，递增 Service Worker cache，使用 tar 全量上传并原子替换静态目录；`content` 会安装独立 Content Service artifact/unit、运行 `systemd-analyze verify` 并检查 `127.0.0.1:8010/health`；`all` 还会检查 API health/readiness。Content Service 默认不接管主 API 视觉请求，只有安全配置 URL/token 后才启用远程端口。
+2. **推荐发布**：执行 `pwsh -File scripts/deploy.ps1 -Target frontend`、`-Target content`、`-Target file`、`-Target backend` 或 `-Target all`。脚本从当前工作区构建，递增 Service Worker cache，使用 tar 全量上传并原子替换静态目录；`content` 会安装独立 Content Service artifact/unit、运行 `systemd-analyze verify` 并检查 `127.0.0.1:8010/health`；`file` 会安装独立 File Service artifact/unit 并检查 `127.0.0.1:8020/internal/v1/health`；`all` 还会检查 API health/readiness。两个服务默认不接管主 API，只有安全配置对应 URL/token 后才启用远程端口。
 3. **前端边界**：不要用 PowerShell 通配符 `out\*` scp，必须保留 `.well-known/assetlinks.json`；APK 只在 App 测试或发版时构建，日常部署保留已有 `out/app/agent-drive.apk`。服务器原地重建可用 `bash deploy/rebuild-out.sh`，但仍需先确认备份和当前分支。
 4. **首次安装/unit 变更**：复制 API 和 `agent-drive-java-backup.service/.timer` 到 `/etc/systemd/system/`，执行 `systemd-analyze verify`、`daemon-reload` 和 `enable`；停用旧 Worker unit；`/etc/agent-drive/proxy.env` 从模板创建并 chmod 0600，只允许 HTTP(S) 代理。
 5. **数据备份**：`agent-drive-java-backup.timer` 每日执行 `scripts/backup-java.sh`，把 PostgreSQL dump 与 owner 文件根归档到 `/opt/agent-drive-java/backups/`，保留最近 7 份并生成 SHA-256 校验文件；仓库不再提供旧 Python/SQLite 定时备份入口。若仍需读取 legacy SQLite，只能经 SQLite backup API 生成一致快照，禁止直接打包活动中的 WAL 三件套。

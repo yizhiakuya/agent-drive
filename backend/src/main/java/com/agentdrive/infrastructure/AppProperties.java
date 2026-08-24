@@ -19,7 +19,9 @@ public record AppProperties(
         String dataDir,
         Integer maxUploadMb,
         String contentServiceUrl,
-        String contentServiceToken
+        String contentServiceToken,
+        String fileServiceUrl,
+        String fileServiceToken
 ) {
     /**
      * 创建面向最小启动配置的属性对象，其余配置使用完整绑定构造器的默认值。
@@ -27,7 +29,7 @@ public record AppProperties(
      * @param cookieSecure 是否为 Cookie 设置 Secure 标志。
      */
     public AppProperties(String mode, Boolean cookieSecure) {
-        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "");
+        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "", "", "");
     }
 
     /**
@@ -53,6 +55,8 @@ public record AppProperties(
         maxUploadMb = maxUploadMb == null ? 300 : maxUploadMb;
         contentServiceUrl = contentServiceUrl == null ? "" : contentServiceUrl.trim();
         contentServiceToken = contentServiceToken == null ? "" : contentServiceToken.trim();
+        fileServiceUrl = fileServiceUrl == null ? "" : fileServiceUrl.trim();
+        fileServiceToken = fileServiceToken == null ? "" : fileServiceToken.trim();
     }
 
     /**
