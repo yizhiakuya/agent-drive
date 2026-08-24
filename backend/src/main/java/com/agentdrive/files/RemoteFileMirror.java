@@ -139,6 +139,29 @@ public final class RemoteFileMirror implements FileMirrorPort {
                 "owner_id", ownerId.toString(), "trash_id", trashId, "path", path));
     }
 
+    /** 提交后永久删除远程回收站条目。 */
+    @Override
+    public void emptyTrash(UUID ownerId, String trashId) {
+        try {
+            String query = "?owner_id=" + java.net.URLEncoder.encode(ownerId.toString(), StandardCharsets.UTF_8)
+                    + "&trash_id=" + java.net.URLEncoder.encode(trashId, StandardCharsets.UTF_8);
+            HttpRequest request = HttpRequest.newBuilder(URI.create(deleteEndpoint + "/trash" + query))
+                    .timeout(TIMEOUT)
+                    .header(TOKEN_HEADER, token)
+                    .header("Accept", "application/json")
+                    .DELETE()
+                    .build();
+            HttpResponse<String> response = client.send(request,
+                    HttpClientSupport.limitedUtf8BodyHandler(64 * 1024));
+            requireOk(response);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new FileStorageException(502, "文件镜像回收站清理中断", error);
+        } catch (IOException error) {
+            throw new FileStorageException(502, "文件镜像回收站清理失败", error);
+        }
+    }
+
     private void trashMutation(String path, Map<String, Object> body) {
         try {
             HttpRequest request = HttpRequest.newBuilder(endpoint(path))

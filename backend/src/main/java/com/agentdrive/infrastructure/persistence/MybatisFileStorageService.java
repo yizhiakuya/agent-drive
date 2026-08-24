@@ -1173,6 +1173,7 @@ public class MybatisFileStorageService implements FileStorageService {
                 if (Files.exists(stored, LinkOption.NOFOLLOW_LINKS)) {
                     deferDelete(mutation, stored);
                 }
+                mutation.onPublished(() -> mirror.emptyTrash(ownerId, id), () -> { });
                 removed++;
                 String original = String.valueOf(row.get("original_path"));
                 Map<String, Object> current = mapper.selectByPath(ownerId.toString(), original);

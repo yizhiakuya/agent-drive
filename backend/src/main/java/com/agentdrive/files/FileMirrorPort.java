@@ -40,6 +40,11 @@ public interface FileMirrorPort {
         throw new UnsupportedOperationException("file mirror restore is not supported");
     }
 
+    /** 提交后永久删除远程回收站条目。 */
+    default void emptyTrash(UUID ownerId, String trashId) {
+        throw new UnsupportedOperationException("file mirror trash cleanup is not supported");
+    }
+
     /** 返回不产生网络请求的空镜像实现。 */
     static FileMirrorPort noop() {
         return new FileMirrorPort() {
@@ -69,6 +74,10 @@ public interface FileMirrorPort {
 
             @Override
             public void restorePath(UUID ownerId, String trashId, String path) {
+            }
+
+            @Override
+            public void emptyTrash(UUID ownerId, String trashId) {
             }
         };
     }
