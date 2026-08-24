@@ -15,6 +15,7 @@ TimeoutStartSec=90
 TimeoutStopSec=30
 SuccessExitStatus=143
 EnvironmentFile=-/etc/agent-drive-content/content.env
+EnvironmentFile=/etc/agent-drive/proxy.env
 Environment=CONTENT_BIND_ADDRESS=127.0.0.1
 Environment=CONTENT_PORT=8010
 UnsetEnvironment=ALL_PROXY all_proxy
