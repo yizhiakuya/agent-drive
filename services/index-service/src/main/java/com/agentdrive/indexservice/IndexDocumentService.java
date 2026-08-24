@@ -55,7 +55,7 @@ public class IndexDocumentService {
                 "extractor_version", rs.getString("extractor_version"),
                 "chunk_version", rs.getString("chunk_version"),
                 "chunk_count", rs.getInt("chunk_count"),
-                "content_chars", rs.getLong("content_chars")), owner.toString());
+                "content_chars", rs.getLong("content_chars")), owner);
         return Map.of("ok", true, "owner_id", owner.toString(), "entries", entries,
                 "document_count", entries.size());
     }
@@ -78,7 +78,7 @@ public class IndexDocumentService {
                 SELECT id FROM index_documents
                 WHERE owner_id = ? AND file_id = ? AND source_revision = ? AND document_type = ?
                 """, rs -> rs.next() ? rs.getString("id") : null,
-                owner.toString(), file.toString(), request.sourceRevision(), request.documentType());
+                owner, file, request.sourceRevision(), request.documentType());
         if (documentId == null) {
             documentId = UUID.randomUUID().toString();
             jdbc.update("""
@@ -126,7 +126,7 @@ public class IndexDocumentService {
                 "source_revision", rs.getLong("source_revision"),
                 "document_type", rs.getString("document_type"),
                 "chunk_index", rs.getInt("chunk_index"),
-                "content", rs.getString("content")), owner.toString(), "%" + text + "%", bounded);
+                "content", rs.getString("content")), owner, "%" + text + "%", bounded);
         return Map.of("ok", true, "mode", "lexical_migration_check", "query", text,
                 "items", items, "has_more", items.size() == bounded);
     }
