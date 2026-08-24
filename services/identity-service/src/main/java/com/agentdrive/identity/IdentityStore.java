@@ -38,7 +38,7 @@ public class IdentityStore {
 
     /** 创建带过期时间的 session credential。 */
     public void createSession(UUID ownerId, String tokenHash, Instant expiresAt) {
-        jdbc.update("INSERT INTO identity_credentials(owner_id, kind, token_hash, expires_at) VALUES (?, 'session', ?, ?)",
+        jdbc.update("INSERT INTO identity_credentials(owner_id, kind, token_hash, expires_at) VALUES (?, 'SESSION', ?, ?)",
                 ownerId.toString(), tokenHash, expiresAt);
     }
 
@@ -52,7 +52,7 @@ public class IdentityStore {
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (token_hash) DO UPDATE SET owner_id = EXCLUDED.owner_id,
                   kind = EXCLUDED.kind, expires_at = EXCLUDED.expires_at, revoked_at = NULL
-                """, ownerId, kind.toLowerCase(java.util.Locale.ROOT), tokenHash, expiresAt);
+                """, ownerId, kind.toUpperCase(java.util.Locale.ROOT), tokenHash, expiresAt);
     }
 
     /** 按 hash 撤销尚未撤销的 credential。 */
