@@ -193,6 +193,28 @@ public class MybatisFileStorageService implements FileStorageService {
         }
     }
 
+    /**
+     * 返回面向 Agent 的多 chunk 证据窗口；普通文件列表仍保持每文件最佳 chunk 语义。
+     */
+    @Override
+    public Map<String, Object> searchContent(UUID ownerId, String path, String query,
+                                             int limit, int neighbors, Double minScore,
+                                             String type, Double modifiedAfter,
+                                             Double modifiedBefore) {
+        Path directory = safePath(ownerId, path, false);
+        if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            throw new FileStorageException(404, "目录不存在");
+        }
+        if (semanticSearch == null) {
+            throw new FileStorageException(503, "语义搜索服务未启用");
+        }
+        String normalizedType = normalizeTypeFilter(type);
+        return semanticSearch.searchEvidence(ownerId, normalizePath(path), query,
+                Math.max(1, Math.min(limit, 16)),
+                Math.max(0, Math.min(neighbors, 2)), minScore,
+                normalizedType, modifiedAfter, modifiedBefore);
+    }
+
     /** 返回当前 owner 最近收藏的仍然存在且可见的文件/目录。 */
     @Override
     public Map<String, Object> listFavorites(UUID ownerId, int limit) {

@@ -111,6 +111,33 @@ public final class FileController {
     }
 
     /**
+     * 响应 {@code GET /api/v1/files/search-content}，返回可供 Agent 回答的多 chunk 证据。
+     * 该端点不改变普通文件列表的每文件最佳匹配契约。
+     */
+    @GetMapping("/search-content")
+    public Mono<Map<String, Object>> searchContent(@RequestParam(defaultValue = "") String path,
+                                                   @RequestParam String q,
+                                                   @RequestParam(defaultValue = "8") int limit,
+                                                   @RequestParam(defaultValue = "1") int neighbors,
+                                                   @RequestParam(name = "min_score", required = false) Double minScore,
+                                                   @RequestParam(defaultValue = "all") String type,
+                                                   @RequestParam(name = "modified_after", required = false) Double modifiedAfter,
+                                                   @RequestParam(name = "modified_before", required = false) Double modifiedBefore,
+                                                   ServerWebExchange exchange) {
+        if (limit < 1 || limit > 16) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "limit must be between 1 and 16");
+        }
+        if (neighbors < 0 || neighbors > 2) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "neighbors must be between 0 and 2");
+        }
+        validateSearchFilters(minScore, type, modifiedAfter, modifiedBefore);
+        return authenticated(exchange, owner -> files.searchContent(owner, path, q, limit, neighbors,
+                minScore, normalizeType(type), modifiedAfter, modifiedBefore));
+    }
+
+    /**
      * 响应 {@code GET /api/v1/files/stats}，在服务端递归统计当前 owner 的可见文件。
      *
      * @param path owner 根目录下的相对统计目录，默认表示根目录。
@@ -121,6 +148,36 @@ public final class FileController {
     public Mono<Map<String, Object>> statistics(@RequestParam(defaultValue = "") String path,
                                                 ServerWebExchange exchange) {
         return authenticated(exchange, owner -> files.statistics(owner, path));
+    }
+
+    private void validateSearchFilters(Double minScore, String type,
+                                       Double modifiedAfter, Double modifiedBefore) {
+        if (minScore != null && (!Double.isFinite(minScore) || minScore < -1.0 || minScore > 1.0)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "min_score must be between -1 and 1");
+        }
+        String normalizedType = normalizeType(type);
+        if (!Set.of("all", "file", "folder", "image", "video", "audio", "pdf", "text")
+                .contains(normalizedType)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "unsupported file type filter");
+        }
+        if (modifiedAfter != null && (!Double.isFinite(modifiedAfter) || modifiedAfter < 0)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "modified_after must be a non-negative timestamp");
+        }
+        if (modifiedBefore != null && (!Double.isFinite(modifiedBefore) || modifiedBefore < 0)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "modified_before must be a non-negative timestamp");
+        }
+        if (modifiedAfter != null && modifiedBefore != null && modifiedAfter > modifiedBefore) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "modified_after must not exceed modified_before");
+        }
+    }
+
+    private String normalizeType(String type) {
+        return type == null ? "all" : type.trim().toLowerCase(Locale.ROOT);
     }
 
     /**

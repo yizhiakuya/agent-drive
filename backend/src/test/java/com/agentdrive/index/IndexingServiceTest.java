@@ -89,7 +89,7 @@ class IndexingServiceTest {
                 .containsEntry("vector_type", "vision");
         verify(index).replaceDocument(eq(owner), eq(fileId), eq(7L),
                 eq(IndexStore.VISION_DOCUMENT_TYPE), eq("{\"summary\":\"receipt\"}"),
-                eq("vision-description-v1"), any(), eq("vision-chunk-v1"));
+                eq("vision-description-v3"), any(), eq("vision-chunk-v3"));
     }
 
     @Test

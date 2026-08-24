@@ -33,6 +33,8 @@ frontend/src/
 
 对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。完整会话侧栏在 `xl` 以下隐藏并改用抽屉，文件栏同样在 `xl` 以下隐藏，避免中等宽度挤压聊天 composer；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。设置页的 `SystemStatusCenter` 负责并行健康探测和局部错误展示。
 
+工作区头部的 `OperationActivityCenter` 使用 `lib/operation-activity.ts` 的 `useSyncExternalStore` 外部状态，避免高频操作进度更新导致整个工作区重新渲染。运行中活动只在当前页面进程内保存，完成/部分完成/失败结果按版本化 localStorage 保存有限条目；Toast 只作短摘要。FilePage 的索引和批量 mutation、Chat SSE 的 backend 文件/index mutation 都通过该 store 记录统一生命周期。
+
 跨组件刷新使用 `lib/events.ts` 中的类型化事件：
 
 - `agent-drive:refresh`：全局下拉刷新；
@@ -52,15 +54,15 @@ frontend/src/
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
 - `useModelCatalog.ts`：独立管理模型目录、能力映射和配置变化时的迟到响应隔离；`AssistantMarkdown.tsx` 与 `FileMentionPicker.tsx` 分别负责安全文件引用渲染和候选列表，避免把这些职责继续堆入 ChatPanel。
 - ChatPanel 的会话滚动策略按状态收敛：历史加载完成和会话切换默认定位底部；活动流的消息、reasoning、工具步骤和计划更新持续跟随底部；非运行状态用户手动上滑后不抢回位置，只显示 composer 上沿的圆形“回到最新消息”按钮。
-- ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；响应同时提供按模型 ID 编排的 `model_capabilities`，显式 Provider 能力字段优先，未知模型保守视为不支持图片。选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。Onboarding 使用同一目录接口完成首次模型选择，并在协议、地址或 API key 变化时使旧请求失效；协议或地址变化还会销毁旧 key 草稿。
-- Skill 正文由后端按会话恢复：前端不把工具轨迹伪装成客户端 history；服务端从 owner transcript 识别已成功读取的 Skill，下一轮直接注入当前版本正文，目录标记为“已加载”，因此模型不会重复调用 `read_skill`。
-- 输入区的 `@` 选择器通过 name 搜索加载 owner 文件/文件夹：文件点击即引用，文件夹点击进入目录浏览，目录行和浏览头部另提供“引用文件夹”动作；浏览状态用路径栈和请求代次隔离迟到响应，Escape 返回上级或关闭候选层。文件选择器附件走普通上传接口后加入 `file_context`；剪贴板图片只读入内存并以受限 Base64 `inline_images` 随本轮请求发送，不创建聊天附件路径，发送前按当前模型图片能力校验。回答中的 `[[file:path]]` / `[[folder:path]]` 使用固定内部 HTTPS 哨兵链接，经 origin、kind 和路径校验后派发已登记的文件打开动作。
+- ChatPanel 的模型 Combobox 按需调用 `POST /config/models` 读取当前 Provider 的模型目录；响应同时提供按模型 ID 编排的 `model_capabilities`，显式 Provider 能力字段优先，未知模型保守视为不支持图片。选中的 `model` 只随本轮 `/chat/stream` 请求发送，不修改设置页默认配置。聊天内联图片保持原始字节，不在浏览器或 Java 侧缩放/重编码；runtime 以 LangChain4j `ImageContent.DetailLevel.HIGH` 请求较高视觉细节，视觉索引的 OpenAI 兼容请求也设置 `image_url.detail=high`，最终 Provider 是否内部缩放/分块由其协议决定。Onboarding 使用同一目录接口完成首次模型选择，并在协议、地址或 API key 变化时使旧请求失效；协议或地址变化还会销毁旧 key 草稿。
+- Skill 正文由后端按会话恢复：前端不把工具轨迹伪装成客户端 history；服务端从 owner transcript 读取权威 user/assistant history，并识别已成功读取的 Skill，下一轮直接注入当前版本正文。已加载 Skill 有数量/字符预算，目录标记为“已加载”，因此模型不会重复调用 `read_skill`。
+- 输入区的 `@` 选择器通过 name 搜索加载 owner 文件/文件夹：文件点击即引用，文件夹点击进入目录浏览，目录行和浏览头部另提供“引用文件夹”动作；浏览状态用路径栈和请求代次隔离迟到响应，Escape 返回上级或关闭候选层。文件选择器附件走普通上传接口后加入 `file_context`；剪贴板图片只读入内存并以受限 Base64 `inline_images` 随本轮请求发送，单张原图上限 50 MiB，不创建聊天附件路径，发送前按当前模型图片能力校验。浏览器同时提供 `clipboard.items` 与 `clipboard.files` 时以前者作为唯一图片来源，只有前者未能读取图片才回退到后者，避免同一张图因元数据差异重复附加；草稿缩略图和当前用户消息都可点击打开原图预览，预览数据只保留在当前浏览器内存中，API 的 Base64 `data` 不进入客户端 history 或服务端 transcript；预览支持遮罩、关闭按钮和 Escape 收起。文件 context 以 `untrusted_data` 信任等级展示，回答中的 `[[file:path]]` / `[[folder:path]]` 使用固定内部 HTTPS 哨兵链接，经本地 registry、schema 和路径校验后派发已登记的文件打开动作。
 - 输入区权限控件支持 `请求批准`、`帮我批准`（默认）和 `完全访问` 三档，选择保存在当前浏览器并随 `/chat/stream` 的 `permission_mode` 发送。后端按读写方法和 `green/yellow/red` 风险决定确认：请求批准模式拦截非读取调用，但绿色内部前端导航和会话 `plan` 辅助工具不拦截；帮我批准模式只拦截 red，完全访问按用户授权直接执行已登记 operation；ask/auto 下 red 仍走服务端一次性签名确认。
 - 上下文使用量紧跟输入区顶部的推理层级，以紧凑圆环、已用/总量和下拉箭头显示；默认只占一个控制位，点击原生 `<details>` 后展开窗口上限、已用、可用空间和本轮输入/输出详情。Java runtime 优先使用 Provider 返回的 `TokenUsage.inputTokenCount`，流式 Provider 未回传时按已组装消息做保守估算，不能伪报 0；点击外部区域或 Escape 会关闭浮层。颜色按 50%/80% 阈值映射 warn/danger，完整数据保留在可访问标签和悬浮提示中。
 
 解析器支持 LF/CRLF/CR、跨 chunk 换行、跨 chunk UTF-8、多行 `data:` 和没有终止空行的尾事件。活动流以 session key 保存在 hook 的 Map 中；切换会话标记 detached 但保持网络读取，text/reasoning 帧用当前 session 检查隔离 UI 写入，context/tool 事件只写所属会话视图，返回原会话或结束后从持久历史收敛。初始请求从 `X-Session-ID` 收养服务端 session，页面把当前 ID 持久化；重新挂载时先查询 `/chat/{sessionId}/active`，活动 relay 通过 `/chat/{sessionId}/stream` 回放并继续渲染，结束后重新读取 `no-store` 历史。当前会话 stop 才调用 cancel；组件卸载只 Abort 浏览器订阅，不能把刷新误报为用户取消。流异常收尾仍先同步 flush/cancel，再清理空助手占位和追加错误消息；错误事件带服务端 session ID 时，新会话立即收养该 ID，后台会话只刷新列表而不污染当前视图。
 
-ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即显示目标历史，但不会终止原会话；后台完成时刷新会话列表，回到原会话时重拉已持久化的 assistant/context/tool 记录。模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的请求代次规则和密钥草稿销毁规则；已存 Key 只在点击眼睛后按需读取，配置边界变化会使在途回显失效，防止迟到明文进入新地址表单。
+ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在提交响应前同时确认代次和当前 session/config 边界。切换会话会立即显示目标历史，但不会终止原会话；后台完成时刷新会话列表，回到原会话时重拉已持久化的 assistant/context/tool 记录。模型请求的历史由服务端 owner/session transcript 组装，客户端 history 仅用于兼容旧 runtime。模型配置变化会使进行中的模型目录请求失效。SettingsPage 对 LLM/视觉模型探测采用同样的请求代次规则和密钥草稿销毁规则；已存 Key 只在点击眼睛后按需读取，配置边界变化会使在途回显失效，防止迟到明文进入新地址表单。
 
 ## 4. 文件页请求生命周期
 

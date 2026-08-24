@@ -105,6 +105,23 @@ public class MybatisIndexStore implements IndexStore {
     }
 
     /**
+     * 查询 owner-scoped 的多 chunk 证据窗口，并限制单次返回规模。
+     */
+    @Override
+    public List<Map<String, Object>> semanticEvidence(UUID userId, String fingerprint, String vector,
+                                                       String prefix, int limit, int neighbors,
+                                                       Double minScore) {
+        requireUser(userId);
+        if (fingerprint == null || fingerprint.isBlank()) return List.of();
+        if (vector == null || vector.isBlank()) throw new IllegalArgumentException("query vector is empty");
+        int boundedLimit = Math.max(1, Math.min(limit, 100));
+        int boundedNeighbors = Math.max(0, Math.min(neighbors, 2));
+        return mapper.semanticEvidence(userId.toString(), fingerprint, vector,
+                prefix == null || prefix.isBlank() ? null : prefix,
+                boundedLimit, boundedNeighbors, minScore);
+    }
+
+    /**
      * 在事务中替换某个文件版本的全文文档和 chunk。
      * @param userId 数据所属用户的唯一标识。
      * @param fileId 文件 UUID。

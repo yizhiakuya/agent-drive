@@ -120,6 +120,30 @@ class FileControllerContractTest {
     }
 
     @Test
+    void authenticatedSearchContentPassesEvidenceQueryAndBounds() {
+        UUID owner = UUID.randomUUID();
+        StubFiles files = new StubFiles(owner);
+        WebTestClient client = client(owner, files);
+
+        client.get()
+                .uri("/api/v1/files/search-content?path=documents&q=付款和验收&limit=4&neighbors=2&min_score=0.7&type=pdf&modified_after=10&modified_before=20")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.mode").isEqualTo("semantic_evidence")
+                .jsonPath("$.results[0].path").isEqualTo("documents/contract.txt");
+        assertThat(files.lastEvidencePath).isEqualTo("documents");
+        assertThat(files.lastEvidenceQuery).isEqualTo("付款和验收");
+        assertThat(files.lastEvidenceLimit).isEqualTo(4);
+        assertThat(files.lastEvidenceNeighbors).isEqualTo(2);
+        assertThat(files.lastEvidenceMinScore).isEqualTo(0.7);
+        assertThat(files.lastEvidenceType).isEqualTo("pdf");
+        assertThat(files.lastEvidenceAfter).isEqualTo(10.0);
+        assertThat(files.lastEvidenceBefore).isEqualTo(20.0);
+    }
+
+    @Test
     void authenticatedStatsPassesOwnerAndPath() {
         UUID owner = UUID.randomUUID();
         StubFiles files = new StubFiles(owner);
@@ -228,6 +252,14 @@ class FileControllerContractTest {
         private Double lastModifiedAfter;
         private Double lastModifiedBefore;
         private String lastStatisticsPath;
+        private String lastEvidencePath;
+        private String lastEvidenceQuery;
+        private int lastEvidenceLimit;
+        private int lastEvidenceNeighbors;
+        private Double lastEvidenceMinScore;
+        private String lastEvidenceType;
+        private Double lastEvidenceAfter;
+        private Double lastEvidenceBefore;
         private int lastTrackingLimit;
         private String favoritePath;
         private boolean favoriteValue;
@@ -264,6 +296,25 @@ class FileControllerContractTest {
             lastModifiedAfter = modifiedAfter;
             lastModifiedBefore = modifiedBefore;
             return list(userId, path, query, mode);
+        }
+
+        @Override
+        public Map<String, Object> searchContent(UUID userId, String path, String query,
+                                                 int limit, int neighbors, Double minScore,
+                                                 String type, Double modifiedAfter,
+                                                 Double modifiedBefore) {
+            assertThat(userId).isEqualTo(owner);
+            lastEvidencePath = path;
+            lastEvidenceQuery = query;
+            lastEvidenceLimit = limit;
+            lastEvidenceNeighbors = neighbors;
+            lastEvidenceMinScore = minScore;
+            lastEvidenceType = type;
+            lastEvidenceAfter = modifiedAfter;
+            lastEvidenceBefore = modifiedBefore;
+            return Map.of("mode", "semantic_evidence", "results", java.util.List.of(
+                    Map.of("path", "documents/contract.txt", "chunk_index", 2,
+                            "text", "付款节点和验收条件", "neighbors", java.util.List.of())));
         }
 
         @Override

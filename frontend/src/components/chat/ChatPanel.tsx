@@ -33,7 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useChatStream, chatTextDelta } from "./useChatStream";
-import type { ContextUsage, InlineImage, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./useChatStream";
+import type { ContextUsage, InlineImage, InlineImagePreview, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./useChatStream";
 import AssistantMarkdown from "./AssistantMarkdown";
 import FileMentionPicker from "./FileMentionPicker";
 import { useModelCatalog } from "./useModelCatalog";
@@ -57,6 +57,7 @@ const THINKING_OPTIONS: { value: ThinkingLevel; label: string; description: stri
 
 const DEFAULT_CONTEXT_USAGE: ContextUsage = { used: 0, total: 262144, percent: 0 };
 const PERMISSION_STORAGE_KEY = "agent-drive-permission-mode";
+const MAX_INLINE_IMAGE_BYTES = 50 * 1024 * 1024;
 
 function finiteNumber(value: unknown): number | null {
   const number = typeof value === "number" ? value : Number(value);
@@ -151,8 +152,20 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   const [mentionBrowseStack, setMentionBrowseStack] = useState<Array<{ path: string | null; query: string }>>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [inlineImages, setInlineImages] = useState<InlineImage[]>([]);
+  const [previewImage, setPreviewImage] = useState<InlineImagePreview | null>(null);
   const mentionRequestRef = useRef(0);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!previewImage) return;
+    const handlePreviewKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPreviewImage(null);
+    };
+    window.addEventListener("keydown", handlePreviewKeyDown);
+    return () => window.removeEventListener("keydown", handlePreviewKeyDown);
+  }, [previewImage]);
 
   useEffect(() => {
     try {
@@ -268,6 +281,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
               type: "context" as const,
               source: m.context_source || "context",
               contextKind: m.context_kind || "context",
+              contextTrust: m.context_kind?.startsWith("file-") ? "untrusted_data" : "instruction",
               content: m.content || "",
             };
           }
@@ -340,7 +354,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
     }
     autoScrollRef.current = true;
     const attachedPaths = fileContext.map((entry) => entry.path);
-    const attachedInlineImages = inlineImages.map(({ name, mediaType, data }) => ({ name, mediaType, data }));
+    const attachedInlineImages = inlineImages;
     if (!message) {
       setInput("");
       if (taRef.current) taRef.current.style.height = "auto";
@@ -522,10 +536,11 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
       .map((item) => item.getAsFile())
       .filter((file): file is File => Boolean(file));
     const fromFiles = Array.from(clipboard.files || []).filter((file) => file.type.startsWith("image/"));
-    const images = Array.from(new Map([...fromItems, ...fromFiles].map((file, index) => [
-      `${file.name}|${file.size}|${file.type}|${file.lastModified}`,
-      normalizePastedImage(file, index),
-    ])).values());
+    // Chrome/Chromium exposes the same clipboard payload through both collections.
+    // Prefer the item representation and only fall back to files when item extraction fails;
+    // metadata such as lastModified is not stable enough to deduplicate across the two views.
+    const sourceFiles = fromItems.length > 0 ? fromItems : fromFiles;
+    const images = sourceFiles.map((file, index) => normalizePastedImage(file, index));
     if (images.length === 0) return;
     event.preventDefault();
     insertPastedText(clipboard.getData("text/plain"));
@@ -545,8 +560,8 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
     }
     const prepared: InlineImage[] = [];
     for (const file of files.slice(0, remaining)) {
-      if (file.size > 4 * 1024 * 1024) {
-        emitToast({ kind: "error", text: `图片过大：${file.name}（单张上限 4 MiB）` });
+      if (file.size > MAX_INLINE_IMAGE_BYTES) {
+        emitToast({ kind: "error", text: `图片过大：${file.name}（单张上限 50 MiB）` });
         continue;
       }
       try {
@@ -598,11 +613,15 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
     setFileContext((current) => current.filter((entry) => entry.path !== path));
   }
 
+  function removeInlineImage(id: string) {
+    setInlineImages((current) => current.filter((entry) => entry.id !== id));
+    setPreviewImage((current) => current?.id === id ? null : current);
+  }
+
   function confirmYes() {
     if (!pending) return;
     const confirmed = [{
       tool: pending.tool,
-      arguments: pending.arguments,
       nonce: pending.nonce,
       ts: pending.ts,
       signature: pending.signature,
@@ -722,7 +741,25 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
                     )}
                   </>
                 ) : (
-                  m.content
+                  <>
+                    {m.images && m.images.length > 0 && (
+                      <div className="mb-2 flex flex-wrap justify-end gap-2" aria-label="已发送图片">
+                        {m.images.map((image) => (
+                          <button
+                            key={image.id}
+                            type="button"
+                            className="group block max-w-full cursor-zoom-in rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                            aria-label={`预览已发送图片 ${image.name}`}
+                            title="点击查看图片"
+                            onClick={() => setPreviewImage(image)}
+                          >
+                            <img src={image.previewUrl} alt={image.name} className="max-h-64 max-w-full rounded object-contain transition-opacity group-hover:opacity-80" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {m.content && <div>{m.content}</div>}
+                  </>
                 )}
               </div>
             </div>
@@ -859,9 +896,17 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
               <div className="flex flex-wrap gap-2 border-b border-border px-3 py-2" aria-label="已附加图片">
                 {inlineImages.map((image) => (
                   <span key={image.id} className="relative inline-flex items-center gap-1.5 rounded-md border border-border bg-card p-1.5 text-[11px] text-muted">
-                    <img src={image.previewUrl} alt={image.name} className="size-10 rounded object-cover" />
+                    <button
+                      type="button"
+                      className="group block cursor-zoom-in rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-label={`预览图片 ${image.name}`}
+                      title="点击查看图片"
+                      onClick={() => setPreviewImage(image)}
+                    >
+                      <img src={image.previewUrl} alt={image.name} className="size-10 rounded object-cover transition-opacity group-hover:opacity-80" />
+                    </button>
                     <span className="max-w-32 truncate">{image.name}</span>
-                    <button type="button" className="rounded-sm p-0.5 hover:bg-panel hover:text-text" aria-label={`移除图片 ${image.name}`} onClick={() => setInlineImages((current) => current.filter((entry) => entry.id !== image.id))}>
+                    <button type="button" className="rounded-sm p-0.5 hover:bg-panel hover:text-text" aria-label={`移除图片 ${image.name}`} onClick={() => removeInlineImage(image.id)}>
                       <X className="size-3" />
                     </button>
                   </span>
@@ -924,6 +969,35 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
           </div>
         </div>
       </div>
+      {previewImage && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`预览图片 ${previewImage.name}`}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setPreviewImage(null);
+          }}
+        >
+          <div className="relative flex max-h-full max-w-full flex-col items-center gap-3">
+            <img
+              src={previewImage.previewUrl}
+              alt={previewImage.name}
+              className="max-h-[calc(100vh-5rem)] max-w-[min(92vw,80rem)] rounded-md object-contain shadow-2xl"
+            />
+            <span className="max-w-[min(80vw,48rem)] truncate text-xs text-white/80">{previewImage.name}</span>
+            <button
+              type="button"
+              className="absolute -right-2 -top-2 grid size-8 place-items-center rounded-full border border-white/30 bg-black/70 text-white shadow-lg hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              aria-label="关闭图片预览"
+              title="关闭图片预览"
+              onClick={() => setPreviewImage(null)}
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      )}
       {showJump && (
         <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-center px-4 animate-slide-in sm:bottom-28">
           <Button

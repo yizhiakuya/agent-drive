@@ -114,9 +114,10 @@ describe("chat stream state helpers", () => {
       source: "skill-catalog",
       kind: "skill-catalog",
       content: "available skills",
+      trust: "instruction",
     })).toEqual({
       type: "context",
-      context: { source: "skill-catalog", kind: "skill-catalog", content: "available skills" },
+      context: { source: "skill-catalog", kind: "skill-catalog", content: "available skills", trust: "instruction" },
     });
     expect(parseChatStreamEvent("context", { source: "skill-catalog" })).toBeNull();
   });

@@ -12,7 +12,7 @@ import java.util.UUID;
 public interface IndexStore {
     /** 文本/文档正文向量的类型标识。 */
     String TEXT_DOCUMENT_TYPE = "text";
-    /** 视觉模型结构化描述向量的类型标识。 */
+    /** 视觉模型综合文字描述向量的类型标识。 */
     String VISION_DOCUMENT_TYPE = "vision";
     /**
      * 当前 owner 文件索引的全盘统计。
@@ -111,6 +111,27 @@ public interface IndexStore {
                                               String prefix, int limit);
 
     /**
+     * 为 Agent 返回面向回答的多 chunk 证据窗口。
+     *
+     * <p>与普通语义文件列表不同，这个查询允许同一文件返回多个高相关 chunk，
+     * 同时带回有限的相邻 chunk。返回行按 match 标识重复展开，由上层按
+     * {@code file_id/document_type/match_chunk_index} 聚合。</p>
+     *
+     * @param userId 文件归属 owner 的 UUID
+     * @param fingerprint 当前 embedding 指纹
+     * @param vector 查询词向量的 PostgreSQL 数组文字
+     * @param prefix 可选的目录路径前缀
+     * @param limit 最多返回的匹配 chunk 数（实现可以额外返回一行用于 has_more）
+     * @param neighbors 每个匹配 chunk 两侧最多带回的相邻 chunk 数
+     * @return 匹配 chunk 及相邻上下文的展开行；旧适配器默认返回空列表
+     */
+    default List<Map<String, Object>> semanticEvidence(UUID userId, String fingerprint, String vector,
+                                                         String prefix, int limit, int neighbors,
+                                                         Double minScore) {
+        return List.of();
+    }
+
+    /**
      * 用一次抽取结果替换文件的全文记录和全部文本块。
      * 实现应以 {@code sourceRevision} 和版本字段记录这次抽取的来源，并使该文件旧向量失效；调用方不应在这里调用外部 embedding 服务。
      *
@@ -136,7 +157,7 @@ public interface IndexStore {
      * @param fileId 文件 UUID。
      * @param sourceRevision 文件 revision。
      * @param documentType {@code text} 或 {@code vision}。
-     * @param content 抽取正文或结构化视觉描述。
+     * @param content 抽取正文或视觉综合描述。
      * @param extractorVersion 产生正文的抽取器/描述器版本。
      * @param chunks 按固定窗口切好的内容块。
      * @param chunkVersion 切分算法版本。

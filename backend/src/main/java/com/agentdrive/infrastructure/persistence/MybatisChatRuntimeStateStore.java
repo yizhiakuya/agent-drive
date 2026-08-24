@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.time.Instant;
 
@@ -79,7 +80,7 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
         if (parseUuid(sessionId) == null || tool == null) {
             return null;
         }
-        Map<String, Object> row = mapper.selectToolReplay(sessionId, tool, json(arguments));
+        Map<String, Object> row = mapper.selectToolReplay(sessionId, tool, json(redactor.map(arguments)));
         if (row == null) {
             return null;
         }
@@ -103,7 +104,34 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
         if (parseUuid(sessionId) == null || tool == null) {
             return;
         }
-        mapper.insertToolReplay(sessionId, tool, json(arguments), output, json(parsed));
+        mapper.insertToolReplay(sessionId, tool, json(redactor.map(arguments)),
+                redactor.text(output), json(redactor.value(parsed)));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void invalidate(String sessionId) {
+        if (parseUuid(sessionId) == null) return;
+        mapper.deleteToolReplays(sessionId);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public Optional<List<Map<String, Object>>> loadHistory(UUID userId, String sessionId, int limit) {
+        if (userId == null || parseUuid(sessionId) == null) return Optional.empty();
+        int boundedLimit = Math.max(1, Math.min(limit, 200));
+        List<Map<String, Object>> rows = mapper.selectModelHistory(
+                userId.toString(), sessionId, boundedLimit);
+        return Optional.of(rows == null ? List.of() : rows.stream()
+                .filter(Objects::nonNull)
+                .map(row -> {
+                    Map<String, Object> copy = new LinkedHashMap<>();
+                    copy.put("role", row.get("role"));
+                    copy.put("content", redactor.text(row.get("content") == null
+                            ? "" : String.valueOf(row.get("content"))));
+                    return copy;
+                })
+                .toList());
     }
 
     /**

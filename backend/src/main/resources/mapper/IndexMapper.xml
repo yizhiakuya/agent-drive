@@ -172,6 +172,107 @@
         LIMIT #{limit}
     </select>
 
+    <select id="semanticEvidence" resultType="map">
+        <bind name="escapedPrefix"
+              value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />
+        WITH current_documents AS (
+            SELECT DISTINCT ON (d.file_id, d.document_type)
+                   d.id,
+                   d.file_id,
+                   d.source_revision,
+                   d.document_type
+            FROM documents d
+            JOIN files f ON f.id = d.file_id
+            WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND f.is_dir = false
+              AND d.source_revision = f.revision
+            ORDER BY d.file_id, d.document_type, d.updated_at DESC, d.id DESC
+        ), scored AS (
+            SELECT f.id::text AS file_id,
+                   f.path,
+                   f.size_bytes AS size,
+                   f.revision AS source_revision,
+                   EXTRACT(EPOCH FROM f.updated_at) AS mtime,
+                   d.document_type AS vector_type,
+                   c.document_id::text AS document_id,
+                   c.chunk_index AS match_chunk_index,
+                   c.chunk_version,
+                   LEFT(c.content, 6000) AS match_content,
+                   (1 - (c.embedding &lt;=&gt; CAST(#{vector, jdbcType=LONGVARCHAR} AS vector)))::double precision AS search_score,
+                   (c.embedding &lt;=&gt; CAST(#{vector, jdbcType=LONGVARCHAR} AS vector)) AS distance
+            FROM document_chunks c
+            JOIN current_documents cd ON cd.id = c.document_id
+            JOIN documents d ON d.id = cd.id
+            JOIN files f ON f.id = d.file_id
+            WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              AND f.is_dir = false
+              AND d.source_revision = f.revision
+              AND c.source_revision = d.source_revision
+              AND c.embedding IS NOT NULL
+              AND c.embedding_fingerprint = #{fingerprint, jdbcType=VARCHAR}
+              <if test="prefix != null and prefix != ''">
+              AND (f.path = #{prefix, jdbcType=VARCHAR}
+                   OR f.path LIKE CONCAT(#{escapedPrefix, jdbcType=VARCHAR}, '/%') ESCAPE CHR(92))
+              </if>
+        ), filtered AS (
+            SELECT *
+            FROM scored
+            <if test="minScore != null">
+            WHERE search_score &gt;= #{minScore, jdbcType=DOUBLE}
+            </if>
+        ), diversified AS (
+            SELECT filtered.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY file_id, vector_type
+                       ORDER BY distance, match_chunk_index ASC
+                   ) AS file_rank
+            FROM filtered
+        ), ranked AS (
+            SELECT diversified.*,
+                   ROW_NUMBER() OVER (
+                       ORDER BY distance, lower(path) ASC, match_chunk_index ASC
+                   ) AS result_rank
+            FROM diversified
+            WHERE file_rank &lt;= 3
+        ), matches AS (
+            SELECT *
+            FROM ranked
+            WHERE result_rank &lt;= #{limit}
+        ), context_rows AS (
+            SELECT m.file_id,
+                   m.vector_type,
+                   m.match_chunk_index,
+                   neighbor.chunk_index AS context_chunk_index,
+                   LEFT(neighbor.content, 3000) AS context_content
+            FROM matches m
+            JOIN document_chunks neighbor
+              ON neighbor.document_id = CAST(m.document_id AS uuid)
+             AND neighbor.source_revision = m.source_revision
+             AND neighbor.chunk_index BETWEEN m.match_chunk_index - #{neighbors}
+                                           AND m.match_chunk_index + #{neighbors}
+        )
+        SELECT m.file_id,
+               m.path,
+               m.size,
+               m.source_revision,
+               m.mtime,
+               m.vector_type,
+               m.document_id,
+               m.match_chunk_index,
+               m.chunk_version,
+               m.match_content,
+               m.search_score,
+               m.result_rank,
+               c.context_chunk_index,
+               c.context_content
+        FROM matches m
+        LEFT JOIN context_rows c
+          ON c.file_id = m.file_id
+         AND c.vector_type = m.vector_type
+         AND c.match_chunk_index = m.match_chunk_index
+        ORDER BY m.result_rank, c.context_chunk_index ASC
+    </select>
+
     <select id="upsertDocument" resultType="map">
         INSERT INTO documents(file_id, source_revision, document_type, extractor_version, content)
         SELECT f.id, #{sourceRevision}, #{documentType, jdbcType=VARCHAR}, #{extractorVersion, jdbcType=VARCHAR}, #{content, jdbcType=LONGVARCHAR}

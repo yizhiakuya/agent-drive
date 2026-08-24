@@ -48,6 +48,16 @@ class MybatisIndexStoreIntegrationTest {
                             .containsEntry("path", "notes.txt")
                             .containsKey("search_snippet"));
             assertThat(index.chunks(owner, "embedding-test", List.of("notes.txt"), 10)).hasSize(1);
+            UUID secondChunkId = UUID.fromString(String.valueOf(
+                    chunks.stream()
+                            .filter(row -> !String.valueOf(row.get("id")).equals(chunkId.toString()))
+                            .findFirst().orElseThrow().get("id")));
+            assertThat(index.updateEmbedding(owner, secondChunkId, "[0.1,0.2,0.3]", "embedding-test")).isEqualTo(1);
+            assertThat(index.semanticEvidence(owner, "embedding-test", "[0.1,0.2,0.3]", "", 4, 1, null))
+                    .isNotEmpty()
+                    .allSatisfy(row -> assertThat(row)
+                            .containsEntry("source_revision", 1L)
+                            .containsKey("context_chunk_index"));
             assertThat(index.chunks(owner, "embedding-test", List.of("notes.txt"), true, null, 10))
                     .hasSize(2);
             assertThat(index.clearEmbeddings(owner)).isEqualTo(2);

@@ -14,6 +14,15 @@ export class ChatStreamError extends Error {
   }
 }
 
+/** Match the backend ChatRequest JSON contract without leaking the UI camelCase shape. */
+function serializeInlineImages(inlineImages: Pick<InlineImage, "name" | "mediaType" | "data">[]) {
+  return inlineImages.map(({ name, mediaType, data }) => ({
+    name,
+    media_type: mediaType,
+    data,
+  }));
+}
+
 export const chat = (
   message: string,
   history: { role: string; content: string }[],
@@ -37,7 +46,7 @@ export const chat = (
     model: model || undefined,
     file_context: fileContext,
     permission_mode: permissionMode,
-    inline_images: inlineImages,
+    inline_images: serializeInlineImages(inlineImages),
   }),
 });
 
@@ -89,7 +98,7 @@ export async function chatStream(
       model: model || undefined,
       file_context: fileContext,
       permission_mode: permissionMode,
-      inline_images: inlineImages,
+      inline_images: serializeInlineImages(inlineImages),
     }),
     signal,
   });

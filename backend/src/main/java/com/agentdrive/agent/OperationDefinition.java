@@ -20,7 +20,8 @@ public record OperationDefinition(
         String method,
         String path,
         String summary,
-        String risk
+        String risk,
+        ReplayPolicy replayPolicy
 ) {
     private static final Pattern PATH_PARAMETER = Pattern.compile("\\{([^{}]+)}");
 
@@ -28,9 +29,10 @@ public record OperationDefinition(
      * 规范化字段并验证 operation 是否处于 Agent API allowlist。
      * @param operation 唯一 operation 名
      * @param method HTTP 方法或 {@code INTERNAL}
-     * @param path HTTP 路径；内部 operation 为空
-     * @param summary 面向 discover 结果的用途说明
-     * @param risk 显式风险级别；为空时按方法和路径推导
+ * @param path HTTP 路径；内部 operation 为空
+ * @param summary 面向 discover 结果的用途说明
+ * @param risk 显式风险级别；为空时按方法和路径推导
+ * @param replayPolicy 显式重放策略；为空时按 operation 类型保守推导
      * @throws NullPointerException operation 为空时抛出
      * @throws IllegalArgumentException 协议、路径或内部 operation 规则不满足时抛出
      */
@@ -57,6 +59,22 @@ public record OperationDefinition(
             }
         }
         risk = risk == null || risk.isBlank() ? OperationCatalog.riskFor(method, path) : risk;
+        replayPolicy = replayPolicy == null
+                ? ReplayPolicy.defaultFor(method, path)
+                : replayPolicy;
+    }
+
+    /**
+     * 兼容旧调用方的五字段构造器。重放策略由方法和路径保守推导。
+     * @param operation 稳定 operation 名称
+     * @param method HTTP 方法或 INTERNAL
+     * @param path HTTP 路径
+     * @param summary operation 说明
+     * @param risk 风险级别；为空时推导
+     */
+    public OperationDefinition(String operation, String method, String path,
+                               String summary, String risk) {
+        this(operation, method, path, summary, risk, null);
     }
 
     /**
@@ -67,7 +85,23 @@ public record OperationDefinition(
      * @return operation 名为 {@code METHOD + " " + path} 的定义
      */
     public static OperationDefinition http(String method, String path, String summary) {
-        return new OperationDefinition(method.toUpperCase(Locale.ROOT) + " " + path, method, path, summary, null);
+        return new OperationDefinition(method.toUpperCase(Locale.ROOT) + " " + path,
+                method, path, summary, null, null);
+    }
+
+    /**
+     * 创建带显式风险和重放策略的 HTTP operation。
+     * @param method HTTP 方法
+     * @param path Agent allowlist 下的路径
+     * @param summary operation 说明
+     * @param risk 风险级别
+     * @param replayPolicy 是否允许在同一 session 重放
+     * @return operation 定义
+     */
+    public static OperationDefinition http(String method, String path, String summary,
+                                           String risk, ReplayPolicy replayPolicy) {
+        return new OperationDefinition(method.toUpperCase(Locale.ROOT) + " " + path,
+                method, path, summary, risk, replayPolicy);
     }
 
     /**
@@ -78,7 +112,22 @@ public record OperationDefinition(
      * @return 使用 {@code INTERNAL name} 标识的定义
      */
     public static OperationDefinition internal(String name, String summary, String risk) {
-        return new OperationDefinition("INTERNAL " + name, "INTERNAL", "", summary, risk);
+        return new OperationDefinition("INTERNAL " + name, "INTERNAL", "", summary, risk,
+                ReplayPolicy.NONE);
+    }
+
+    /**
+     * 创建带显式重放策略的内部 operation。
+     * @param name 内部 operation 名
+     * @param summary operation 说明
+     * @param risk 风险级别
+     * @param replayPolicy 重放策略
+     * @return operation 定义
+     */
+    public static OperationDefinition internal(String name, String summary, String risk,
+                                               ReplayPolicy replayPolicy) {
+        return new OperationDefinition("INTERNAL " + name, "INTERNAL", "", summary, risk,
+                replayPolicy);
     }
 
     /**

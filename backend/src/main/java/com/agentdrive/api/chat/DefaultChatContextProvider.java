@@ -17,10 +17,11 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
-/** 装配系统提示、owner Agent 文档和当前启用 Skill 目录。 */
+/** 装配系统提示、owner Agent 文档和当前启用 Skill 目录，并控制已加载正文预算。 */
 public final class DefaultChatContextProvider implements ChatContextProvider {
     private static final int DOCUMENT_LIMIT = 16 * 1024;
     private static final int SKILL_PAGE_SIZE = 50;
+    private static final int MAX_LOADED_SKILLS = 16;
     private static final List<AgentDocument> DOCUMENTS = List.of(
             new AgentDocument("Agent/AGENT.md", "AGENT.md", "agent-instructions"),
             new AgentDocument("Agent/USER.md", "USER.md", "user-profile"),
@@ -108,7 +109,8 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
     private void appendBaseContexts(UUID userId, String sessionId,
                                     List<ChatContext> result, String userMessage) {
         result.add(new ChatContext("agent-drive-system-prompt", "system",
-                systemPrompt.isBlank() ? "(系统提示为空)" : systemPrompt, false));
+                systemPrompt.isBlank() ? "(系统提示为空)" : systemPrompt, false,
+                ChatContext.Trust.SYSTEM));
         for (AgentDocument document : DOCUMENTS) {
             if (!includePersonalDocument(document, userMessage)) continue;
             result.add(readDocumentOrPlaceholder(userId, document));
@@ -117,7 +119,7 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
         List<String> loadedSkills = loadedSkillNames(sessionId);
         List<String> activeLoadedSkills = appendLoadedSkills(userId, loadedSkills, result);
         result.add(new ChatContext("skill-catalog", "skill-catalog",
-                renderCatalog(catalog, activeLoadedSkills), true));
+                renderCatalog(catalog, activeLoadedSkills), true, ChatContext.Trust.INSTRUCTION));
     }
 
     /**
@@ -143,17 +145,18 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
             String text = redactor.text(rawContent == null ? "" : String.valueOf(rawContent)).trim();
             if (text.isEmpty()) {
                 return new ChatContext(document.source(), document.kind(),
-                        placeholder(document.path()), true);
+                        placeholder(document.path()), true, ChatContext.Trust.INSTRUCTION);
             }
             boolean truncated = Boolean.TRUE.equals(value.get("truncated"));
             String framed = "<agent_context source=\"" + document.path() + "\">\n"
                     + text + (truncated ? "\n\n[内容已截断]" : "")
                     + "\n</agent_context>";
-            return new ChatContext(document.source(), document.kind(), framed, true);
+            return new ChatContext(document.source(), document.kind(), framed, true,
+                    ChatContext.Trust.INSTRUCTION);
         } catch (FileStorageException error) {
             if (error.status() == 404) {
                 return new ChatContext(document.source(), document.kind(),
-                        placeholder(document.path()), true);
+                        placeholder(document.path()), true, ChatContext.Trust.INSTRUCTION);
             }
             throw error;
         }
@@ -169,14 +172,15 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
      */
     private List<String> appendLoadedSkills(UUID userId, List<String> loadedNames, List<ChatContext> result) {
         List<String> activeNames = new ArrayList<>();
-        for (String name : loadedNames) {
+        for (String name : loadedNames.stream().limit(MAX_LOADED_SKILLS).toList()) {
             skills.read(userId, name, false).ifPresent(skill -> {
                 String instructions = redactor.text(skill.instructions()).trim();
                 if (instructions.isEmpty()) return;
                 String content = "<skill_context name=\"" + escapeXml(skill.name())
                         + "\" version=\"" + skill.version() + "\">\n"
                         + instructions + "\n</skill_context>";
-                result.add(new ChatContext("skill:" + skill.name(), "skill-instructions", content, true));
+                result.add(new ChatContext("skill:" + skill.name(), "skill-instructions", content, true,
+                        ChatContext.Trust.INSTRUCTION));
                 activeNames.add(skill.name());
             });
         }
@@ -240,7 +244,8 @@ public final class DefaultChatContextProvider implements ChatContextProvider {
             content.append("\n请在回答中引用该文件时使用 [[file:").append(path).append("]]。\n");
         }
         content.append("</file_context>");
-        return new ChatContext(path, directory ? "file-folder" : "file-attachment", content.toString(), true);
+        return new ChatContext(path, directory ? "file-folder" : "file-attachment", content.toString(), true,
+                ChatContext.Trust.UNTRUSTED_DATA);
     }
 
     private boolean validFilePath(String value) {

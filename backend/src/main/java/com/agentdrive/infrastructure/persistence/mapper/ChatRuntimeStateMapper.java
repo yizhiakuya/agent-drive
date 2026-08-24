@@ -24,6 +24,14 @@ public interface ChatRuntimeStateMapper {
                          @Param("output") String output,
                          @Param("parsed") String parsed);
 
+    /** 删除会话中所有可重放结果，使 mutation 后的读取不会命中旧快照。 */
+    int deleteToolReplays(@Param("sessionId") String sessionId);
+
+    /** 读取 owner 会话的模型可见 user/assistant 历史，按时间升序返回。 */
+    List<Map<String, Object>> selectModelHistory(@Param("userId") String userId,
+                                                 @Param("sessionId") String sessionId,
+                                                 @Param("limit") int limit);
+
     /** 插入一条会话消息或工具 trace。 @param sessionId 会话 UUID。 @param role 消息角色。 @param content 正文/工具输出。 @param reasoning 独立 reasoning。 @param tool 工具名。 @param arguments 参数 JSON。 @param parsed 解析结果 JSON。 @return 插入行数。 */
     int insertMessage(@Param("sessionId") String sessionId,
                       @Param("role") String role,

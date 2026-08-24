@@ -21,7 +21,7 @@ class ChatRunRegistryTest {
         ChatRunRegistry registry = new ChatRunRegistry(2, Duration.ofSeconds(30), stateStore);
         stateStore.state.put("status", "interrupted");
         stateStore.state.put("phase", "process_restart");
-        stateStore.state.put("resumable", true);
+        stateStore.state.put("resumable", false);
 
         registry.markStaleRunsInterrupted();
 
@@ -29,7 +29,7 @@ class ChatRunRegistryTest {
         assertThat(registry.state(UUID.randomUUID().toString()))
                 .containsEntry("status", "interrupted")
                 .containsEntry("phase", "process_restart")
-                .containsEntry("resumable", true)
+                .containsEntry("resumable", false)
                 .containsEntry("active", false);
         registry.close();
     }

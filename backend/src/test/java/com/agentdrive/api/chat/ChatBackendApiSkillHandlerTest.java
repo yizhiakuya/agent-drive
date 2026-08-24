@@ -24,7 +24,7 @@ class ChatBackendApiSkillHandlerTest {
         SkillPage page = new SkillPage(List.of(), 0, 0, 0, 20, false, 0);
         SkillDefinition saved = new SkillDefinition(
                 "weekly-report", "周报", "生成周报", true, "custom", 1, 1.0, 1.0);
-        when(registry.discover(owner, "report", true, 0, 20)).thenReturn(page);
+        when(registry.discover(owner, "report", false, 0, 20)).thenReturn(page);
         when(registry.save(owner, "weekly-report", "周报", "生成周报", true)).thenReturn(saved);
 
         Map<String, Object> listed = handler.dispatch("GET /api/v1/skills", new BackendApiRequest(
@@ -38,5 +38,6 @@ class ChatBackendApiSkillHandlerTest {
         assertThat(listed).containsEntry("page", page);
         assertThat(created).containsEntry("skill", saved);
         verify(registry).save(owner, "weekly-report", "周报", "生成周报", true);
+        org.mockito.Mockito.verify(registry).discover(owner, "report", false, 0, 20);
     }
 }

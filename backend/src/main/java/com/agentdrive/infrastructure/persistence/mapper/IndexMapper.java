@@ -73,6 +73,17 @@ public interface IndexMapper {
                                              @Param("limit") int limit);
 
     /**
+     * 查询 Agent 证据窗口；同一匹配 chunk 会按相邻 chunk 展开多行。
+     */
+    List<Map<String, Object>> semanticEvidence(@Param("userId") String userId,
+                                               @Param("fingerprint") String fingerprint,
+                                               @Param("vector") String vector,
+                                               @Param("prefix") String prefix,
+                                               @Param("limit") int limit,
+                                               @Param("neighbors") int neighbors,
+                                               @Param("minScore") Double minScore);
+
+    /**
      * 保存 owner 指定文件 revision 的抽取文档内容。
      *
      * <p>SQL 只在 {@code fileId} 对应文件属于 {@code userId} 时插入文档；以文件、source revision

@@ -51,12 +51,36 @@ class ChatBackendApiOperationsTest {
     }
 
     @Test
+    void exposesEvidenceSearchAsAReadOnlyFileOperation() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+
+        assertThat(catalog.find("GET /api/v1/files/search-content")).get()
+                .satisfies(operation -> {
+                    assertThat(operation.risk()).isEqualTo("green");
+                    assertThat(operation.summary()).contains("证据", "相邻");
+                });
+    }
+
+    @Test
     void doesNotExposeApiKeyRevealEndpointsToTheAgentCatalog() {
         OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
 
         assertThat(catalog.find("POST /api/v1/config/api-key/reveal")).isEmpty();
         assertThat(catalog.find("POST /api/v1/config/embeddings/api-key/reveal")).isEmpty();
         assertThat(catalog.find("POST /api/v1/config/vision/api-key/reveal")).isEmpty();
+    }
+
+    @Test
+    void keepsCredentialBearingProviderConfigurationOutOfAgentCatalog() {
+        OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
+
+        assertThat(catalog.find("POST /api/v1/config")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/config/test")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/config/models")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/config/vision/models")).isEmpty();
+        assertThat(catalog.find("PUT /api/v1/config/vision")).isEmpty();
+        assertThat(catalog.find("PUT /api/v1/config/embeddings")).isEmpty();
+        assertThat(catalog.find("POST /api/v1/vision/describe")).isPresent();
     }
 
     @Test

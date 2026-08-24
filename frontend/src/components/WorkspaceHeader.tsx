@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import OperationActivityCenter from "@/components/OperationActivityCenter";
 
 type AppTab = "chat" | "files" | "settings";
 
@@ -50,7 +51,7 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange, onSetting
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel/95 px-3 shadow-sm backdrop-blur sm:px-5">
+      <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel/95 px-3 shadow-sm backdrop-blur sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5">
           <Button
             type="button"
@@ -79,6 +80,7 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange, onSetting
             <Activity className="size-3.5 shrink-0 text-success" aria-hidden="true" />
             <span className="truncate">{modelName || "Agent 已就绪"}</span>
           </div>
+          <OperationActivityCenter />
         </div>
       </header>
 

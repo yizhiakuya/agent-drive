@@ -14,6 +14,11 @@ import {
 import type { PendingFrontendAction } from "@/lib/frontend-actions";
 import { useAppStore } from "@/lib/store";
 import { indexFiles, indexVision, vectorize, type IndexResult } from "@/lib/api/index";
+import {
+  finishOperationActivity,
+  startOperationActivity,
+  updateOperationActivity,
+} from "@/lib/operation-activity";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -75,8 +80,10 @@ async function settleWithConcurrency<T>(
   values: T[],
   operation: (value: T) => Promise<unknown>,
   concurrency = 4,
+  onSettled?: (completed: number) => void,
 ): Promise<PromiseSettledResult<unknown>[]> {
   const results: PromiseSettledResult<unknown>[] = new Array(values.length);
+  let completed = 0;
   let cursor = 0;
   const worker = async () => {
     while (true) {
@@ -87,6 +94,8 @@ async function settleWithConcurrency<T>(
       } catch (reason) {
         results[index] = { status: "rejected", reason };
       }
+      completed += 1;
+      onSettled?.(completed);
     }
   };
   await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, worker));
@@ -418,13 +427,40 @@ export default function FilePage() {
     if (kind === "vision" && selected.info.preview_kind !== "image") return;
     const filePath = selected.path;
     const request = ++indexingRequestRef.current;
+    const activityId = startOperationActivity({
+      source: "ui",
+      kind: kind === "vision" ? "index-vision" : "index-vector",
+      title: kind === "vision" ? "图片视觉索引" : "文件向量化",
+      operation: kind === "vision" ? "PUT /api/v1/index/vision" : "PUT /api/v1/index/vectors",
+      target: filePath,
+      phase: kind === "vision" ? "vision" : "preparing",
+      message: kind === "vision" ? "正在生成图片内容描述" : "正在准备文本索引",
+    });
     setIndexing(kind);
+    let activitySettled = false;
     try {
+      if (kind === "vision") updateOperationActivity(activityId, { phase: "vision", message: "正在生成图片内容描述" });
       const result = kind === "vision"
         ? await indexVision([filePath])
-        : await indexTextAndVectors(filePath);
+        : await indexTextAndVectors(filePath, activityId);
       const failure = indexFailure(result);
-      if (failure) throw new Error(failure);
+      const counts = indexActivityCounts(result);
+      if (failure) {
+        finishOperationActivity(activityId, result.status === "partial" ? "partial" : "failed", {
+          phase: "finished",
+          message: result.status === "partial" ? "部分索引完成" : "索引失败",
+        ...counts,
+          error: failure,
+        });
+        activitySettled = true;
+        throw new Error(failure);
+      }
+      finishOperationActivity(activityId, "succeeded", {
+        phase: "finished",
+        message: kind === "vision" ? "图片视觉索引已完成" : "文件文本与向量索引已完成",
+        ...counts,
+      });
+      activitySettled = true;
       emitFilesChanged();
       emitToast({
         kind: "ok",
@@ -439,6 +475,12 @@ export default function FilePage() {
       } : current);
     } catch (error) {
       if (request === indexingRequestRef.current) {
+          const current = error instanceof Error ? error.message : String(error);
+          if (!activitySettled) finishOperationActivity(activityId, "failed", {
+              phase: "finished",
+              message: "索引执行失败",
+              error: current,
+            });
           emitToast({ kind: "error", text: `索引执行失败：${String(error)}` });
       }
     } finally {
@@ -447,11 +489,29 @@ export default function FilePage() {
   }
 
   /** 文本文件需要先抽取正文，再按当前 embedding 配置写入向量。 */
-  async function indexTextAndVectors(filePath: string): Promise<IndexResult> {
+  async function indexTextAndVectors(filePath: string, activityId?: string): Promise<IndexResult> {
+    if (activityId) updateOperationActivity(activityId, { phase: "extracting", message: "正在抽取文件正文" });
     const extracted = await indexFiles([filePath]);
     const extractionFailure = indexFailure(extracted);
     if (extractionFailure) throw new Error(extractionFailure);
+    if (activityId) updateOperationActivity(activityId, { phase: "embedding", message: "正在生成文本向量" });
     return vectorize([filePath]);
+  }
+
+  function indexActivityCounts(result: IndexResult): Pick<import("@/lib/operation-activity").OperationActivity, "completed" | "total" | "succeeded" | "failed"> {
+    const items = Array.isArray(result.items) ? result.items : [];
+    const failed = typeof result.failed === "number"
+      ? result.failed
+      : items.filter((item) => item.indexed === false || item.status === "error").length;
+    const embedded = typeof result.embedded === "number" ? result.embedded : undefined;
+    const total = items.length > 0 ? items.length : embedded;
+    const completed = embedded ?? (items.length > 0 ? items.length : undefined);
+    return {
+      completed,
+      total,
+      succeeded: total === undefined ? undefined : Math.max(0, total - failed),
+      failed,
+    };
   }
 
   /** 从统一索引 envelope 提取逐项错误，兼容旧响应中的 reason/error 字段。 */
@@ -535,13 +595,35 @@ export default function FilePage() {
           emitToast({ kind: "error", text: "请填写目标目录" });
           return;
         }
+        const activityId = startOperationActivity({
+          source: "ui",
+          kind: type,
+          title: type === "batch-move" ? "批量移动文件" : type === "batch-copy" ? "批量复制文件" : "批量删除文件",
+          target: `${paths.length} 项`,
+          phase: "running",
+          message: `正在处理 0/${paths.length} 项`,
+          completed: 0,
+          total: paths.length,
+        });
         const results = await settleWithConcurrency(paths, (source) => {
           if (type === "batch-delete") return deleteToTrash(source);
           if (type === "batch-move") return moveFile(source, actionValue.trim());
           const name = source.split("/").pop() || source;
           return copyFile(source, `${actionValue.trim().replace(/\/$/, "")}/${name}`);
-        });
+        }, 4, (completed) => updateOperationActivity(activityId, {
+          completed,
+          message: `正在处理 ${completed}/${paths.length} 项`,
+        }));
         const failed = results.filter((result) => result.status === "rejected").length;
+        finishOperationActivity(activityId, failed === 0 ? "succeeded" : failed === paths.length ? "failed" : "partial", {
+          phase: "finished",
+          message: failed === 0 ? `已处理 ${paths.length} 项` : `已处理 ${paths.length - failed}/${paths.length} 项`,
+          completed: paths.length,
+          total: paths.length,
+          succeeded: paths.length - failed,
+          failed,
+          ...(failed > 0 ? { error: `${failed} 项操作失败` } : {}),
+        });
         setSelectedPaths(new Set());
         emitToast({ kind: failed ? "error" : "ok", text: failed ? `${paths.length - failed} 项完成，${failed} 项失败` : `已处理 ${paths.length} 项` });
       } else if (type === "rename") {

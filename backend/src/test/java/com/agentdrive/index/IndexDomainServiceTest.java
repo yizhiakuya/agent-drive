@@ -1,7 +1,6 @@
 package com.agentdrive.index;
 
 import com.agentdrive.vision.VisionDescriptionService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -43,7 +42,7 @@ class IndexDomainServiceTest {
         when(embeddings.embed(owner, List.of("docs/a.md"), 64, false))
                 .thenReturn(Map.of("vectorized", true, "embedded", 1));
         IndexDomainService service = new IndexDomainService(index, mock(IndexingService.class), embeddings,
-                config, mock(VisionDescriptionService.class), new ObjectMapper());
+                config, mock(VisionDescriptionService.class));
 
         assertThat(service.overview(owner, "docs", 10))
                 .containsEntry("prefix", "docs")
@@ -60,10 +59,11 @@ class IndexDomainServiceTest {
         VisionDescriptionService vision = mock(VisionDescriptionService.class);
         EmbeddingService embeddings = mock(EmbeddingService.class);
         UUID owner = UUID.randomUUID();
-        when(vision.describeFile(eq(owner), eq("photos/a.png"))).thenReturn(Map.of(
-                "description", Map.of("summary", "a"), "model", "vision-test"));
-        when(vision.describeFile(eq(owner), eq("photos/b.png"))).thenReturn(Map.of(
-                "description", Map.of("summary", "b"), "model", "vision-test"));
+        when(vision.describeFiles(eq(owner), eq(List.of("photos/a.png", "photos/b.png")))).thenReturn(Map.of(
+                "ok", true,
+                "items", List.of(
+                        Map.of("path", "photos/a.png", "description", "一张收据截图", "model", "vision-test"),
+                        Map.of("path", "photos/b.png", "description", "一个产品包装盒", "model", "vision-test"))));
         when(indexing.indexDescription(eq(owner), eq("photos/a.png"), org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(Map.of("indexed", true));
         when(indexing.indexDescription(eq(owner), eq("photos/b.png"), org.mockito.ArgumentMatchers.anyString()))
@@ -73,7 +73,7 @@ class IndexDomainServiceTest {
         when(embeddings.embed(eq(owner), eq(List.of("photos/b.png")), eq(64), eq(false)))
                 .thenReturn(Map.of("vectorized", true));
         IndexDomainService service = new IndexDomainService(index, indexing,
-                embeddings, emptyConfig(), vision, new ObjectMapper());
+                embeddings, emptyConfig(), vision);
 
         Map<String, Object> result = service.indexVision(owner,
                 List.of("photos/a.png", "photos/b.png"), false);
@@ -94,7 +94,7 @@ class IndexDomainServiceTest {
         when(indexing.indexFile(owner, "broken.txt")).thenThrow(new IllegalStateException("extract failed"));
 
         Map<String, Object> result = new IndexDomainService(index, indexing, embeddings,
-                emptyConfig(), mock(VisionDescriptionService.class), new ObjectMapper())
+                emptyConfig(), mock(VisionDescriptionService.class))
                 .indexFiles(owner, List.of("ok.txt", "broken.txt"), false);
 
         assertThat(result).containsEntry("ok", false)
@@ -113,7 +113,7 @@ class IndexDomainServiceTest {
                 .thenReturn(Map.of("vectorized", true, "embedded", 3));
 
         Map<String, Object> result = new IndexDomainService(index, mock(IndexingService.class), embeddings,
-                config, mock(VisionDescriptionService.class), new ObjectMapper())
+                config, mock(VisionDescriptionService.class))
                 .vectorize(owner, List.of(), false, 64);
 
         assertThat(result).containsEntry("vectorized", true).containsEntry("embedded", 3);
@@ -123,7 +123,7 @@ class IndexDomainServiceTest {
     private static IndexDomainService service(IndexStore index, IndexingService indexing, EmbeddingService embeddings) {
         EmbeddingRuntimeConfig config = emptyConfig();
         return new IndexDomainService(index, indexing, embeddings, config,
-                mock(VisionDescriptionService.class), new ObjectMapper());
+                mock(VisionDescriptionService.class));
     }
 
     private static EmbeddingRuntimeConfig emptyConfig() {

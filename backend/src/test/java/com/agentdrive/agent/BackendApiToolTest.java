@@ -64,7 +64,23 @@ class BackendApiToolTest {
         }
         assertThat(models).isNotNull();
         assertThat(models.path("parameter_schema").path("body").path("required").toString())
-                .contains("type", "base_url");
+                .doesNotContain("api_key", "base_url");
+    }
+
+    @Test
+    void exposesEvidenceSearchQuerySchemaWithRequiredQuery() throws Exception {
+        OperationCatalog evidenceCatalog = new OperationCatalog(List.of(
+                OperationDefinition.http("GET", "/api/v1/files/search-content", "Search file evidence")
+        ));
+        BackendApiTool tool = new BackendApiTool(evidenceCatalog, (operation, request) -> Map.of(), mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "discover", "search-content", null, null, null, null, null)));
+
+        JsonNode schema = result.path("operations").get(0).path("parameter_schema").path("query_params");
+        assertThat(schema.path("allowed").toString())
+                .contains("q", "neighbors", "min_score");
+        assertThat(schema.path("required").toString()).contains("q");
     }
 
     @Test
@@ -240,6 +256,42 @@ class BackendApiToolTest {
     }
 
     @Test
+    void rejectsCredentialsAndProviderUrlsBeforeDispatch() throws Exception {
+        AtomicReference<Boolean> dispatched = new AtomicReference<>(false);
+        BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> {
+            dispatched.set(true);
+            return Map.of("ok", true);
+        }, mapper);
+
+        JsonNode result = mapper.readTree(tool.execute(new BackendApiRequest(
+                "call", null, "POST /api/v1/config/models", null, null,
+                Map.of("api_key", "sk-secret", "base_url", "https://evil.example/v1"), null)));
+
+        assertThat(result.path("ok").asBoolean()).isFalse();
+        assertThat(result.path("error").asText()).isEqualTo("credential_or_url_forbidden");
+        assertThat(dispatched).hasValue(false);
+    }
+
+    @Test
+    void validatesRegisteredQueryAndBodySchemaInsteadOfOnlyDescribingIt() throws Exception {
+        BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> Map.of("ok", true), mapper);
+
+        JsonNode query = mapper.readTree(tool.execute(new BackendApiRequest(
+                "call", null, "GET /api/v1/files", null, Map.of("unknown", true), null, null)));
+        assertThat(query.path("ok").asBoolean()).isFalse();
+        assertThat(query.path("error").asText()).isEqualTo("invalid_parameters");
+
+        OperationCatalog internalCatalog = new OperationCatalog(List.of(
+                OperationDefinition.internal("write_text", "Write text", "red")));
+        BackendApiTool internal = new BackendApiTool(internalCatalog,
+                (operation, request) -> Map.of("ok", true), mapper);
+        JsonNode missing = mapper.readTree(internal.execute(new BackendApiRequest(
+                "call", null, "INTERNAL write_text", null, null, Map.of("content", "x"), null)));
+        assertThat(missing.path("ok").asBoolean()).isFalse();
+        assertThat(missing.path("error").asText()).isEqualTo("invalid_parameters");
+    }
+
+    @Test
     void promotesDispatcherBusinessFailuresToTheEnvelope() throws Exception {
         BackendApiTool tool = new BackendApiTool(catalog, (operation, request) -> Map.of(
                 "ok", false,
@@ -271,10 +323,12 @@ class BackendApiToolTest {
     @Test
     void computesWriteRiskDynamically() {
         assertThat(OperationCatalog.riskFor("GET", "/api/v1/files")).isEqualTo("green");
-        assertThat(OperationCatalog.riskFor("POST", "/api/v1/config/models")).isEqualTo("green");
-        assertThat(OperationCatalog.riskFor("POST", "/api/v1/config/vision/models")).isEqualTo("green");
+        assertThat(OperationCatalog.riskFor("POST", "/api/v1/config/models")).isEqualTo("yellow");
+        assertThat(OperationCatalog.riskFor("POST", "/api/v1/config/vision/models")).isEqualTo("yellow");
         assertThat(OperationCatalog.riskFor("POST", "/api/v1/files/test")).isEqualTo("yellow");
         assertThat(OperationCatalog.riskFor("DELETE", "/api/v1/files")).isEqualTo("red");
+        assertThat(OperationDefinition.http("POST", "/api/v1/files/test", "test").replayPolicy())
+                .isEqualTo(ReplayPolicy.NONE);
     }
 
     @Test

@@ -76,6 +76,31 @@ public interface FileStorageService {
     }
 
     /**
+     * 返回面向 Agent 回答的文件证据窗口。
+     *
+     * <p>与普通文件列表不同，该入口返回多个匹配 chunk 以及有限相邻 chunk，
+     * 并携带 source revision、chunk index 和相关度。正文仍必须由调用方当作不可信
+     * 文件数据处理。旧存储适配器默认不提供该能力。</p>
+     *
+     * @param ownerId 文件归属 owner
+     * @param path 搜索根目录；空值表示 owner 根目录
+     * @param query 自然语言搜索问题
+     * @param limit 最多返回的匹配 chunk 数
+     * @param neighbors 每个匹配 chunk 两侧带回的相邻 chunk 数
+     * @param minScore 可选最低相关度
+     * @param type 文件类型过滤
+     * @param modifiedAfter 可选最早修改时间（Unix 秒）
+     * @param modifiedBefore 可选最晚修改时间（Unix 秒）
+     * @return 结构化证据结果
+     */
+    default Map<String, Object> searchContent(UUID ownerId, String path, String query,
+                                               int limit, int neighbors, Double minScore,
+                                               String type, Double modifiedAfter,
+                                               Double modifiedBefore) {
+        throw new UnsupportedOperationException("semantic evidence search is not supported");
+    }
+
+    /**
      * 在服务端递归统计当前 owner 目录下的可见文件、目录和字节数。
      * 统计不返回条目列表，避免 Agent 为了计数逐层发起请求；实现应跳过内部存储路径。
      *

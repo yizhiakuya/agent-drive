@@ -69,9 +69,9 @@ PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注
 
 - Chat SSE 的每个 `data` 都是 JSON object；事件包括 text、reasoning、tool_start、tool_progress、tool_trace、frontend_action、done、error。长工具通过 `tool_progress` 回传业务阶段和耗时，前端不显示空的运行结果占位。
 - `thinking_level` 只允许 `auto/low/medium/high`，不发送 temperature；OpenAI 兼容流式模型必须开启 `returnThinking(true)`，reasoning 不进入下一轮 history。
-- `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。discover 以 offset/limit 稳定分页，返回 total_matches、has_more 和 next_offset，单页最多 20 项；非 red 调用按 session/tool/arguments 持久 replay，ask/auto 模式下 red 操作使用签名确认和一次性 nonce，full 模式按用户授权直接执行。
+- `backend_api` 必须先 discover，再调用精确的 `METHOD /api/v1/path` 或 `INTERNAL name`。discover 以 offset/limit 稳定分页，返回 total_matches、has_more 和 next_offset，单页最多 20 项；只有显式 probe/idempotent operation 按 session/tool/arguments 持久 replay，普通 GET/失败结果不缓存，ask/auto 模式下 red 操作使用签名确认和一次性 nonce，full 模式按用户授权直接执行。
 - `/api/v1/index` 直接执行索引、embedding、vision、失效索引清理和向量清空；错误在当前响应中返回，Agent 不暴露任务创建接口。
-- 文件语义搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，结果按文件去重并返回最佳片段。
+- 文件列表语义搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，结果按文件去重并返回最佳片段；Agent 面向回答时使用 `/api/v1/files/search-content` 取得多个匹配 chunk 和相邻证据，仍绑定当前 owner/revision/fingerprint。
 - 文件内容变更先失效旧全文/向量；图片描述写入前校验 source revision；视觉 provider 失败直接返回逐文件错误。强制向量重算逐批覆盖，不预先删除旧向量。单文件抽取失败返回明确错误，不伪报成功。
 
 历史任务、计划和 outbox 表只作为旧数据兼容记录，不再由当前 API 写入或执行。
@@ -82,7 +82,7 @@ PostgreSQL 的结构化状态包括认证、会话消息及来源化 context 注
 
 - Java API 已替换生产服务，健康检查、鉴权和静态资源通过；旧 Worker unit 已停用。
 - legacy 数据导入完成，文件 MD5 核验通过，owner-scoped PostgreSQL backfill 完成。
-- `index.rebuild` 已完成，普通文档 Tika、图片视觉描述和 Jina/pgvector 直接由 API 业务执行；图片不使用 OCR。
+- `index.rebuild` 已完成，普通文档 Tika、图片视觉内容描述和 Jina/pgvector 直接由 API 业务执行；图片视觉请求最多四张一批、每张独立返回，显式索引不缓存旧描述，不使用独立 OCR。
 - 实际回滚演练通过；现行 `agent-drive-java-backup.timer` 将 Java PostgreSQL dump、owner 文件根和 manifest 归档到 `/opt/agent-drive-java/backups/`，旧资料仍保留在同一归档目录。
 - 旧 Python source/unit 已删除；`legacy-python-data/` 只保留本地一次性 fixture，服务器恢复资料只用于人工恢复。
 

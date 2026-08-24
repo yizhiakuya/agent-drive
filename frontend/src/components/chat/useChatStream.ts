@@ -9,9 +9,9 @@ import { createChatStreamFrame, type ChatStreamFrame } from "./chat-stream-frame
 import { parseChatStreamEvent } from "./chat-stream-events";
 import { dispatchChatStreamEvent, isFileMutationTrace } from "./chat-stream-dispatch";
 import { buildChatHistory, removeEmptyAssistantMessages } from "./chat-stream-state";
-import type { ContextUsage, InlineImage, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
+import type { ContextUsage, InlineImage, InlineImagePreview, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
 
-export type { ContextUsage, InlineImage, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
+export type { ContextUsage, InlineImage, InlineImagePreview, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
 export { chatTextDelta } from "./chat-stream-events";
 
 interface UseChatStreamOptions {
@@ -34,7 +34,7 @@ interface UseChatStreamOptions {
 
 interface UseChatStreamReturn {
   /** 发送一条消息（可选自定义消息、确认信息和本轮模型）。发送前 UI 输入框清空由调用方负责。 */
-  send: (message?: string, confirmations?: Record<string, unknown>[], thinkingLevel?: ThinkingLevel, model?: string, fileContext?: string[], permissionMode?: PermissionMode, inlineImages?: Pick<InlineImage, "name" | "mediaType" | "data">[]) => Promise<void>;
+  send: (message?: string, confirmations?: Record<string, unknown>[], thinkingLevel?: ThinkingLevel, model?: string, fileContext?: string[], permissionMode?: PermissionMode, inlineImages?: InlineImage[]) => Promise<void>;
   /** 中止当前进行中的流，并追加「已停止」提示。 */
   stop: () => void;
   /** 当前正在查看的会话是否有流式请求在进行中。 */
@@ -126,14 +126,25 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     model = "",
     fileContext: string[] = [],
     permissionMode: PermissionMode = "auto",
-    inlineImages: Pick<InlineImage, "name" | "mediaType" | "data">[] = [],
+    inlineImages: InlineImage[] = [],
   ) {
     const msg = message ?? "";
     const sendSid = sessionIdRef.current;
     const key = streamKey(sendSid);
     if (!msg || streamsRef.current.has(key)) return;
     const history = buildChatHistory(messages);
-    setMessages((m) => [...m, { type: "user", content: msg }]);
+    const messageImages: InlineImagePreview[] = inlineImages.map(({ id, name, mediaType, previewUrl, size }) => ({
+      id,
+      name,
+      mediaType,
+      previewUrl,
+      size,
+    }));
+    setMessages((m) => [...m, {
+      type: "user",
+      content: msg,
+      ...(messageImages.length > 0 ? { images: messageImages } : {}),
+    }]);
     setPending(null);
     setPlan([]);
     setContextUsage(null);

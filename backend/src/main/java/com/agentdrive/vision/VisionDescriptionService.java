@@ -17,7 +17,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 负责读取 owner 图片并调用已配置的视觉模型生成结构化描述。
+ * 负责读取 owner 图片并调用已配置的视觉模型生成综合文字描述。
  *
  * <p>该服务只处理图片识别；索引 operation 调用同一服务后再把描述交给
  * 全文/chunk/embedding 链路，保证模型调用和文件内容变更有清晰边界。</p>
@@ -26,6 +26,8 @@ import java.util.UUID;
 @Profile({"java-files", "java-auth", "java-chat"})
 public final class VisionDescriptionService {
     private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
+    private static final long MAX_BATCH_BYTES = 20L * 1024 * 1024;
+    private static final int MAX_BATCH_IMAGES = 4;
     private static final Map<String, String> IMAGE_TYPES = Map.of(
             ".png", "image/png",
             ".jpg", "image/jpeg",
@@ -38,6 +40,9 @@ public final class VisionDescriptionService {
     private final VisionRuntimeConfig configs;
     private final FileStorageService files;
     private final VisionModelClient client;
+
+    private record PreparedImage(String path, String mediaType, byte[] bytes, String imageId) {
+    }
 
     /**
      * 创建图片描述服务。
@@ -62,20 +67,9 @@ public final class VisionDescriptionService {
         if (config.isEmpty() || config.get().apiKey() == null || config.get().apiKey().isBlank()) {
             return Map.of("ok", false, "error", "vision_not_configured", "items", List.of());
         }
-        List<Map<String, Object>> items = new ArrayList<>();
-        for (String path : paths) {
-            try {
-                items.add(describeFile(userId, path, config.get()));
-            } catch (Exception error) {
-                Map<String, Object> failed = new LinkedHashMap<>();
-                failed.put("path", path);
-                failed.put("ok", false);
-                failed.put("error", safeMessage(error));
-                items.add(failed);
-            }
-        }
-        boolean anySuccess = items.stream().anyMatch(item -> Boolean.TRUE.equals(item.get("description"))
-                || item.containsKey("mime_type"));
+        List<Map<String, Object>> items = describeInBatches(userId, paths, config.get());
+        boolean anySuccess = items.stream().anyMatch(item -> item.get("description") instanceof String description
+                && !description.isBlank());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", anySuccess);
         result.put("model", config.get().model());
@@ -84,6 +78,91 @@ public final class VisionDescriptionService {
             result.put("error", "vision_all_files_failed");
         }
         return Map.copyOf(result);
+    }
+
+    /**
+     * Reads images once per explicit request and sends small independent multi-image batches.
+     * No previous description is reused; each call may intentionally regenerate all descriptions.
+     */
+    private List<Map<String, Object>> describeInBatches(UUID userId, List<String> paths,
+                                                         VisionRuntimeConfig.Config config) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        List<PreparedImage> pending = new ArrayList<>();
+        long pendingBytes = 0;
+        int sequence = 0;
+        for (String path : paths) {
+            try {
+                PreparedImage image = prepareImage(userId, path, "image-" + sequence++);
+                if (!pending.isEmpty() && (pending.size() >= MAX_BATCH_IMAGES
+                        || pendingBytes + image.bytes().length > MAX_BATCH_BYTES)) {
+                    appendBatch(items, pending, config);
+                    pending = new ArrayList<>();
+                    pendingBytes = 0;
+                }
+                pending.add(image);
+                pendingBytes += image.bytes().length;
+            } catch (Exception error) {
+                items.add(failure(path, error));
+            }
+        }
+        if (!pending.isEmpty()) appendBatch(items, pending, config);
+        return items;
+    }
+
+    /** Calls the batch endpoint and falls back to independent calls on provider protocol failure. */
+    private void appendBatch(List<Map<String, Object>> items, List<PreparedImage> batch,
+                             VisionRuntimeConfig.Config config) {
+        try {
+            List<VisionModelClient.ImageInput> inputs = batch.stream()
+                    .map(image -> new VisionModelClient.ImageInput(image.imageId(), image.bytes(), image.mediaType()))
+                    .toList();
+            Map<String, String> descriptions = client.describeBatch(config, inputs);
+            for (PreparedImage image : batch) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("path", image.path());
+                item.put("mime_type", image.mediaType());
+                item.put("model", config.model());
+                item.put("description", descriptions.get(image.imageId()));
+                items.add(item);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            for (PreparedImage image : batch) {
+                items.add(failure(image.path(), new IllegalStateException("vision_request_interrupted")));
+            }
+        } catch (Exception batchError) {
+            // A provider may claim multimodal support but reject multi-image content; preserve
+            // per-file semantics by retrying the failed batch as single-image requests.
+            for (PreparedImage image : batch) {
+                try {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("path", image.path());
+                    item.put("mime_type", image.mediaType());
+                    item.put("model", config.model());
+                    item.put("description", client.describe(config, image.bytes(), image.mediaType(), image.path()));
+                    items.add(item);
+                } catch (Exception error) {
+                    items.add(failure(image.path(), error));
+                }
+            }
+        }
+    }
+
+    private PreparedImage prepareImage(UUID userId, String path, String imageId) throws IOException {
+        String mediaType = IMAGE_TYPES.get(extension(path));
+        if (mediaType == null) throw new IllegalArgumentException("unsupported_image_type");
+        Path file = files.fileForRead(userId, path);
+        long size = Files.size(file);
+        if (size > MAX_IMAGE_BYTES) throw new IllegalArgumentException("image_too_large");
+        return new PreparedImage(path, mediaType, Files.readAllBytes(file), imageId);
+    }
+
+    private Map<String, Object> failure(String path, Exception error) {
+        Map<String, Object> failed = new LinkedHashMap<>();
+        failed.put("path", path);
+        failed.put("ok", false);
+        failed.put("error", safeMessage(error));
+        return failed;
     }
 
     /**
@@ -106,10 +185,10 @@ public final class VisionDescriptionService {
     }
 
     /**
-     * 识别单个图片并返回可供索引链路复用的结构化结果。
+     * 识别单个图片并返回可供索引链路复用的综合描述结果。
      * @param userId 图片归属 owner UUID。
      * @param path 图片相对路径。
-     * @return path、MIME、模型和结构化 description。
+     * @return path、MIME、模型和综合文字 description。
      */
     public Map<String, Object> describeFile(UUID userId, String path) {
         VisionRuntimeConfig.Config config = configs.find(userId)
@@ -137,18 +216,13 @@ public final class VisionDescriptionService {
      * @return 图片描述结果。
      */
     private Map<String, Object> describeFile(UUID userId, String path, VisionRuntimeConfig.Config config) {
-        String mediaType = IMAGE_TYPES.get(extension(path));
-        if (mediaType == null) throw new IllegalArgumentException("unsupported_image_type");
-        Path file = files.fileForRead(userId, path);
         try {
-            long size = Files.size(file);
-            if (size > MAX_IMAGE_BYTES) throw new IllegalArgumentException("image_too_large");
-            byte[] image = Files.readAllBytes(file);
+            PreparedImage prepared = prepareImage(userId, path, "image-0");
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("path", path);
-            result.put("mime_type", mediaType);
+            result.put("mime_type", prepared.mediaType());
             result.put("model", config.model());
-            result.put("description", client.describe(config, image, mediaType, path));
+            result.put("description", client.describe(config, prepared.bytes(), prepared.mediaType(), path));
             return result;
         } catch (IOException | InterruptedException error) {
             if (error instanceof InterruptedException) Thread.currentThread().interrupt();

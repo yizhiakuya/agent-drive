@@ -95,6 +95,7 @@ class LangChainAgentRuntimeTest {
             ImageContent imageContent = (ImageContent) content;
             assertThat(imageContent.image().base64Data()).isEqualTo("aGVsbG8=");
             assertThat(imageContent.image().mimeType()).isEqualTo("image/png");
+            assertThat(imageContent.detailLevel()).isEqualTo(ImageContent.DetailLevel.HIGH);
         });
     }
 

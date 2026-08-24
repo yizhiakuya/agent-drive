@@ -117,12 +117,48 @@ export function normalizeFrontendAction(data: Record<string, unknown>): Frontend
   if (!isRecord(data.arguments)) return null;
   const capability = CAPABILITIES.find((candidate) => candidate.operation === data.operation);
   if (!capability) return null;
+  if (!argumentsMatchCapability(data.arguments, capability)) return null;
   return {
     operation: data.operation,
     arguments: data.arguments,
     targetTab: capability.target_tab,
     ...(typeof data.summary === "string" ? { summary: data.summary } : {}),
   };
+}
+
+/** 在事件入队前再次按本地 registry schema 校验参数，不能只信任后端回显的 schema。 */
+function argumentsMatchCapability(
+  value: Record<string, unknown>,
+  capability: FrontendCapability,
+): boolean {
+  const schema = capability.parameters;
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : [];
+  if (required.some((name) => !(name in value))) return false;
+  if (Object.keys(value).some((name) => !(name in properties))) return false;
+  for (const [name, argument] of Object.entries(value)) {
+    const property = properties[name];
+    if (!isRecord(property)) return false;
+    const type = property.type;
+    if (typeof type === "string" && !matchesJsonType(argument, type)) return false;
+  }
+  if ("path" in value && !isSafeFrontendPath(
+    value.path,
+    capability.operation === "files.open_folder",
+  )) return false;
+  return true;
+}
+
+function matchesJsonType(value: unknown, type: string): boolean {
+  switch (type) {
+    case "string": return typeof value === "string";
+    case "number": return typeof value === "number" && Number.isFinite(value);
+    case "integer": return typeof value === "number" && Number.isInteger(value);
+    case "boolean": return typeof value === "boolean";
+    case "array": return Array.isArray(value);
+    case "object": return isRecord(value);
+    default: return false;
+  }
 }
 
 /**

@@ -34,11 +34,13 @@ class JavaChatContextIntegrationTest {
         assertThat(runtime).isInstanceOf(LangChainAgentRuntime.class);
         assertThat(operations.find("GET /api/v1/config")).isPresent();
         assertThat(operations.find("GET /api/v1/config/status")).isPresent();
-        assertThat(operations.find("POST /api/v1/config")).isPresent();
-        assertThat(operations.find("POST /api/v1/config/test")).isPresent();
-        assertThat(operations.find("POST /api/v1/config/models")).isPresent();
-        assertThat(operations.find("POST /api/v1/config/vision/models")).isPresent();
-        assertThat(operations.find("PUT /api/v1/config/embeddings")).isPresent();
+        // Provider URL/key configuration and model probes stay in the Settings REST surface;
+        // Agent operations never receive credentials or arbitrary external endpoints.
+        assertThat(operations.find("POST /api/v1/config")).isEmpty();
+        assertThat(operations.find("POST /api/v1/config/test")).isEmpty();
+        assertThat(operations.find("POST /api/v1/config/models")).isEmpty();
+        assertThat(operations.find("POST /api/v1/config/vision/models")).isEmpty();
+        assertThat(operations.find("PUT /api/v1/config/embeddings")).isEmpty();
         assertThat(operations.find("INTERNAL write_text")).isPresent();
         assertThat(operations.find("GET /api/v1/automation/latest")).isPresent();
         assertThat(operations.find("GET /api/v1/sessions")).isPresent();

@@ -1,5 +1,7 @@
 package com.agentdrive.api.chat;
 
+import com.agentdrive.infrastructure.SensitiveDataRedactor;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -10,6 +12,7 @@ import java.util.Map;
  * 裸字符串；工具输出展示最多保留 500 个字符，但 parsed 字段保持完整解析结果。
  */
 public final class ChatSseEvents {
+    private static final SensitiveDataRedactor REDACTOR = new SensitiveDataRedactor();
     /**
      * 禁止实例化静态事件工厂。
      */
@@ -45,7 +48,8 @@ public final class ChatSseEvents {
         return new ChatSseEvent("context", Map.of(
                 "source", context.source(),
                 "kind", context.kind(),
-                "content", context.content()
+                "content", context.content(),
+                "trust", context.trust().name().toLowerCase(java.util.Locale.ROOT)
         ));
     }
 
@@ -87,7 +91,12 @@ public final class ChatSseEvents {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("step", step);
         data.put("tool", tool == null ? "" : tool);
-        data.put("arguments", arguments == null ? Map.of() : arguments);
+        Map<String, Object> redactedArguments = REDACTOR.map(arguments == null ? Map.of() : arguments);
+        data.put("arguments", redactedArguments);
+        Object operation = redactedArguments.get("operation");
+        if (operation instanceof String value && !value.isBlank()) {
+            data.put("operation", value);
+        }
         data.put("started_at", startedAtEpochMillis);
         if (progressMessage != null && !progressMessage.isBlank()) {
             data.put("progress_message", progressMessage);
@@ -144,12 +153,13 @@ public final class ChatSseEvents {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("step", step);
         data.put("tool", tool == null ? "" : tool);
-        data.put("arguments", arguments == null ? Map.of() : arguments);
+        data.put("arguments", REDACTOR.map(arguments == null ? Map.of() : arguments));
         String displayOutput = output == null ? "" : output;
         boolean truncated = outputTruncated || displayOutput.length() > 500;
-        data.put("output", displayOutput.length() > 500 ? displayOutput.substring(0, 500) : displayOutput);
+        String safeOutput = REDACTOR.text(displayOutput);
+        data.put("output", safeOutput.length() > 500 ? safeOutput.substring(0, 500) : safeOutput);
         if (parsed != null) {
-            data.put("parsed", parsed);
+            data.put("parsed", REDACTOR.value(parsed));
         }
         data.put("output_truncated", truncated);
         if (replayed) {

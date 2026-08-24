@@ -53,14 +53,14 @@ public record ChatRequest(
     public static final int MAX_FILE_CONTEXT_ITEMS = 16;
     /** 单个附加路径的最大字符数。 */
     public static final int MAX_FILE_CONTEXT_PATH_CHARS = 1024;
-    /** 请求 JSON 递归估算的最大 UTF-8 大小；包含内联图片时允许 16 MiB 的受控上限。 */
-    public static final int MAX_BODY_BYTES = 16 * 1024 * 1024;
+    /** 请求 JSON 递归估算的最大 UTF-8 大小；包含 50 MiB 原图 Base64 时保留 JSON 余量。 */
+    public static final int MAX_BODY_BYTES = 80 * 1024 * 1024;
     /** 单轮最多发送的剪贴板图片数量。 */
     public static final int MAX_INLINE_IMAGES = 4;
-    /** 单张内联图片允许的 Base64 字符数上限，约对应 4 MiB 原始字节。 */
-    public static final int MAX_INLINE_IMAGE_BASE64_CHARS = 6 * 1024 * 1024;
-    /** 单轮所有内联图片允许的 Base64 字符数上限。 */
-    public static final int MAX_INLINE_IMAGE_TOTAL_BASE64_CHARS = 12 * 1024 * 1024;
+    /** 单张内联图片允许的 Base64 字符数上限，覆盖约 50 MiB 原始字节。 */
+    public static final int MAX_INLINE_IMAGE_BASE64_CHARS = 70 * 1024 * 1024;
+    /** 单轮所有内联图片允许的 Base64 字符总量，覆盖约 50 MiB 原始字节并限制请求膨胀。 */
+    public static final int MAX_INLINE_IMAGE_TOTAL_BASE64_CHARS = 70 * 1024 * 1024;
 
     /**
      * 创建未注入认证 owner 的客户端请求。
@@ -233,7 +233,7 @@ public record ChatRequest(
      *
      * @return 所有字段均在请求体预算内时为 true。
      */
-    @AssertTrue(message = "chat request body exceeds the 16 MiB limit")
+    @AssertTrue(message = "chat request body exceeds the 80 MiB limit")
     @com.fasterxml.jackson.annotation.JsonIgnore
     public boolean payloadWithinLimits() {
         if (message == null || message.getBytes(StandardCharsets.UTF_8).length > MAX_MESSAGE_CHARS) {

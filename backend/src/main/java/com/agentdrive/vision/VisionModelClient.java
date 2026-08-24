@@ -3,8 +3,6 @@ package com.agentdrive.vision;
 import com.agentdrive.net.HttpClientSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.net.URI;
@@ -18,22 +16,32 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * 调用 OpenAI Chat Completions 兼容的视觉模型，并把模型输出规整成固定 JSON 结构。
+ * 调用 OpenAI Chat Completions 兼容的视觉模型，并把模型输出规整成一段综合描述。
  *
- * <p>客户端只发送图片 bytes 和固定抽取提示词，不允许模型返回任意脚本或把原始响应直接
- * 作为索引正文；未知字段会被丢弃，缺失字段使用空值，保证下游 embedding 输入稳定。</p>
+ * <p>客户端只发送图片 bytes 和固定描述提示词，不允许模型返回任意脚本；描述正文直接
+ * 作为下游索引输入，避免把大量低价值结构化字段重复写入向量。</p>
  */
 public final class VisionModelClient {
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
     private static final int MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-    private static final String SCHEMA_VERSION = "image-description-v1";
+    private static final int MAX_BATCH_IMAGES = 4;
+    private static final int MAX_DESCRIPTION_CHARS = 6000;
+    private static final Pattern BATCH_IMAGE_MARKER = Pattern.compile(
+            "(?m)^\\s*image_id\\s*[:=]\\s*([A-Za-z0-9_-]{1,32})\\s*$");
     private static final byte[] PROBE_PNG = Base64.getDecoder().decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
     private final ObjectMapper objectMapper;
     private final HttpClient client = HttpClientSupport.builder(TIMEOUT).build();
+
+    /** A bounded image payload used by a multi-image request. */
+    public record ImageInput(String imageId, byte[] image, String mediaType) {
+    }
 
     /**
      * 创建视觉模型 HTTP 客户端。
@@ -49,29 +57,44 @@ public final class VisionModelClient {
      * @param image 图片字节。
      * @param mediaType 图片 MIME 类型。
      * @param path 文件相对路径，仅用于提示模型不要猜测文件名之外的事实。
-     * @return 经过 schema 规整的图片描述对象。
+     * @return 一段综合图片描述。
      * @throws IOException 请求或 JSON 编解码失败。
      * @throws InterruptedException HTTP 请求被中断。
      */
-    public Map<String, Object> describe(VisionRuntimeConfig.Config config, byte[] image,
-                                        String mediaType, String path)
+    public String describe(VisionRuntimeConfig.Config config, byte[] image,
+                           String mediaType, String path)
             throws IOException, InterruptedException {
-        String requestBody = objectMapper.writeValueAsString(request(config, image, mediaType, path));
-        HttpResponse<String> response = client.send(HttpRequest.newBuilder(endpoint(config.baseUrl()))
-                        .timeout(TIMEOUT)
-                        .header("Accept", "application/json")
-                        .header("Content-Type", "application/json")
-                        .header("Authorization", "Bearer " + config.apiKey())
-                        .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-                        .build(),
-                HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IllegalStateException("vision provider returned HTTP " + response.statusCode());
+        return normalizeDescription(content(complete(config, request(config, image, mediaType, path))));
+    }
+
+    /**
+     * Analyze several images in one multimodal request, preserving one result per image.
+     * This is deliberately uncached: every explicit indexing request may regenerate descriptions.
+     *
+     * @param config current owner vision configuration
+     * @param images bounded image inputs with unique server-generated IDs
+     * @return plain-text descriptions keyed by image ID
+     * @throws IOException request or JSON decoding failure
+     * @throws InterruptedException interrupted HTTP request
+     */
+    public Map<String, String> describeBatch(VisionRuntimeConfig.Config config,
+                                             List<ImageInput> images)
+            throws IOException, InterruptedException {
+        if (images == null || images.isEmpty() || images.size() > MAX_BATCH_IMAGES) {
+            throw new IllegalArgumentException("vision batch must contain 1 to " + MAX_BATCH_IMAGES + " images");
         }
-        JsonNode root = objectMapper.readTree(response.body());
-        String content = root.path("choices").path(0).path("message").path("content").asText("");
-        if (content.isBlank()) throw new IllegalStateException("vision provider returned empty content");
-        return normalize(objectMapper.readTree(stripJsonFence(content)));
+        Set<String> expected = new java.util.LinkedHashSet<>();
+        for (ImageInput image : images) {
+            if (image == null || image.imageId() == null
+                    || !image.imageId().matches("[A-Za-z0-9_-]{1,32}")
+                    || image.image() == null || image.image().length == 0
+                    || image.mediaType() == null || image.mediaType().isBlank()
+                    || !expected.add(image.imageId())) {
+                throw new IllegalArgumentException("vision batch contains invalid or duplicate image input");
+            }
+        }
+        String response = content(complete(config, batchRequest(config, images)));
+        return parseBatchDescriptions(response, expected);
     }
 
     /**
@@ -143,109 +166,134 @@ public final class VisionModelClient {
      */
     private Map<String, Object> request(VisionRuntimeConfig.Config config, byte[] image,
                                         String mediaType, String path) {
-        String dataUri = "data:" + mediaType + ";base64," + Base64.getEncoder().encodeToString(image);
-        Map<String, Object> imagePart = Map.of(
-                "type", "image_url",
-                "image_url", Map.of("url", dataUri)
-        );
-        Map<String, Object> textPart = Map.of(
-                "type", "text",
-                "text", prompt(path)
-        );
         return Map.of(
                 "model", config.model(),
                 "max_tokens", 1200,
                 "messages", List.of(Map.of(
                         "role", "user",
-                        "content", List.of(textPart, imagePart)
+                        "content", List.of(textPart(prompt(path)), imagePart(image, mediaType))
                 ))
         );
     }
 
+    /** Construct a request whose response contains an independent item for every image ID. */
+    private Map<String, Object> batchRequest(VisionRuntimeConfig.Config config,
+                                             List<ImageInput> images) {
+        List<Map<String, Object>> content = new ArrayList<>();
+        content.add(textPart(batchPrompt(images)));
+        for (ImageInput image : images) {
+            content.add(textPart("以下图片的 image_id 是 " + image.imageId() + "。只描述这张图片，不要与其他图片合并。"));
+            content.add(imagePart(image.image(), image.mediaType()));
+        }
+        return Map.of(
+                "model", config.model(),
+                "max_tokens", Math.min(4800, 1200 * images.size()),
+                "messages", List.of(Map.of("role", "user", "content", content))
+        );
+    }
+
+    private Map<String, Object> textPart(String text) {
+        return Map.of("type", "text", "text", text);
+    }
+
+    private Map<String, Object> imagePart(byte[] image, String mediaType) {
+        String dataUri = "data:" + mediaType + ";base64," + Base64.getEncoder().encodeToString(image);
+        // Preserve the original bytes and request high visual detail; the provider may still
+        // tile or resize internally according to its own vision protocol.
+        return Map.of("type", "image_url", "image_url", Map.of("url", dataUri, "detail", "high"));
+    }
+
+    /** Send a JSON request and return the provider response tree. */
+    private JsonNode complete(VisionRuntimeConfig.Config config, Map<String, Object> request)
+            throws IOException, InterruptedException {
+        String requestBody = objectMapper.writeValueAsString(request);
+        HttpResponse<String> response = client.send(HttpRequest.newBuilder(endpoint(config.baseUrl()))
+                        .timeout(TIMEOUT)
+                        .header("Accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + config.apiKey())
+                        .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+                        .build(),
+                HttpClientSupport.limitedUtf8BodyHandler(MAX_RESPONSE_BYTES));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException("vision provider returned HTTP " + response.statusCode());
+        }
+        return objectMapper.readTree(response.body());
+    }
+
+    private String content(JsonNode root) {
+        String content = root == null ? "" : root.path("choices").path(0).path("message").path("content").asText("");
+        if (content.isBlank()) throw new IllegalStateException("vision provider returned empty content");
+        return content;
+    }
+
     /**
-     * 固定视觉抽取提示词，约束输出字段并避免身份、情绪等敏感推断。
+     * 固定视觉描述提示词，要求输出一段可检索的综合文字并避免身份、情绪等敏感推断。
      * @param path 图片相对路径。
      * @return 请求中的抽取提示词。
      */
     private String prompt(String path) {
-        return "请只根据图片中可见内容进行信息抽取。不要识别人名、推断身份、健康状况或情绪，"
-                + "不要编造不可见事实。只返回一个 JSON 对象，不要 Markdown 代码围栏。文件路径仅供上下文："
-                + path + "。JSON 必须包含以下字段："
-                + "schema_version(固定为 image-description-v1), title, summary, scene, objects(数组，"
-                + "每项含 label/count/attributes), colors(字符串数组), "
-                + "tags(字符串数组), people_count(整数), time_of_day(字符串或 null), confidence(0 到 1 数字)。"
-                + "看不清或无法确定的字段使用空字符串、空数组或 null。";
+        return "请只根据图片中可见内容，写一段详细但紧凑、可检索的综合描述。"
+                + "描述图片的整体场景和页面/画面结构、主要人物或物体、它们之间的关系、重要的可见文字语义、"
+                + "颜色和视觉风格，以及与理解内容有关的状态或动作。不要逐字 OCR，不要写字段名、列表或 JSON，"
+                + "直接返回一段自然语言；不要识别人名、推断身份、健康状况或情绪，不要编造不可见事实。"
+                + "尽量保留图片中具体且可检索的内容，避免只写‘一张图片’之类的空泛描述。"
+                + "文件路径仅供上下文，不要把路径当作图片事实：" + path + "。";
     }
 
-    /**
-     * 规范化模型 JSON，限制字段长度和数组规模，防止异常输出膨胀索引正文。
-     * @param raw 模型返回的 JSON 节点。
-     * @return 固定字段顺序的结构化描述。
-     */
-    private Map<String, Object> normalize(JsonNode raw) {
-        if (raw == null || !raw.isObject()) throw new IllegalStateException("vision response is not a JSON object");
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("schema_version", SCHEMA_VERSION);
-        result.put("title", text(raw, "title", 160));
-        result.put("summary", text(raw, "summary", 1200));
-        result.put("scene", text(raw, "scene", 400));
-        result.put("objects", objects(raw.path("objects")));
-        result.put("colors", strings(raw.path("colors"), 20, 80));
-        result.put("tags", strings(raw.path("tags"), 30, 80));
-        result.put("people_count", Math.max(0, Math.min(10000, raw.path("people_count").asInt(0))));
-        result.put("time_of_day", raw.path("time_of_day").isNull() ? null : text(raw, "time_of_day", 80));
-        double confidence = raw.path("confidence").isNumber() ? raw.path("confidence").asDouble() : 0.0;
-        result.put("confidence", Double.isFinite(confidence) ? Math.max(0.0, Math.min(1.0, confidence)) : 0.0);
-        return result;
+    private String batchPrompt(List<ImageInput> images) {
+        String ids = images.stream().map(ImageInput::imageId).collect(java.util.stream.Collectors.joining(", "));
+        return "请分别分析以下图片，不能比较或合并图片内容。每张图片输出一段自然语言综合描述，"
+                + "不要 JSON、不要 Markdown 列表、不要逐字 OCR。每段描述前单独一行写 image_id: 对应 ID，"
+                + "下一行开始写该图片的完整描述；ID 只能使用以下值：" + ids + "。"
+                + "描述应覆盖场景/结构、主要人物或物体、关系、重要文字语义、颜色风格和可见状态。"
+                + "不要推断身份、健康状况或情绪，不要编造不可见事实。";
     }
 
-    /**
-     * 规整对象识别数组。
-     * @param raw 模型对象数组。
-     * @return 每项包含 label、count 和 attributes 的列表。
-     */
-    private List<Map<String, Object>> objects(JsonNode raw) {
-        List<Map<String, Object>> result = new ArrayList<>();
-        if (!raw.isArray()) return result;
-        for (JsonNode item : raw) {
-            if (!item.isObject() || result.size() >= 50) continue;
-            Map<String, Object> object = new LinkedHashMap<>();
-            object.put("label", text(item, "label", 120));
-            object.put("count", Math.max(0, Math.min(10000, item.path("count").asInt(1))));
-            object.put("attributes", strings(item.path("attributes"), 20, 120));
-            result.add(object);
-        }
-        return result;
-    }
-
-    /**
-     * 读取并限制 JSON 字符串字段。
-     * @param node JSON 对象。
-     * @param field 字段名。
-     * @param maxLength 最大字符数。
-     * @return 去首尾空白的字段文本。
-     */
-    private String text(JsonNode node, String field, int maxLength) {
-        String value = node.path(field).asText("").trim();
-        return value.length() <= maxLength ? value : value.substring(0, maxLength);
-    }
-
-    /**
-     * 读取并限制字符串数组。
-     * @param node JSON 数组节点。
-     * @param maxItems 最大项目数。
-     * @param maxLength 单项最大字符数。
-     * @return 去重后的非空字符串列表。
-     */
-    private List<String> strings(JsonNode node, int maxItems, int maxLength) {
-        List<String> result = new ArrayList<>();
-        if (!node.isArray()) return result;
-        for (JsonNode item : node) {
-            String value = item.asText("").trim();
-            if (!value.isBlank() && !result.contains(value)) {
-                result.add(value.length() <= maxLength ? value : value.substring(0, maxLength));
+    /** 规整单段描述并兼容模型偶尔返回的旧 JSON 字段。 */
+    private String normalizeDescription(String raw) {
+        String value = stripJsonFence(raw);
+        try {
+            JsonNode parsed = objectMapper.readTree(value);
+            if (parsed != null && parsed.isTextual()) value = parsed.asText();
+            else if (parsed != null && parsed.isObject()) {
+                List<String> parts = new ArrayList<>();
+                for (String field : List.of("description", "content_description", "summary", "scene")) {
+                    String part = parsed.path(field).asText("").trim();
+                    if (!part.isBlank() && !parts.contains(part)) parts.add(part);
+                }
+                if (!parts.isEmpty()) value = String.join("。", parts);
             }
-            if (result.size() >= maxItems) break;
+        } catch (Exception ignored) {
+            // Plain text is the canonical response; malformed JSON-looking text remains text.
+        }
+        value = value.replaceAll("\\s+", " ").trim();
+        if (value.isBlank()) throw new IllegalStateException("vision provider returned empty description");
+        return value.length() <= MAX_DESCRIPTION_CHARS
+                ? value : value.substring(0, MAX_DESCRIPTION_CHARS - 1) + "…";
+    }
+
+    /** 解析多图响应的轻量 image_id 分隔行，不要求模型生成复杂 JSON。 */
+    private Map<String, String> parseBatchDescriptions(String raw, Set<String> expected) {
+        String value = stripJsonFence(raw);
+        Matcher matcher = BATCH_IMAGE_MARKER.matcher(value);
+        Map<String, String> result = new LinkedHashMap<>();
+        String currentId = null;
+        int descriptionStart = -1;
+        while (matcher.find()) {
+            if (currentId != null) {
+                result.put(currentId, normalizeDescription(value.substring(descriptionStart, matcher.start())));
+            }
+            currentId = matcher.group(1);
+            if (!expected.contains(currentId) || result.containsKey(currentId)) {
+                throw new IllegalStateException("vision batch response image_id mismatch");
+            }
+            descriptionStart = matcher.end();
+        }
+        if (currentId == null) throw new IllegalStateException("vision batch response has no image_id markers");
+        result.put(currentId, normalizeDescription(value.substring(descriptionStart)));
+        if (!result.keySet().equals(expected)) {
+            throw new IllegalStateException("vision batch response is missing an image description");
         }
         return result;
     }

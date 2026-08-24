@@ -527,8 +527,11 @@ public final class FrontendActionTool implements AgentTool {
     private String jsonError(String code, String message, Object details) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", false);
+        result.put("status", 400);
+        result.put("code", code);
         result.put("error", code);
         result.put("message", message);
+        result.put("detail", message);
         if (details != null) {
             result.put("details", details);
         }

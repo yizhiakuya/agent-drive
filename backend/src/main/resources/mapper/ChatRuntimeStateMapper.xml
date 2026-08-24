@@ -13,6 +13,7 @@
           AND parsed-&gt;&gt;'ok' = 'true'
           AND parsed-&gt;'skill'-&gt;&gt;'name' IS NOT NULL
         ORDER BY parsed-&gt;'skill'-&gt;&gt;'name', id DESC
+        LIMIT 16
     </select>
 
     <select id="selectToolReplay" resultType="map">
@@ -36,6 +37,29 @@
         )
         ON CONFLICT (session_id, tool_name, arguments) DO NOTHING
     </insert>
+
+    <delete id="deleteToolReplays">
+        DELETE FROM chat_tool_replays
+        WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+    </delete>
+
+    <select id="selectModelHistory" resultType="map">
+        SELECT role, content, reasoning
+        FROM (
+            SELECT role, content, reasoning, id
+            FROM chat_messages
+            WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+              AND session_id IN (
+                  SELECT id FROM chat_sessions
+                  WHERE id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+                    AND user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+              )
+              AND role IN ('user', 'assistant')
+            ORDER BY id DESC
+            LIMIT #{limit}
+        ) history
+        ORDER BY id
+    </select>
 
     <insert id="insertMessage">
         INSERT INTO chat_messages(session_id, role, content, reasoning, tool_name, arguments, parsed)
@@ -120,7 +144,7 @@
                 || jsonb_build_object(
                     'status', 'interrupted',
                     'phase', 'process_restart',
-                    'resumable', true,
+                    'resumable', false,
                     'updated_at', now()::text
                 ),
             updated_at = now()

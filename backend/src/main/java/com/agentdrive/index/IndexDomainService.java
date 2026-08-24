@@ -1,8 +1,6 @@
 package com.agentdrive.index;
 
 import com.agentdrive.vision.VisionDescriptionService;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -27,20 +25,17 @@ public final class IndexDomainService {
     private final EmbeddingService embeddings;
     private final EmbeddingRuntimeConfig embeddingConfig;
     private final VisionDescriptionService vision;
-    private final ObjectMapper objectMapper;
 
     public IndexDomainService(IndexStore index,
                               IndexingService indexing,
                               EmbeddingService embeddings,
                               EmbeddingRuntimeConfig embeddingConfig,
-                              VisionDescriptionService vision,
-                              ObjectMapper objectMapper) {
+                              VisionDescriptionService vision) {
         this.index = index;
         this.indexing = indexing;
         this.embeddings = embeddings;
         this.embeddingConfig = embeddingConfig;
         this.vision = vision;
-        this.objectMapper = objectMapper;
     }
 
     /** 返回当前 owner 的索引统计和路径范围内的文件索引资源。 */
@@ -93,7 +88,7 @@ public final class IndexDomainService {
         return batchResult("index.file", results);
     }
 
-    /** 同步读取图片、生成结构化描述并写入视觉文档。 */
+    /** 同步读取图片、生成综合描述并写入视觉文档。 */
     public Map<String, Object> indexVision(UUID userId, String path) {
         return indexVision(userId, List.of(path), false);
     }
@@ -103,9 +98,33 @@ public final class IndexDomainService {
         requireUser(userId);
         List<String> normalizedPaths = normalizePaths(paths);
         vision.requireReady(userId);
-        List<Map<String, Object>> results = normalizedPaths.stream()
-                .map(path -> executeItem(path, () -> indexVisionOne(userId, path, force)))
-                .toList();
+        Map<String, Object> described = vision.describeFiles(userId, normalizedPaths);
+        Map<String, Map<String, Object>> descriptions = new LinkedHashMap<>();
+        Object rawItems = described.get("items");
+        if (rawItems instanceof List<?> items) {
+            for (Object rawItem : items) {
+                if (rawItem instanceof Map<?, ?> item && item.get("path") != null) {
+                    Map<String, Object> value = new LinkedHashMap<>();
+                    item.forEach((key, entry) -> value.put(String.valueOf(key), entry));
+                    descriptions.put(String.valueOf(item.get("path")), value);
+                }
+            }
+        }
+        List<Map<String, Object>> results = normalizedPaths.stream().map(path -> {
+            Map<String, Object> item = descriptions.get(path);
+            if (item == null || !(item.get("description") instanceof String description)
+                    || description.isBlank()) {
+                Map<String, Object> failed = new LinkedHashMap<>();
+                failed.put("path", path);
+                failed.put("indexed", false);
+                failed.put("status", "error");
+                failed.put("error", item == null
+                        ? "vision description missing"
+                        : String.valueOf(item.getOrDefault("error", "vision description failed")));
+                return failed;
+            }
+            return executeItem(path, () -> indexVisionDescription(userId, path, item, force));
+        }).toList();
         return batchResult("index.vision", results);
     }
 
@@ -176,20 +195,18 @@ public final class IndexDomainService {
         return indexing.rebuild(userId, normalizedPrefix);
     }
 
-    private Map<String, Object> indexVisionOne(UUID userId, String path, boolean force) {
-        Map<String, Object> described = vision.describeFile(userId, path);
+    private Map<String, Object> indexVisionDescription(UUID userId, String path,
+                                                       Map<String, Object> described,
+                                                       boolean force) {
         Object description = described.get("description");
-        if (description == null) throw new IllegalStateException("vision description is empty");
-        try {
-            Map<String, Object> result = new LinkedHashMap<>(indexing.indexDescription(
-                    userId, path, objectMapper.writeValueAsString(description)));
-            result.put("description", description);
-            result.put("model", described.get("model"));
-            result.put("embedding", embeddings.embed(userId, List.of(path), 64, force));
-            return result;
-        } catch (JsonProcessingException error) {
-            throw new IllegalStateException("vision description encoding failed", error);
+        if (!(description instanceof String text) || text.isBlank()) {
+            throw new IllegalStateException("vision description is empty");
         }
+        Map<String, Object> result = new LinkedHashMap<>(indexing.indexDescription(userId, path, text));
+        result.put("description", description);
+        result.put("model", described.get("model"));
+        result.put("embedding", embeddings.embed(userId, List.of(path), 64, force));
+        return result;
     }
 
     private List<String> normalizePaths(List<String> paths) {

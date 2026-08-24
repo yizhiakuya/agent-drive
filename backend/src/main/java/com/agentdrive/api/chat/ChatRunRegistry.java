@@ -74,7 +74,7 @@ public final class ChatRunRegistry implements AutoCloseable {
     public Flux<ChatSseEvent> start(ChatRequest request, ChatRuntime runtime) {
         String sessionId = request.sessionId();
         if (sessionId == null || sessionId.isBlank()) {
-            return runtime.stream(request);
+            throw new ActiveChatRunException("an owner-scoped chat session is required");
         }
         ActiveRun run = new ActiveRun();
         synchronized (runs) {

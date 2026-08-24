@@ -89,7 +89,7 @@ public class IndexingService {
     }
 
     /**
-     * 把视觉模型生成的结构化 JSON 写入当前文件 revision 的全文索引。
+     * 把视觉模型生成的综合文字写入当前文件 revision 的全文索引。
      *
      * <p>视觉描述不是直接写入向量列，而是先作为稳定的文档正文切块；这样普通文本检索、
      * 现有 embedding provider 和 revision 失效规则都能复用。调用方应在视觉模型调用完成后
@@ -97,22 +97,22 @@ public class IndexingService {
      *
      * @param userId 文件归属用户 UUID。
      * @param path 图片相对路径。
-     * @param structuredDescription 已通过视觉 schema 校验的 JSON 文本。
+     * @param description 已通过视觉客户端长度限制的综合描述文本。
      * @return 视觉索引结果，包含路径、状态和正文长度。
      * @throws IllegalArgumentException 文件不存在或描述为空时抛出。
      */
-    public Map<String, Object> indexDescription(UUID userId, String path, String structuredDescription) {
-        if (structuredDescription == null || structuredDescription.isBlank()) {
+    public Map<String, Object> indexDescription(UUID userId, String path, String description) {
+        if (description == null || description.isBlank()) {
             throw new IllegalArgumentException("vision description is empty");
         }
         Map<String, Object> metadata = index.file(userId, path);
         if (metadata == null) throw new IllegalArgumentException("file not found: " + path);
         UUID fileId = UUID.fromString(String.valueOf(metadata.get("id")));
         long revision = number(metadata.get("revision"));
-        List<String> chunks = chunks(structuredDescription);
+        List<String> chunks = chunks(description);
         index.replaceDocument(userId, fileId, revision, IndexStore.VISION_DOCUMENT_TYPE,
-                structuredDescription, "vision-description-v1", chunks, "vision-chunk-v1");
-        return result(path, true, "vision_indexed", structuredDescription.length(), IndexStore.VISION_DOCUMENT_TYPE);
+                description, "vision-description-v3", chunks, "vision-chunk-v3");
+        return result(path, true, "vision_indexed", description.length(), IndexStore.VISION_DOCUMENT_TYPE);
     }
 
     /**

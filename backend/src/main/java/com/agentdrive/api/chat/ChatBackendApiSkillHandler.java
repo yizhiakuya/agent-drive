@@ -44,7 +44,7 @@ final class ChatBackendApiSkillHandler implements BackendApiOperationHandler {
             case "GET /api/v1/skills" -> Map.of("page", registry.discover(
                     userId,
                     BackendApiParams.parameter(request, "q", ""),
-                    BackendApiParams.booleanParameter(request, "include_disabled"),
+                    false,
                     BackendApiParams.integerParameter(request, "offset", 0),
                     BackendApiParams.integerParameter(request, "limit", 20)));
             case "GET /api/v1/skills/{name}" -> Map.of("skill", read(request, userId));
@@ -64,7 +64,7 @@ final class ChatBackendApiSkillHandler implements BackendApiOperationHandler {
      */
     private SkillDefinition read(BackendApiRequest request, UUID userId) {
         String name = BackendApiParams.requiredPath(request, "name");
-        return registry.read(userId, name, true)
+        return registry.read(userId, name, false)
                 .orElseThrow(() -> new IllegalArgumentException("Skill not found: " + name));
     }
 

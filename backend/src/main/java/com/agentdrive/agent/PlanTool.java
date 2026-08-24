@@ -102,7 +102,8 @@ public final class PlanTool implements AgentTool {
     }
 
     private String error(String code, String detail) {
-        return json(Map.of("ok", false, "error", code, "detail", detail));
+        return json(Map.of("ok", false, "status", 400, "code", code,
+                "error", code, "detail", detail));
     }
 
     private String json(Object value) {

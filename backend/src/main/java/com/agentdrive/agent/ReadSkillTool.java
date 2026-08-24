@@ -125,7 +125,8 @@ public final class ReadSkillTool implements AgentTool {
      * @return JSON 错误文本
      */
     private String error(int status, String code, String detail) {
-        return json(Map.of("ok", false, "status", status, "error", code, "detail", detail));
+        return json(Map.of("ok", false, "status", status, "code", code,
+                "error", code, "detail", detail));
     }
 
     /**

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/lib/store";
 
@@ -730,19 +730,22 @@ describe("ChatPanel 主流程", () => {
     expect(textarea).toHaveValue("总结 @projects ");
   });
 
-  it("可直接粘贴图片作为本轮 Base64 内联内容且不上传到聊天附件目录", async () => {
-    const image = new File(["png"], "截图.png", { type: "image/png" });
+  it("可直接粘贴图片作为本轮 Base64 内联内容，发送后仍显示并可预览", async () => {
+    // 浏览器对同一张剪贴板图片的 items/files 视图可能给出不同的 lastModified。
+    const imageFromItem = new File(["png"], "截图.png", { type: "image/png", lastModified: 101 });
+    const imageFromFiles = new File(["png"], "截图.png", { type: "image/png", lastModified: 202 });
     render(<ChatPanel />);
     await act(async () => {});
     const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
     fireEvent.paste(textarea, {
       clipboardData: {
-        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
-        files: [image],
+        items: [{ kind: "file", type: "image/png", getAsFile: () => imageFromItem }],
+        files: [imageFromFiles],
         getData: () => "",
       },
     });
     await waitFor(() => expect(screen.getByLabelText("已附加图片")).toHaveTextContent("截图.png"));
+    expect(screen.getByLabelText("已附加图片").querySelectorAll("img")).toHaveLength(1);
     expect(uploadFile).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("已附加文件")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
@@ -750,6 +753,28 @@ describe("ChatPanel 主流程", () => {
     expect(chatStream.mock.calls[0][11]).toEqual([
       expect.objectContaining({ name: "截图.png", mediaType: "image/png", data: expect.any(String) }),
     ]);
+    const sentImages = screen.getByLabelText("已发送图片");
+    expect(sentImages.querySelectorAll("img")).toHaveLength(1);
+    fireEvent.click(within(sentImages).getByRole("button", { name: "预览已发送图片 截图.png" }));
+    expect(screen.getByRole("dialog", { name: "预览图片 截图.png" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭图片预览" }));
+    expect(screen.queryByRole("dialog", { name: "预览图片 截图.png" })).not.toBeInTheDocument();
+  });
+
+  it("接受 5 MiB 图片且不再按旧的 4 MiB 上限拦截", async () => {
+    const image = new File([new Uint8Array(5 * 1024 * 1024)], "5MiB.png", { type: "image/png" });
+    render(<ChatPanel />);
+    await act(async () => {});
+    fireEvent.paste(screen.getByPlaceholderText("和你的 Agent 对话…"), {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        files: [image],
+        getData: () => "",
+      },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "预览图片 5MiB.png" })).toBeInTheDocument());
+    expect(screen.queryByText(/单张上限 4 MiB/)).not.toBeInTheDocument();
+    expect(uploadFile).not.toHaveBeenCalled();
   });
 
   it("当前模型不支持图片时阻止粘贴图片进入请求", async () => {
@@ -771,6 +796,31 @@ describe("ChatPanel 主流程", () => {
     await act(async () => {});
     expect(screen.queryByLabelText("已附加图片")).not.toBeInTheDocument();
     expect(uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("点击已附加图片可打开预览并关闭，发送前仍保留原图", async () => {
+    const image = new File(["png"], "核实.png", { type: "image/png" });
+    render(<ChatPanel />);
+    await act(async () => {});
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        files: [image],
+        getData: () => "",
+      },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "预览图片 核实.png" })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "预览图片 核实.png" }));
+    expect(screen.getByRole("dialog", { name: "预览图片 核实.png" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "预览图片 核实.png" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "预览图片 核实.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭图片预览" }));
+    expect(screen.queryByRole("dialog", { name: "预览图片 核实.png" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "预览图片 核实.png" })).toBeInTheDocument();
   });
 
   it("回答中的文件引用转换为可打开的前端动作", async () => {

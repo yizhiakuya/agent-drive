@@ -57,6 +57,16 @@ class ChatContractTest {
     }
 
     @Test
+    void inlineImageBudgetCoversFiftyMiBRawImageAfterBase64Encoding() {
+        long rawBytes = 50L * 1024 * 1024;
+        long base64Chars = ((rawBytes + 2) / 3) * 4;
+
+        assertThat((long) ChatRequest.MAX_INLINE_IMAGE_BASE64_CHARS).isGreaterThanOrEqualTo(base64Chars);
+        assertThat((long) ChatRequest.MAX_INLINE_IMAGE_TOTAL_BASE64_CHARS).isGreaterThanOrEqualTo(base64Chars);
+        assertThat((long) ChatRequest.MAX_BODY_BYTES).isGreaterThan(base64Chars);
+    }
+
+    @Test
     void rejectsInvalidInlineImagePayload() {
         ChatRequest request = new ChatRequest(
                 "describe", null, null, null, "auto", null, null, null, "gpt-5.6-luna", null,
@@ -93,6 +103,15 @@ class ChatContractTest {
     }
 
     @Test
+    void toolEventsNeverEchoCredentialFields() throws Exception {
+        String encoded = encoder.encode(ChatSseEvents.toolTrace(
+                1, "backend_api", Map.of("api_key", "sk-secret-value"),
+                "{}", Map.of("ok", true), false, false));
+
+        assertThat(encoded).doesNotContain("sk-secret-value").contains("\"api_key\":\"***\"");
+    }
+
+    @Test
     void contextEventKeepsSourceKindAndFullContent() throws Exception {
         String encoded = encoder.encode(ChatSseEvents.context(
                 new ChatContext("skill-catalog", "skill-catalog", "catalog body", true)));
@@ -101,6 +120,7 @@ class ChatContractTest {
         assertThat(encoded).contains("\"source\":\"skill-catalog\"");
         assertThat(encoded).contains("\"kind\":\"skill-catalog\"");
         assertThat(encoded).contains("\"content\":\"catalog body\"");
+        assertThat(encoded).contains("\"trust\":\"user_data\"");
     }
 
     @Test

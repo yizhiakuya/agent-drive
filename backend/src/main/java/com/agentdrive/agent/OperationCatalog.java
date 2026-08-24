@@ -196,8 +196,9 @@ public final class OperationCatalog {
     /**
      * 根据协议和路径推导默认风险级别。
      *
-     * <p>内部操作为 red；GET 和模型列表探测为 green；测试或模型相关探测为 yellow；
-     * 其余可能改变状态的操作为 red。</p>
+     * <p>内部操作为 red；GET 为 green；外部 provider 探测为 yellow；其余可能改变
+     * 状态的操作为 red。探测不会自动获得 green，避免模型在无确认时把凭据发送到
+     * 外部服务。</p>
      * @param method HTTP 方法或 {@code INTERNAL}
      * @param path HTTP 路径
      * @return {@code green}、{@code yellow} 或 {@code red}
@@ -207,7 +208,7 @@ public final class OperationCatalog {
             return "red";
         }
         String normalizedPath = path == null ? "" : path.toLowerCase(Locale.ROOT);
-        if ("GET".equals(method) || ("POST".equals(method) && normalizedPath.endsWith("/models"))) {
+        if ("GET".equals(method)) {
             return "green";
         }
         if (normalizedPath.contains("/test") || normalizedPath.endsWith("/models")) {

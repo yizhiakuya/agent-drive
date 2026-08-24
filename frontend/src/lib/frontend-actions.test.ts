@@ -25,6 +25,14 @@ describe("frontend action registry", () => {
       operation: "files.delete",
       arguments: { path: "docs/readme.md" },
     })).toBeNull();
+    expect(normalizeFrontendAction({
+      operation: "files.open",
+      arguments: {},
+    })).toBeNull();
+    expect(normalizeFrontendAction({
+      operation: "files.open",
+      arguments: { path: "../secret" },
+    })).toBeNull();
   });
 
   it("rejects traversal and absolute paths", () => {

@@ -16,9 +16,9 @@ import com.agentdrive.agent.ToolReplayStore;
  * 输出和 parsed 值；同来源 context 未变化时不重复追加，{@code last_trace} 是覆盖式快照，
  * 空输入保存为空列表，而不是追加历史。</p>
  * <p>继承的 {@link ToolReplayStore} 语义是按 session、工具名和完整参数 JSON 精确匹配并
- * 持久化 replay 输出。replay 只适用于调用方标记为可安全重放的非 red 工具；生产实现为
- * 保证确定性匹配，按原样保存 arguments、output 和 parsed，不经过 transcript 脱敏器，
- * 因此调用方不得把密钥或高风险工具结果写入 replay。继承的
+ * 持久化 replay 输出。replay 只适用于调用方明确标记的 probe/idempotent operation；普通
+ * GET 和失败结果不进入 replay。生产实现会在落库前递归脱敏 arguments、output 和 parsed，
+ * mutation 后由 runtime 清空当前 session 的旧快照。继承的
  * {@link ConfirmationStateStore} 是另一条边界：pending confirmation 的原始参数和签名
  * 必须保留以便精确校验和重放，nonce 消费则必须是一次性的原子操作；这些原文不应混入
  * transcript 或 {@code last_trace}。</p>

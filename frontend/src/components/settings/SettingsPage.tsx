@@ -605,7 +605,7 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
 
       <section className="border-b border-border py-5">
         <h3 className="flex items-center gap-2 text-sm font-bold"><Eye className="size-4 text-muted" /> 视觉模型（图片识别）</h3>
-        <p className="text-muted text-xs mb-3">为图片生成结构化描述，再进入文件语义索引。使用 OpenAI 兼容的多模态 Chat Completions 接口。</p>
+        <p className="text-muted text-xs mb-3">为图片生成一段综合描述，再进入文件语义索引。使用 OpenAI 兼容的多模态 Chat Completions 接口。</p>
         <div className="flex flex-col gap-1.5 mb-3">
           <span className="text-xs text-muted">协议</span>
           <p className="text-sm">OpenAI 兼容（当前唯一支持）</p>

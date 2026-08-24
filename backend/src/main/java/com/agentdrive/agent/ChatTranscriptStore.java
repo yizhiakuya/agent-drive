@@ -2,6 +2,8 @@ package com.agentdrive.agent;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 保存 Agent 会话的用户消息、上下文注入、助手回复、思考内容和工具轨迹。
@@ -10,6 +12,22 @@ import java.util.Map;
  * 使用数据库、文件还是测试替身。</p>
  */
 public interface ChatTranscriptStore {
+    /**
+     * 读取服务端 owner-scoped 的模型历史。
+     *
+     * <p>{@link Optional#empty()} 表示实现没有提供权威历史（测试替身/旧兼容
+     * runtime），而 {@code Optional.of(emptyList())} 表示会话确实没有历史。生产实现
+     * 应在查询中同时校验 owner 和 session，避免把客户端提交的 assistant 文本当成真相源。</p>
+     *
+     * @param userId 当前认证 owner
+     * @param sessionId 当前会话 ID
+     * @param limit 最大消息数
+     * @return 服务端历史或未提供历史的标记
+     */
+    default Optional<List<Map<String, Object>>> loadHistory(UUID userId, String sessionId, int limit) {
+        return Optional.empty();
+    }
+
     /**
      * 返回当前会话已经成功读取过的 Skill 名称。
      *

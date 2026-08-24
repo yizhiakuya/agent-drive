@@ -5,10 +5,12 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -45,6 +47,20 @@ public interface SemanticSearchService {
     }
 
     /**
+     * 返回可直接用于回答的多 chunk 证据窗口。
+     *
+     * <p>这是面向 Agent 的补充入口，不改变普通文件列表的“每文件最佳 chunk”契约。
+     * 结果包含匹配 chunk、有限相邻 chunk、来源 revision 和相关度；调用方仍需把正文
+     * 当作不可信文件数据处理。</p>
+     */
+    default Map<String, Object> searchEvidence(UUID ownerId, String path, String query,
+                                                int limit, int neighbors, Double minScore,
+                                                String type, Double modifiedAfter,
+                                                Double modifiedBefore) {
+        throw new UnsupportedOperationException("semantic evidence search is not supported");
+    }
+
+    /**
      * 基于当前 owner embedding 配置的 Jina 语义检索实现。
      */
     @Service
@@ -52,6 +68,9 @@ public interface SemanticSearchService {
     final class Jina implements SemanticSearchService {
         private static final int MAX_QUERY_LENGTH = 2000;
         private static final int MAX_RESULTS = 100;
+        private static final int MAX_EVIDENCE_RESULTS = 16;
+        private static final int MAX_EVIDENCE_NEIGHBORS = 2;
+        private static final int EVIDENCE_CANDIDATE_MULTIPLIER = 4;
 
         private final EmbeddingService embeddings;
         private final IndexStore index;
@@ -91,24 +110,8 @@ public interface SemanticSearchService {
         public Map<String, Object> search(UUID ownerId, String path, String query,
                                           int limit, Double minScore, String type,
                                           Double modifiedAfter, Double modifiedBefore) {
-            if (ownerId == null) throw new FileStorageException(401, "authentication required");
-            String normalizedQuery = query == null ? "" : query.trim();
-            if (normalizedQuery.isBlank()) {
-                throw new FileStorageException(400, "语义搜索关键词不能为空");
-            }
-            if (normalizedQuery.length() > MAX_QUERY_LENGTH) {
-                throw new FileStorageException(400, "语义搜索关键词过长");
-            }
-
-            EmbeddingService.QueryEmbedding queryEmbedding;
-            try {
-                queryEmbedding = embeddings.embedQuery(ownerId, normalizedQuery);
-            } catch (IllegalStateException error) {
-                if ("embedding_not_configured".equals(error.getMessage())) {
-                    throw new FileStorageException(409, "请先配置 embedding 模型后再使用语义搜索");
-                }
-                throw new FileStorageException(502, "语义搜索向量服务暂时不可用");
-            }
+            String normalizedQuery = normalizeQuery(ownerId, query);
+            EmbeddingService.QueryEmbedding queryEmbedding = queryEmbedding(ownerId, normalizedQuery);
 
             int requestedLimit = Math.max(1, Math.min(limit, 100));
             double threshold = minScore == null ? Double.NEGATIVE_INFINITY : minScore;
@@ -160,6 +163,105 @@ public interface SemanticSearchService {
             return response;
         }
 
+        /**
+         * 查询面向 Agent 回答的多 chunk 证据窗口。
+         *
+         * <p>数据库候选窗口会比最终 limit 更宽，以便类型、时间和最低相关度过滤后
+         * 仍有足够证据；同一文件最多保留三个匹配 chunk，避免单个长文档吞掉全部结果。</p>
+         */
+        @Override
+        public Map<String, Object> searchEvidence(UUID ownerId, String path, String query,
+                                                   int limit, int neighbors, Double minScore,
+                                                   String type, Double modifiedAfter,
+                                                   Double modifiedBefore) {
+            String normalizedQuery = normalizeQuery(ownerId, query);
+            EmbeddingService.QueryEmbedding queryEmbedding = queryEmbedding(ownerId, normalizedQuery);
+            int requestedLimit = Math.max(1, Math.min(limit, MAX_EVIDENCE_RESULTS));
+            int requestedNeighbors = Math.max(0, Math.min(neighbors, MAX_EVIDENCE_NEIGHBORS));
+            validateMinScore(minScore);
+            validateTimeRange(modifiedAfter, modifiedBefore);
+            String normalizedType = normalizeType(type);
+            String normalizedPath = path == null || path.isBlank() ? null : path;
+            int candidateLimit = Math.min(100,
+                    requestedLimit * EVIDENCE_CANDIDATE_MULTIPLIER + 1);
+
+            List<Map<String, Object>> rows;
+            try {
+                rows = index.semanticEvidence(ownerId, queryEmbedding.fingerprint(), queryEmbedding.vector(),
+                        normalizedPath, candidateLimit, requestedNeighbors, minScore);
+            } catch (RuntimeException error) {
+                throw new FileStorageException(502, "语义搜索索引暂时不可用");
+            }
+
+            Map<String, EvidenceBuilder> grouped = new LinkedHashMap<>();
+            double threshold = minScore == null ? Double.NEGATIVE_INFINITY : minScore;
+            for (Map<String, Object> row : rows) {
+                double score = score(row.get("search_score"));
+                if (score < threshold) continue;
+                String filePath = text(row.get("path"));
+                if (filePath == null || filePath.isBlank()) continue;
+                Map<String, Object> filterItem = new LinkedHashMap<>();
+                filterItem.put("path", filePath);
+                filterItem.put("mtime", row.get("mtime"));
+                filterItem.put("is_dir", false);
+                if (!matchesFilter(filterItem, normalizedType, modifiedAfter, modifiedBefore)) continue;
+
+                String key = String.valueOf(row.getOrDefault("file_id", filePath))
+                        + "|" + String.valueOf(row.getOrDefault("vector_type", "text"))
+                        + "|" + String.valueOf(row.getOrDefault("match_chunk_index", "-1"));
+                EvidenceBuilder builder = grouped.computeIfAbsent(key,
+                        ignored -> new EvidenceBuilder(row, filePath, score));
+                builder.addContext(row);
+            }
+
+            List<Map<String, Object>> results = grouped.values().stream()
+                    .sorted(Comparator.comparingInt(EvidenceBuilder::resultRank))
+                    .map(EvidenceBuilder::asMap)
+                    .toList();
+            boolean hasMore = results.size() > requestedLimit;
+            if (hasMore) results = results.subList(0, requestedLimit);
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("path", path == null ? "" : path);
+            response.put("query", normalizedQuery);
+            response.put("mode", "semantic_evidence");
+            response.put("trust", "untrusted_data");
+            response.put("results", results);
+            response.put("evidence_status", results.isEmpty()
+                    ? "no_match_or_not_indexed" : "ok");
+            response.put("limit", requestedLimit);
+            response.put("neighbors", requestedNeighbors);
+            response.put("has_more", hasMore);
+            if (minScore != null) response.put("min_score", minScore);
+            response.put("type", normalizedType);
+            response.put("modified_after", modifiedAfter);
+            response.put("modified_before", modifiedBefore);
+            return response;
+        }
+
+        private String normalizeQuery(UUID ownerId, String query) {
+            if (ownerId == null) throw new FileStorageException(401, "authentication required");
+            String normalizedQuery = query == null ? "" : query.trim();
+            if (normalizedQuery.isBlank()) {
+                throw new FileStorageException(400, "语义搜索关键词不能为空");
+            }
+            if (normalizedQuery.length() > MAX_QUERY_LENGTH) {
+                throw new FileStorageException(400, "语义搜索关键词过长");
+            }
+            return normalizedQuery;
+        }
+
+        private EmbeddingService.QueryEmbedding queryEmbedding(UUID ownerId, String query) {
+            try {
+                return embeddings.embedQuery(ownerId, query);
+            } catch (IllegalStateException error) {
+                if ("embedding_not_configured".equals(error.getMessage())) {
+                    throw new FileStorageException(409, "请先配置 embedding 模型后再使用语义搜索");
+                }
+                throw new FileStorageException(502, "语义搜索向量服务暂时不可用");
+            }
+        }
+
         private boolean matchesFilter(Map<String, Object> item, String type,
                                       Double modifiedAfter, Double modifiedBefore) {
             String normalized = type == null || type.isBlank() ? "all" : type.toLowerCase(java.util.Locale.ROOT);
@@ -191,6 +293,96 @@ public interface SemanticSearchService {
                 return Double.parseDouble(String.valueOf(value));
             } catch (NumberFormatException ignored) {
                 return Double.NEGATIVE_INFINITY;
+            }
+        }
+
+        private double score(Object value) {
+            return value instanceof Number number ? number.doubleValue() : parseScore(value);
+        }
+
+        private void validateMinScore(Double minScore) {
+            if (minScore != null && (!Double.isFinite(minScore) || minScore < -1.0 || minScore > 1.0)) {
+                throw new FileStorageException(400, "最低相关度必须在 -1 到 1 之间");
+            }
+        }
+
+        private void validateTimeRange(Double modifiedAfter, Double modifiedBefore) {
+            if (modifiedAfter != null && (!Double.isFinite(modifiedAfter) || modifiedAfter < 0)) {
+                throw new FileStorageException(400, "modified_after must be a non-negative timestamp");
+            }
+            if (modifiedBefore != null && (!Double.isFinite(modifiedBefore) || modifiedBefore < 0)) {
+                throw new FileStorageException(400, "modified_before must be a non-negative timestamp");
+            }
+            if (modifiedAfter != null && modifiedBefore != null && modifiedAfter > modifiedBefore) {
+                throw new FileStorageException(400, "modified_after must not exceed modified_before");
+            }
+        }
+
+        private String normalizeType(String type) {
+            String normalized = type == null || type.isBlank()
+                    ? "all" : type.trim().toLowerCase(java.util.Locale.ROOT);
+            if (!Set.of("all", "file", "folder", "image", "video", "audio", "pdf", "text")
+                    .contains(normalized)) {
+                throw new FileStorageException(400, "不支持的文件类型筛选");
+            }
+            return normalized;
+        }
+
+        private String text(Object value) {
+            if (value == null) return null;
+            String result = String.valueOf(value).trim();
+            return result.isEmpty() ? null : result;
+        }
+
+        /** 将 SQL 的展开行聚合为一个匹配 chunk 和其相邻上下文。 */
+        private final class EvidenceBuilder {
+            private final Map<String, Object> item = new LinkedHashMap<>();
+            private final int matchChunk;
+            private final int resultRank;
+            private final Map<Integer, Map<String, Object>> neighbors = new TreeMap<>();
+
+            private EvidenceBuilder(Map<String, Object> row, String filePath, double score) {
+                this.matchChunk = integer(row.get("match_chunk_index"));
+                this.resultRank = integer(row.get("result_rank"));
+                item.put("name", fileName(filePath));
+                item.put("path", filePath);
+                item.put("source_revision", row.get("source_revision"));
+                item.put("document_type", row.getOrDefault("vector_type", "text"));
+                item.put("chunk_index", matchChunk);
+                item.put("chunk_version", row.get("chunk_version"));
+                item.put("search_score", score);
+                item.put("text", text(row.get("match_content")) == null
+                        ? "" : text(row.get("match_content")));
+            }
+
+            private void addContext(Map<String, Object> row) {
+                int contextChunk = integer(row.get("context_chunk_index"));
+                if (contextChunk == matchChunk || row.get("context_chunk_index") == null) return;
+                String context = text(row.get("context_content"));
+                if (context == null) return;
+                Map<String, Object> value = new LinkedHashMap<>();
+                value.put("chunk_index", contextChunk);
+                value.put("distance", Math.abs(contextChunk - matchChunk));
+                value.put("text", context);
+                neighbors.putIfAbsent(contextChunk, value);
+            }
+
+            private int resultRank() {
+                return resultRank;
+            }
+
+            private Map<String, Object> asMap() {
+                item.put("neighbors", List.copyOf(neighbors.values()));
+                return item;
+            }
+        }
+
+        private int integer(Object value) {
+            if (value instanceof Number number) return number.intValue();
+            try {
+                return Integer.parseInt(String.valueOf(value));
+            } catch (RuntimeException ignored) {
+                return -1;
             }
         }
 

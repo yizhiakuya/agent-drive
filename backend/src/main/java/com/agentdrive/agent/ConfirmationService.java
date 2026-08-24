@@ -108,6 +108,24 @@ public final class ConfirmationService {
     }
 
     /**
+     * 生成只供客户端展示/回传的 pending 视图。
+     *
+     * <p>原始 arguments 继续留在服务端状态存储中参与签名校验；客户端只需要 nonce、
+     * 时间戳和签名，不应获得可能包含敏感值的 replay 原文。</p>
+     *
+     * @param pending 服务端原始待确认记录
+     * @return 脱敏后的客户端视图
+     */
+    public Map<String, Object> publicView(Map<String, Object> pending) {
+        if (pending == null) return null;
+        Map<String, Object> view = new LinkedHashMap<>(pending);
+        view.put("arguments", redactedMap(mapValue(pending.get("arguments"))));
+        view.put("message", "Agent 请求执行高风险操作：" + pending.get("tool")
+                + "(" + redactedMap(mapValue(pending.get("arguments"))) + ")");
+        return view;
+    }
+
+    /**
      * 在默认会话分区中验证确认并消费 nonce。
      * @param pending 待执行记录，通常来自 {@link #issue(String, String, Map)}
      * @param confirmations 客户端提交的候选确认记录
@@ -179,7 +197,10 @@ public final class ConfirmationService {
                 return false;
             }
             Map<String, Object> pendingArguments = mapValue(pending.get("arguments"));
-            Map<String, Object> confirmationArguments = mapValue(confirmation.get("arguments"));
+            // 签名已经把服务端保存的原始参数绑定进去；客户端可以省略 arguments，
+            // 避免把待确认的敏感值再次回传。旧客户端仍可提交完整参数并接受严格比较。
+            Map<String, Object> confirmationArguments = confirmation.containsKey("arguments")
+                    ? mapValue(confirmation.get("arguments")) : pendingArguments;
             if (!argsHash(pendingArguments).equals(argsHash(confirmationArguments))) {
                 return false;
             }
@@ -189,7 +210,7 @@ public final class ConfirmationService {
             }
             long timestamp = longValue(confirmation.get("ts"));
             long now = System.currentTimeMillis() / 1000;
-            if (now - timestamp > NONCE_TTL_SECONDS) {
+            if (timestamp > now || now - timestamp > NONCE_TTL_SECONDS) {
                 return false;
             }
             String expected = sign(
@@ -208,7 +229,7 @@ public final class ConfirmationService {
     }
 
     /**
-     * 对参数 JSON 做确定性 SHA-256 摘要，并取前 16 个十六进制字符作为绑定值。
+     * 对参数 JSON 做确定性 SHA-256 摘要，并使用完整十六进制摘要作为绑定值。
      * @param arguments 待规范化的工具参数；null 按空 Map 处理
      * @return 用于确认签名和匹配的短摘要
      * @throws IllegalStateException 参数无法序列化或 SHA-256 不可用时抛出
@@ -218,7 +239,7 @@ public final class ConfirmationService {
             String json = canonicalMapper.writeValueAsString(arguments == null ? Map.of() : arguments);
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(json.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest).substring(0, 16);
+            return HexFormat.of().formatHex(digest);
         } catch (Exception error) {
             throw new IllegalStateException("Unable to hash confirmation arguments", error);
         }
@@ -261,10 +282,7 @@ public final class ConfirmationService {
      * @return 敏感字段替换为 {@code ***} 的 JSON；序列化失败时返回空对象
      */
     private String redacted(Map<String, Object> arguments) {
-        Map<String, Object> safe = new LinkedHashMap<>();
-        if (arguments != null) {
-            arguments.forEach((key, value) -> safe.put(key, isSecretKey(key) ? "***" : value));
-        }
+        Map<String, Object> safe = redactedMap(arguments);
         try {
             return canonicalMapper.writeValueAsString(safe);
         } catch (JsonProcessingException error) {
@@ -272,15 +290,37 @@ public final class ConfirmationService {
         }
     }
 
-    /**
-     * 判断参数名是否属于需要遮蔽的凭据类别。
-     * @param key 参数名
-     * @return 名称包含 key、token、secret 或 password（不区分大小写）时为 true
-     */
-    private static boolean isSecretKey(String key) {
-        String normalized = key == null ? "" : key.toLowerCase();
+    private Map<String, Object> redactedMap(Map<String, Object> arguments) {
+        return redactMap(arguments == null ? Map.of() : arguments);
+    }
+
+    private Map<String, Object> redactMap(Map<String, Object> arguments) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        arguments.forEach((key, value) -> result.put(key,
+                isSecretField(key) ? "***" : redactValue(value)));
+        return result;
+    }
+
+    private Object redactValue(Object value) {
+        if (value instanceof Map<?, ?> source) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            source.forEach((key, item) -> {
+                String name = String.valueOf(key);
+                nested.put(name, isSecretField(name) ? "***" : redactValue(item));
+            });
+            return nested;
+        }
+        if (value instanceof List<?> source) {
+            return source.stream().map(this::redactValue).toList();
+        }
+        return value;
+    }
+
+    private boolean isSecretField(String key) {
+        String normalized = key == null ? "" : key.toLowerCase(java.util.Locale.ROOT);
         return normalized.contains("key") || normalized.contains("token")
-                || normalized.contains("secret") || normalized.contains("password");
+                || normalized.contains("secret") || normalized.contains("password")
+                || normalized.contains("authorization") || normalized.contains("cookie");
     }
 
     /**

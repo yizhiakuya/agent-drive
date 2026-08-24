@@ -1,5 +1,6 @@
 export interface ToolTrace {
   tool: string;
+  step?: number;
   output: string;
   parsed?: Record<string, unknown> | unknown[];
 }
@@ -8,6 +9,7 @@ export interface ContextTrace {
   source: string;
   kind: string;
   content: string;
+  trust?: "system" | "instruction" | "user_data" | "untrusted_data";
 }
 
 export type ChatStreamEvent =
@@ -18,6 +20,8 @@ export type ChatStreamEvent =
   | { type: "tool_start"; data: Record<string, unknown> }
   | { type: "tool_progress"; data: Record<string, unknown> }
   | { type: "tool_trace"; trace: ToolTrace };
+
+const CONTEXT_TRUSTS = new Set(["system", "instruction", "user_data", "untrusted_data"]);
 
 /** 从后端事件对象读取文本增量；非文本 payload 按空增量处理。 */
 export function chatTextDelta(data: Record<string, unknown>): string {
@@ -60,9 +64,16 @@ function parseContext(data: Record<string, unknown>): ChatStreamEvent | null {
   if (typeof data.source !== "string" || !data.source
       || typeof data.kind !== "string" || !data.kind
       || typeof data.content !== "string" || !data.content) return null;
+  const trust = data.trust;
+  if (trust !== undefined && (typeof trust !== "string" || !CONTEXT_TRUSTS.has(trust))) return null;
   return {
     type: "context",
-    context: { source: data.source, kind: data.kind, content: data.content },
+    context: {
+      source: data.source,
+      kind: data.kind,
+      content: data.content,
+      ...(typeof trust === "string" ? { trust: trust as ContextTrace["trust"] } : {}),
+    },
   };
 }
 
@@ -71,6 +82,7 @@ function parseToolTrace(data: Record<string, unknown>): ChatStreamEvent | null {
   const parsed = data.parsed;
   const trace: ToolTrace = {
     tool: data.tool,
+    ...(typeof data.step === "number" ? { step: data.step } : {}),
     output: data.output,
     ...(isStructuredResult(parsed) ? { parsed } : {}),
   };

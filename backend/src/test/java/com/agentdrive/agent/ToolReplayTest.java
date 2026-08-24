@@ -52,6 +52,67 @@ class ToolReplayTest {
         assertThat(executions).hasValue(1);
     }
 
+    @Test
+    void doesNotReplayMutableGetSnapshots() {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicInteger executions = new AtomicInteger();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.http(
+                        "GET", "/api/v1/files", "List files"))),
+                (operation, request) -> Map.of("ok", true, "generation", executions.incrementAndGet()),
+                mapper
+        );
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new AlternatingGetModel(), backendApiTool, mapper, new OpenAiChatRequestFactory()
+        );
+
+        runtime.stream(new ChatRequest("第一次", null, null, "get-session", "auto"))
+                .collectList().block(Duration.ofSeconds(2));
+        runtime.stream(new ChatRequest("第二次", null, null, "get-session", "auto"))
+                .collectList().block(Duration.ofSeconds(2));
+
+        assertThat(executions).hasValue(2);
+    }
+
+    @Test
+    void doesNotCacheTransientToolFailures() {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicInteger executions = new AtomicInteger();
+        BackendApiTool backendApiTool = new BackendApiTool(
+                new OperationCatalog(List.of(OperationDefinition.http(
+                        "POST", "/api/v1/config/test", "Probe provider"))),
+                (operation, request) -> {
+                    if (executions.incrementAndGet() == 1) throw new IllegalStateException("temporary");
+                    return Map.of("ok", true, "ready", true);
+                },
+                mapper
+        );
+        LangChainAgentRuntime runtime = new LangChainAgentRuntime(
+                new AlternatingProbeModel(), backendApiTool, mapper, new OpenAiChatRequestFactory()
+        );
+
+        runtime.stream(new ChatRequest("第一次", null, null, "failure-session", "auto"))
+                .collectList().block(Duration.ofSeconds(2));
+        runtime.stream(new ChatRequest("第二次", null, null, "failure-session", "auto"))
+                .collectList().block(Duration.ofSeconds(2));
+
+        assertThat(executions).hasValue(2);
+    }
+
+    @Test
+    void replayStoreRedactsSensitiveSnapshots() {
+        ObjectMapper mapper = new ObjectMapper();
+        InMemoryToolReplayStore store = new InMemoryToolReplayStore(mapper);
+        store.save("safe-session", "probe", Map.of("api_key", "sk-secret-value"),
+                "Bearer provider-secret", Map.of("api_key", "sk-secret-value"));
+
+        ToolReplayStore.ToolReplay replay = store.find("safe-session", "probe",
+                Map.of("api_key", "sk-secret-value"));
+        assertThat(replay).isNotNull();
+        assertThat(replay.output()).doesNotContain("provider-secret");
+        assertThat(replay.parsed().toString()).doesNotContain("sk-secret-value");
+    }
+
     private static final class AlternatingToolModel implements StreamingChatModel {
         private int calls;
 
@@ -72,6 +133,50 @@ class ToolReplayTest {
                 handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
                         .aiMessage(AiMessage.from("完成"))
                         .build());
+            }
+        }
+    }
+
+    private static final class AlternatingGetModel implements StreamingChatModel {
+        private int calls;
+
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            if (calls++ % 2 == 0) {
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                                .id("get-call")
+                                .name("backend_api")
+                                .arguments("{\"action\":\"call\",\"operation\":\"GET /api/v1/files\"}")
+                                .build())))
+                        .build());
+            } else {
+                handler.onPartialResponse("完成");
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from("完成")).build());
+            }
+        }
+    }
+
+    private static final class AlternatingProbeModel implements StreamingChatModel {
+        private int calls;
+
+        @Override
+        public void doChat(dev.langchain4j.model.chat.request.ChatRequest request,
+                           StreamingChatResponseHandler handler) {
+            if (calls++ % 2 == 0) {
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from(List.of(ToolExecutionRequest.builder()
+                                .id("probe-call")
+                                .name("backend_api")
+                                .arguments("{\"action\":\"call\",\"operation\":\"POST /api/v1/config/test\"}")
+                                .build())))
+                        .build());
+            } else {
+                handler.onPartialResponse("完成");
+                handler.onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(AiMessage.from("完成")).build());
             }
         }
     }

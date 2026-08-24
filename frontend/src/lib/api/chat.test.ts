@@ -74,6 +74,22 @@ describe("chatStream SSE 解析", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ permission_mode: "ask" });
   });
 
+  it("把内联图片 MIME 字段转换为后端的 snake_case 契约", async () => {
+    global.fetch = vi.fn().mockResolvedValue(sseResponse([
+      'event: done\ndata: {"session_id":"image-session"}\n\n',
+    ]));
+
+    await chatStream("描述图片", [], null, [], () => {}, new AbortController().signal,
+      "auto", [], "", [], "auto", [{ name: "screen.png", mediaType: "image/png", data: "AQI=" }]);
+
+    const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({
+      inline_images: [{ name: "screen.png", media_type: "image/png", data: "AQI=" }],
+    });
+    expect(body.inline_images[0]).not.toHaveProperty("mediaType");
+  });
+
   it("把 owner 文件上下文路径放入聊天请求体", async () => {
     global.fetch = vi.fn().mockResolvedValue(sseResponse([
       'event: done\ndata: {"session_id":"file-session"}\n\n',

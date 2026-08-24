@@ -30,6 +30,25 @@ class ConfirmationServiceTest {
     }
 
     @Test
+    void publicViewMasksArgumentsWhileSignatureStillAcceptsOmittedArguments() {
+        ObjectMapper mapper = new ObjectMapper();
+        InMemoryConfirmationStateStore state = new InMemoryConfirmationStateStore();
+        ConfirmationService service = new ConfirmationService(
+                "public-view-key".getBytes(StandardCharsets.UTF_8), mapper, state);
+        Map<String, Object> pending = service.issue("session-public", "backend_api",
+                Map.of("api_key", "sk-secret-value", "path", "docs/a.txt"));
+
+        Map<String, Object> view = service.publicView(pending);
+        assertThat(view.get("arguments").toString()).doesNotContain("sk-secret-value");
+        Map<String, Object> confirmation = Map.of(
+                "tool", pending.get("tool"),
+                "nonce", pending.get("nonce"),
+                "ts", pending.get("ts"),
+                "signature", pending.get("signature"));
+        assertThat(service.verifyAndConsume("session-public", pending, List.of(confirmation))).isTrue();
+    }
+
+    @Test
     void stateStoreAllowsASecondServiceInstanceToResumePending() {
         InMemoryConfirmationStateStore state = new InMemoryConfirmationStateStore();
         ObjectMapper mapper = new ObjectMapper();

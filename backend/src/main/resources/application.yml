@@ -10,8 +10,8 @@ spring:
     username: ${AGENT_DRIVE_DATABASE_USERNAME:agent_drive}
     password: ${AGENT_DRIVE_DATABASE_PASSWORD:}
   codec:
-    # Chat inline images are bounded by ChatRequest to 16 MiB total JSON payload.
-    max-in-memory-size: 16MB
+    # Chat inline images are bounded by ChatRequest to an 80 MiB total JSON payload.
+    max-in-memory-size: 80MB
 
 server:
   address: ${AGENT_DRIVE_BIND_ADDRESS:127.0.0.1}

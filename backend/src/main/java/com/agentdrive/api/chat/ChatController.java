@@ -111,7 +111,15 @@ public final class ChatController {
                                        ServerWebExchange exchange) {
         return prepare(request, exchange)
                 .flatMap(normalized -> ReactiveExecution.onBlockingScheduler(
-                        () -> runtime.complete(normalized).timeout(COMPLETE_RUN_TIMEOUT)));
+                        () -> {
+                            if (runRegistry == null) {
+                                return runtime.complete(normalized).timeout(COMPLETE_RUN_TIMEOUT);
+                            }
+                            return runRegistry.start(normalized, runtime)
+                                    .collectList()
+                                    .map(LangChainAgentRuntime::aggregateEvents)
+                                    .timeout(COMPLETE_RUN_TIMEOUT);
+                        }));
     }
 
     /**

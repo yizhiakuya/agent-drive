@@ -20,7 +20,7 @@ import java.util.Map;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 /**
- * 提供图片批量结构化识别接口。
+ * 提供图片批量综合描述接口。
  *
  * <p>该接口只返回描述，不写入索引；需要把描述纳入语义检索时调用索引业务接口。</p>
  */
@@ -42,10 +42,10 @@ public final class VisionController {
     }
 
     /**
-     * 响应 {@code POST /api/v1/vision/describe}，批量返回图片结构化描述。
+     * 响应 {@code POST /api/v1/vision/describe}，批量返回图片综合文字描述。
      * @param request body.files 为 owner 相对图片路径列表，最多 16 项。
      * @param exchange 用于确定图片 owner 的请求上下文。
-     * @return 每个图片的 description JSON 对象和逐项错误。
+     * @return 每个图片的 description 文本和逐项错误。
      */
     @PostMapping("/describe")
     public Mono<Map<String, Object>> describe(@RequestBody(required = false) DescribeRequest request,

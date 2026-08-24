@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
 import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -38,7 +40,7 @@ public final class InMemoryToolReplayStore implements ToolReplayStore {
         if (sessionId == null || sessionId.isBlank()) {
             return null;
         }
-        return entries.get(key(sessionId, tool, arguments));
+        return entries.get(key(sessionId, tool, arguments == null ? Map.of() : arguments));
     }
 
     /**
@@ -55,7 +57,15 @@ public final class InMemoryToolReplayStore implements ToolReplayStore {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
-        entries.put(key(sessionId, tool, arguments), new ToolReplay(output, parsed));
+        entries.put(key(sessionId, tool, arguments == null ? Map.of() : arguments), new ToolReplay(
+                redactText(output), castMap(redactValue(parsed))));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void invalidate(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        entries.keySet().removeIf(entry -> sessionId.equals(entry.sessionId()));
     }
 
     /**
@@ -72,6 +82,45 @@ public final class InMemoryToolReplayStore implements ToolReplayStore {
         } catch (JsonProcessingException error) {
             throw new IllegalArgumentException("Unable to canonicalize tool arguments", error);
         }
+    }
+
+    private Map<String, Object> redactMap(Map<String, Object> value) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) redactValue(value);
+        return result;
+    }
+
+    private Object redactValue(Object value) {
+        if (value instanceof Map<?, ?> source) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            source.forEach((key, item) -> {
+                String name = String.valueOf(key);
+                result.put(name, isSecret(name) ? "***" : redactValue(item));
+            });
+            return result;
+        }
+        if (value instanceof List<?> source) return source.stream().map(this::redactValue).toList();
+        return value;
+    }
+
+    private Map<String, Object> castMap(Object value) {
+        if (!(value instanceof Map<?, ?> source)) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
+    }
+
+    private String redactText(String value) {
+        if (value == null) return null;
+        return value.replaceAll("(?i)Bearer\\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer [REDACTED]")
+                .replaceAll("\\b(?:sk-[A-Za-z0-9_-]{8,}|jina_[A-Za-z0-9_-]{8,})\\b", "[REDACTED]");
+    }
+
+    private boolean isSecret(String key) {
+        String normalized = key.toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("key") || normalized.contains("token")
+                || normalized.contains("secret") || normalized.contains("password")
+                || normalized.contains("authorization") || normalized.contains("cookie");
     }
 
     /**
