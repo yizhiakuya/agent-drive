@@ -67,4 +67,22 @@ class FileContentServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("file_not_found");
     }
+
+    @Test
+    void createsMigrationManifestWithoutIncludingInternalFiles(@TempDir Path root) throws Exception {
+        UUID owner = UUID.randomUUID();
+        Path ownerRoot = root.resolve(owner.toString());
+        Files.createDirectories(ownerRoot.resolve("docs"));
+        Files.createDirectories(ownerRoot.resolve(".versions"));
+        Files.writeString(ownerRoot.resolve("docs/a.txt"), "hello");
+        Files.writeString(ownerRoot.resolve(".versions/old.txt"), "old");
+
+        FileContentService service = new FileContentService(
+                new FileServiceProperties("internal", root.toString(), 1024L));
+
+        var result = service.manifest(owner.toString());
+
+        assertThat(result).containsEntry("file_count", 1);
+        assertThat(result.get("entries").toString()).contains("docs/a.txt").doesNotContain(".versions");
+    }
 }

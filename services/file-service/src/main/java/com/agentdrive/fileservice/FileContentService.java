@@ -3,6 +3,7 @@ package com.agentdrive.fileservice;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -10,6 +11,8 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -20,6 +23,7 @@ import java.util.UUID;
  */
 @Service
 public final class FileContentService {
+    private static final int MAX_MANIFEST_ENTRIES = 100_000;
     private final FileServiceProperties properties;
 
     /** 创建文件内容服务并确保存储根存在。 */
@@ -66,6 +70,46 @@ public final class FileContentService {
         }
     }
 
+    /**
+     * 生成 owner 文件迁移校验清单。
+     * 清单只包含可见普通文件的相对路径、大小和 MD5，不返回文件内容；内部目录、符号链接和目录本身不会进入清单。
+     *
+     * @param ownerId owner UUID 文本
+     * @return 可排序、可比对的文件清单和总大小
+     */
+    public Map<String, Object> manifest(String ownerId) {
+        UUID owner = parseOwner(ownerId);
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        if (!Files.isDirectory(ownerRoot, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("file_not_found");
+        }
+        List<Map<String, Object>> entries = new ArrayList<>();
+        long totalBytes = 0;
+        try (var paths = Files.walk(ownerRoot)) {
+            var iterator = paths.iterator();
+            while (iterator.hasNext()) {
+                Path path = iterator.next();
+                if (path.equals(ownerRoot) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+                        || hasSymlinkComponent(ownerRoot, path) || isInternalPath(ownerRoot, path)) {
+                    continue;
+                }
+                if (entries.size() >= MAX_MANIFEST_ENTRIES) {
+                    throw new IllegalArgumentException("manifest_too_large");
+                }
+                long size = Files.size(path);
+                String relative = ownerRoot.relativize(path).toString().replace('\\', '/');
+                entries.add(Map.of("path", relative, "size_bytes", size, "content_md5", md5(path)));
+                totalBytes += size;
+            }
+        } catch (IllegalArgumentException error) {
+            throw error;
+        } catch (IOException error) {
+            throw new IllegalStateException("manifest_failed", error);
+        }
+        return Map.of("ok", true, "owner_id", owner.toString(), "entries", List.copyOf(entries),
+                "file_count", entries.size(), "total_size_bytes", totalBytes);
+    }
+
     private Path resolve(UUID owner, String path) {
         Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
         if (!Files.isDirectory(ownerRoot, LinkOption.NOFOLLOW_LINKS)) {
@@ -87,6 +131,31 @@ public final class FileContentService {
             if (Files.isSymbolicLink(current)) return true;
         }
         return false;
+    }
+
+    private boolean isInternalPath(Path ownerRoot, Path target) {
+        for (Path part : ownerRoot.relativize(target)) {
+            String name = part.toString();
+            if (name.equals(".index") || name.equals(".trash") || name.equals(".versions")
+                    || name.startsWith(".upload") || name.startsWith(".copy")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String md5(Path path) throws IOException {
+        try (InputStream input = Files.newInputStream(path)) {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) digest.update(buffer, 0, count);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new IllegalStateException("MD5 is unavailable", error);
+        }
     }
 
     private UUID parseOwner(String value) {
