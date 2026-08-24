@@ -1,6 +1,6 @@
 # 微服务演进架构
 
-> 当前主 API 仍保持 Java 模块化单体；Content Service 已独立部署并在生产接管视觉调用，开发环境未配置 URL 时仍回退本地实现。File Service 已独立部署但尚未切流，必须先完成 owner 数据原子迁移和 mutation 同步。
+> 当前主 API 仍保持 Java 模块化单体；Content Service 已独立部署并在生产接管视觉调用，开发环境未配置 URL 时仍回退本地实现。File Service 已完成首批 owner 文件镜像但尚未切流，必须先完成 mutation 同步。
 
 ## 1. 当前基线
 
@@ -134,6 +134,7 @@ index.updated
 - 每次读取都重新校验 owner、相对路径、符号链接、内部目录、文件大小和 MD5；返回只包含当前请求的 Base64 原始 bytes，不缓存内容。
 - manifest 只返回可见文件的相对路径、大小和 MD5，用于迁移前比对新旧存储；条目有界，内部目录和符号链接不会进入清单。
 - `RemoteFileContentPort` 可按 `AGENT_DRIVE_FILE_SERVICE_URL` 和 `AGENT_DRIVE_FILE_SERVICE_TOKEN` 启用；主 API 启动时会先调用 `/internal/v1/ready`，未 ready 直接启动失败。当前只把视觉描述链路切换到该端口，普通文件 mutation 和文本索引仍保留在单体，避免在数据迁移前产生双写或空目录误读。
+- 2026-08-24 已完成首批 owner 文件镜像：`796` 个可见普通文件、`776425013` 字节，源/目标逐文件 MD5 比对 `missing=0/extra=0/mismatch=0`。File Service 已配置独立 0600 token 并 ready，但 `AGENT_DRIVE_FILE_SERVICE_URL` 仍保持为空，直到上传、覆盖、移动、复制、回收站和文本写入具备原子镜像同步。
 - `deploy/agent-drive-file.service` 和 `scripts/deploy.ps1 -Target file|all` 负责独立发布、健康检查和回滚；服务默认监听 `127.0.0.1:8020`。
 
 ## 10. Identity Service 当前实现
