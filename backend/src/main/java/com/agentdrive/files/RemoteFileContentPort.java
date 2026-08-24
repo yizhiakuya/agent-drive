@@ -31,6 +31,7 @@ public final class RemoteFileContentPort implements FileContentPort {
 
     private final ObjectMapper objectMapper;
     private final URI endpoint;
+    private final URI readyEndpoint;
     private final String token;
     private final HttpClient client = HttpClientSupport.builder(TIMEOUT).build();
 
@@ -43,8 +44,38 @@ public final class RemoteFileContentPort implements FileContentPort {
      */
     public RemoteFileContentPort(String serviceUrl, String token, ObjectMapper objectMapper) {
         this.endpoint = endpoint(serviceUrl);
+        this.readyEndpoint = endpoint(serviceUrl, "/internal/v1/ready");
         this.token = token == null ? "" : token.trim();
         this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 启动期验证远程 File Service 的 token、存储根和 readiness。
+     * @throws IllegalStateException 远程服务不可用或 readiness 为 false 时抛出
+     */
+    public void requireReady() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(readyEndpoint)
+                    .timeout(TIMEOUT)
+                    .header(TOKEN_HEADER, token)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request,
+                    HttpClientSupport.limitedUtf8BodyHandler(32 * 1024));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException("file service readiness returned HTTP " + response.statusCode());
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            if (root == null || !root.path("ready").asBoolean(false)) {
+                throw new IllegalStateException("file service is not ready");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("file service readiness was interrupted", error);
+        } catch (IOException error) {
+            throw new IllegalStateException("file service readiness failed", error);
+        }
     }
 
     /** 请求并校验 owner 文件原始 bytes。 */
@@ -104,6 +135,10 @@ public final class RemoteFileContentPort implements FileContentPort {
     }
 
     private URI endpoint(String raw) {
+        return endpoint(raw, "/internal/v1/files/content");
+    }
+
+    private URI endpoint(String raw, String suffix) {
         try {
             URI base = new URI(raw == null ? "" : raw.trim().replaceAll("/+$", ""));
             String scheme = base.getScheme() == null ? "" : base.getScheme().toLowerCase(Locale.ROOT);
@@ -112,8 +147,7 @@ public final class RemoteFileContentPort implements FileContentPort {
                 throw new IllegalArgumentException("file service URL is invalid");
             }
             String path = base.getPath() == null ? "" : base.getPath();
-            return path.endsWith("/internal/v1/files/content")
-                    ? base : URI.create(base + "/internal/v1/files/content");
+            return path.endsWith(suffix) ? base : URI.create(base + suffix);
         } catch (Exception error) {
             throw new IllegalArgumentException("file service URL is invalid", error);
         }

@@ -52,6 +52,19 @@ class RemoteFileContentPortTest {
                 .hasMessageContaining("URL is invalid");
     }
 
+    @Test
+    void requiresRemoteReadinessBeforeCutover() throws IOException {
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/internal/v1/ready", exchange ->
+                respond(exchange, 200, "{\"ready\":true,\"service\":\"file\"}"));
+        server.start();
+
+        RemoteFileContentPort port = new RemoteFileContentPort(
+                "http://127.0.0.1:" + server.getAddress().getPort(), "internal", new ObjectMapper());
+
+        org.assertj.core.api.Assertions.assertThatCode(port::requireReady).doesNotThrowAnyException();
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");

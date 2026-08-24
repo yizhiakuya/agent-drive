@@ -213,8 +213,10 @@ public class ApplicationConfiguration {
             if (properties.fileServiceToken().isBlank()) {
                 throw new IllegalStateException("app.file-service-token is required when file-service-url is configured");
             }
-            contentFiles = new RemoteFileContentPort(properties.fileServiceUrl(),
+            RemoteFileContentPort remoteFiles = new RemoteFileContentPort(properties.fileServiceUrl(),
                     properties.fileServiceToken(), objectMapper);
+            remoteFiles.requireReady();
+            contentFiles = remoteFiles;
         }
         if (properties.contentServiceUrl().isBlank()) {
             return new VisionDescriptionService(configs, contentFiles, client);

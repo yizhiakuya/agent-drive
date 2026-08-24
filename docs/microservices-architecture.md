@@ -133,7 +133,7 @@ index.updated
 - 源码位于 `services/file-service`，当前提供 `POST /internal/v1/files/content`、`GET /internal/v1/files/manifest` 和 `/internal/v1/ready`；服务拥有独立的 owner UUID 分区，不读取主 API 数据库或主 API 本地路径。
 - 每次读取都重新校验 owner、相对路径、符号链接、内部目录、文件大小和 MD5；返回只包含当前请求的 Base64 原始 bytes，不缓存内容。
 - manifest 只返回可见文件的相对路径、大小和 MD5，用于迁移前比对新旧存储；条目有界，内部目录和符号链接不会进入清单。
-- `RemoteFileContentPort` 可按 `AGENT_DRIVE_FILE_SERVICE_URL` 和 `AGENT_DRIVE_FILE_SERVICE_TOKEN` 启用。当前只把视觉描述链路切换到该端口，普通文件 mutation 和文本索引仍保留在单体，避免在数据迁移前产生双写或空目录误读。
+- `RemoteFileContentPort` 可按 `AGENT_DRIVE_FILE_SERVICE_URL` 和 `AGENT_DRIVE_FILE_SERVICE_TOKEN` 启用；主 API 启动时会先调用 `/internal/v1/ready`，未 ready 直接启动失败。当前只把视觉描述链路切换到该端口，普通文件 mutation 和文本索引仍保留在单体，避免在数据迁移前产生双写或空目录误读。
 - `deploy/agent-drive-file.service` 和 `scripts/deploy.ps1 -Target file|all` 负责独立发布、健康检查和回滚；服务默认监听 `127.0.0.1:8020`。
 
 ## 10. Identity Service 当前实现
