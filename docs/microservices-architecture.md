@@ -158,7 +158,7 @@ index.updated
 
 - `chat_sessions.run_state`、confirmation、replay、transcript 和 nonce 已在 PostgreSQL；新增 `chat_run_events` 持久化 text/reasoning/tool/done/error 等 SSE 事件。
 - `ChatRunRegistry` 仍在当前进程执行 runtime，但重连不再只依赖 JVM 内存：本进程没有 active run 时会从 owner session 的 `chat_run_events` 回放最近事件，进程重启后已完成/已失败的运行不会丢失可审计结果。
-- 实时跨副本 relay 仍需 Redis/NATS 或数据库轮询优化；在此完成前不横向扩展 Agent Service，不把 `ChatRunRegistry` 当成可跨进程实时队列。
+- 无本地 relay 时，重连端点现在以 250ms 有界数据库轮询读取新事件，直到终态或 10 分钟上限；它不创建任务队列，也不恢复已结束的 runtime。Redis/NATS 仍可作为后续高并发优化，但 Agent Service 已具备跨进程事件续接的最小可用边界。
 
 ## 13. 当前阶段验收
 
