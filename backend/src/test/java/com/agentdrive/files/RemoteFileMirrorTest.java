@@ -79,6 +79,26 @@ class RemoteFileMirrorTest {
         mirror.deletePath(owner, "folder");
     }
 
+    @Test
+    void sendsTrashAndRestoreMutations() throws IOException {
+        UUID owner = UUID.randomUUID();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/internal/v1/files/mirror/trash", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("POST");
+            respond(exchange, 200, "{\"ok\":true}");
+        });
+        server.createContext("/internal/v1/files/mirror/restore", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("POST");
+            respond(exchange, 200, "{\"ok\":true}");
+        });
+        server.start();
+
+        RemoteFileMirror mirror = new RemoteFileMirror(
+                "http://127.0.0.1:" + server.getAddress().getPort(), "internal", new ObjectMapper());
+        mirror.trashPath(owner, "a.txt", UUID.randomUUID().toString());
+        mirror.restorePath(owner, UUID.randomUUID().toString(), "a.txt");
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");

@@ -1052,11 +1052,17 @@ public class MybatisFileStorageService implements FileStorageService {
         long revision = metadata == null || metadata.get("revision") == null
                 ? 1 : longValue(metadata.get("revision"));
         try (MutationScope mutation = mutationScope()) {
+            boolean[] mirrored = {false};
+            mutation.onPublished(() -> { }, () -> {
+                if (mirrored[0]) mirror.restorePath(ownerId, trashId, original);
+            });
             PublishedMove publication = new PublishedMove(ownerId, source, stored, true);
             mutation.onPublished(publication::commit, publication::rollback);
             publication.publish();
             mapper.insertTrash(trashId, ownerId.toString(), original, ".trash/" + trashId, revision);
             long size = Files.isRegularFile(stored, LinkOption.NOFOLLOW_LINKS) ? Files.size(stored) : 0;
+            mirror.trashPath(ownerId, original, trashId);
+            mirrored[0] = true;
             mutation.complete();
             return mapOf("path", original, "trash_id", trashId, "trash_path", trashId,
                     "deleted_at", Instant.now().toEpochMilli() / 1000.0, "size", size,
@@ -1120,6 +1126,10 @@ public class MybatisFileStorageService implements FileStorageService {
         Path target = safePath(ownerId, original, false);
         Path stored = safeInternalTrash(ownerId, String.valueOf(row.get("stored_path")));
         try (MutationScope mutation = mutationScope()) {
+            boolean[] mirrored = {false};
+            mutation.onPublished(() -> { }, () -> {
+                if (mirrored[0]) mirror.trashPath(ownerId, original, String.valueOf(row.get("trash_id")));
+            });
             if (!Files.exists(stored, LinkOption.NOFOLLOW_LINKS)) {
                 throw new FileStorageException(404, "回收站内容不存在");
             }
@@ -1131,6 +1141,8 @@ public class MybatisFileStorageService implements FileStorageService {
             publication.publish();
             mapper.deleteTrash(ownerId.toString(), String.valueOf(row.get("trash_id")));
             refreshMetadata(ownerId, target);
+            mirror.restorePath(ownerId, String.valueOf(row.get("trash_id")), original);
+            mirrored[0] = true;
             mutation.complete();
             return mapOf("restored", original);
         } catch (FileStorageException error) {

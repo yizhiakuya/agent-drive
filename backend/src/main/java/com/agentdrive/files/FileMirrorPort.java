@@ -30,6 +30,16 @@ public interface FileMirrorPort {
         throw new UnsupportedOperationException("file mirror copy is not supported");
     }
 
+    /** 把路径移入远程回收站。 */
+    default void trashPath(UUID ownerId, String path, String trashId) {
+        throw new UnsupportedOperationException("file mirror trash is not supported");
+    }
+
+    /** 从远程回收站恢复路径。 */
+    default void restorePath(UUID ownerId, String trashId, String path) {
+        throw new UnsupportedOperationException("file mirror restore is not supported");
+    }
+
     /** 返回不产生网络请求的空镜像实现。 */
     static FileMirrorPort noop() {
         return new FileMirrorPort() {
@@ -51,6 +61,14 @@ public interface FileMirrorPort {
 
             @Override
             public void copyPath(UUID ownerId, String source, String destination, boolean overwrite) {
+            }
+
+            @Override
+            public void trashPath(UUID ownerId, String path, String trashId) {
+            }
+
+            @Override
+            public void restorePath(UUID ownerId, String trashId, String path) {
             }
         };
     }

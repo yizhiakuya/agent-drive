@@ -107,6 +107,31 @@ public final class FileContentController {
         return service.copyMirror(request);
     }
 
+    /** 把镜像路径移入回收站。 */
+    @PostMapping("/files/mirror/trash")
+    public Map<String, Object> trashMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                           @Valid @RequestBody MirrorTrashRequest request) {
+        authorize(token);
+        return service.trashMirror(request);
+    }
+
+    /** 从回收站恢复镜像路径。 */
+    @PostMapping("/files/mirror/restore")
+    public Map<String, Object> restoreMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                              @Valid @RequestBody MirrorRestoreRequest request) {
+        authorize(token);
+        return service.restoreMirror(request);
+    }
+
+    /** 永久删除一个镜像回收站条目。 */
+    @DeleteMapping("/files/mirror/trash")
+    public Map<String, Object> emptyMirrorTrash(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                                 @RequestParam("owner_id") String ownerId,
+                                                 @RequestParam("trash_id") String trashId) {
+        authorize(token);
+        return service.emptyMirrorTrash(ownerId, trashId);
+    }
+
     private void authorize(String token) {
         if (properties.internalToken().isBlank() || token == null || !MessageDigest.isEqual(
                 properties.internalToken().getBytes(StandardCharsets.UTF_8),

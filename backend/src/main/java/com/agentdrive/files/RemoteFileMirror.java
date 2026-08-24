@@ -125,6 +125,41 @@ public final class RemoteFileMirror implements FileMirrorPort {
         pathMutation("/internal/v1/files/mirror/copy", ownerId, source, destination, overwrite);
     }
 
+    /** 把路径移入远程回收站。 */
+    @Override
+    public void trashPath(UUID ownerId, String path, String trashId) {
+        trashMutation("/internal/v1/files/mirror/trash", Map.of(
+                "owner_id", ownerId.toString(), "path", path, "trash_id", trashId));
+    }
+
+    /** 从远程回收站恢复路径。 */
+    @Override
+    public void restorePath(UUID ownerId, String trashId, String path) {
+        trashMutation("/internal/v1/files/mirror/restore", Map.of(
+                "owner_id", ownerId.toString(), "trash_id", trashId, "path", path));
+    }
+
+    private void trashMutation(String path, Map<String, Object> body) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(endpoint(path))
+                    .timeout(TIMEOUT)
+                    .header(TOKEN_HEADER, token)
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body),
+                            StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = client.send(request,
+                    HttpClientSupport.limitedUtf8BodyHandler(64 * 1024));
+            requireOk(response);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new FileStorageException(502, "文件镜像回收站操作中断", error);
+        } catch (IOException error) {
+            throw new FileStorageException(502, "文件镜像回收站操作失败", error);
+        }
+    }
+
     private void pathMutation(String path, UUID ownerId, String source, String destination, boolean overwrite) {
         try {
             Map<String, Object> body = Map.of("owner_id", ownerId.toString(), "source", source,

@@ -260,6 +260,83 @@ public final class FileContentService {
         }
     }
 
+    /** 把 owner 路径镜像原子移入内部回收站。 */
+    public Map<String, Object> trashMirror(MirrorTrashRequest request) {
+        UUID owner = parseOwner(request.ownerId());
+        String path = normalizeRelative(request.path());
+        String trashId = parseTrashId(request.trashId());
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        Path source = resolveExisting(ownerRoot, path);
+        Path target = trashRoot(ownerRoot).resolve(trashId).normalize();
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("mirror trash target already exists");
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            Files.move(source, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            return Map.of("ok", true, "owner_id", owner.toString(), "path", path,
+                    "trash_id", trashId, "trashed", true);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            try {
+                Files.move(source, target);
+                return Map.of("ok", true, "owner_id", owner.toString(), "path", path,
+                        "trash_id", trashId, "trashed", true);
+            } catch (IOException error) {
+                throw new IllegalStateException("mirror_trash_failed", error);
+            }
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_trash_failed", error);
+        }
+    }
+
+    /** 从内部回收站原子恢复到 owner 公共路径。 */
+    public Map<String, Object> restoreMirror(MirrorRestoreRequest request) {
+        UUID owner = parseOwner(request.ownerId());
+        String path = normalizeRelative(request.path());
+        String trashId = parseTrashId(request.trashId());
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        Path source = trashRoot(ownerRoot).resolve(trashId).normalize();
+        if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS) || hasSymlinkComponent(trashRoot(ownerRoot), source)) {
+            throw new IllegalArgumentException("mirror trash entry not found");
+        }
+        Path target = ownerRoot.resolve(path).normalize();
+        if (!target.startsWith(ownerRoot) || Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("mirror restore target is invalid");
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            Files.move(source, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            return Map.of("ok", true, "owner_id", owner.toString(), "path", path,
+                    "trash_id", trashId, "restored", true);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            try {
+                Files.move(source, target);
+                return Map.of("ok", true, "owner_id", owner.toString(), "path", path,
+                        "trash_id", trashId, "restored", true);
+            } catch (IOException error) {
+                throw new IllegalStateException("mirror_restore_failed", error);
+            }
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_restore_failed", error);
+        }
+    }
+
+    /** 删除内部回收站中的一个镜像树。 */
+    public Map<String, Object> emptyMirrorTrash(String ownerId, String trashId) {
+        UUID owner = parseOwner(ownerId);
+        String id = parseTrashId(trashId);
+        Path source = trashRoot(properties.rootPath().resolve(owner.toString()).normalize()).resolve(id).normalize();
+        if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
+            return Map.of("ok", true, "owner_id", owner.toString(), "trash_id", id, "deleted", false);
+        }
+        try (var paths = Files.walk(source).sorted(java.util.Comparator.reverseOrder())) {
+            for (Path path : paths.toList()) Files.deleteIfExists(path);
+            return Map.of("ok", true, "owner_id", owner.toString(), "trash_id", id, "deleted", true);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_trash_delete_failed", error);
+        }
+    }
+
     private Path resolve(UUID owner, String path) {
         Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
         Path target = resolveExisting(ownerRoot, path);
@@ -302,6 +379,24 @@ public final class FileContentService {
                     Files.copy(path, destination, LinkOption.NOFOLLOW_LINKS);
                 }
             }
+        }
+    }
+
+    private Path trashRoot(Path ownerRoot) {
+        Path trash = ownerRoot.resolve(".trash").normalize();
+        try {
+            Files.createDirectories(trash);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror trash root unavailable", error);
+        }
+        return trash;
+    }
+
+    private String parseTrashId(String value) {
+        try {
+            return UUID.fromString(value == null ? "" : value.trim()).toString();
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("trash_id is invalid", error);
         }
     }
 

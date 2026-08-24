@@ -133,4 +133,21 @@ class FileContentServiceTest {
 
         assertThat(Files.exists(folder)).isFalse();
     }
+
+    @Test
+    void mirrorsTrashAndRestoreByTrashId(@TempDir Path root) throws Exception {
+        UUID owner = UUID.randomUUID();
+        Path source = root.resolve(owner.toString()).resolve("a.txt");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "content");
+        String trashId = UUID.randomUUID().toString();
+        FileContentService service = new FileContentService(
+                new FileServiceProperties("internal", root.toString(), 1024L));
+
+        service.trashMirror(new MirrorTrashRequest(owner.toString(), "a.txt", trashId));
+        assertThat(Files.exists(source)).isFalse();
+        service.restoreMirror(new MirrorRestoreRequest(owner.toString(), trashId, "a.txt"));
+
+        assertThat(Files.readString(source)).isEqualTo("content");
+    }
 }
