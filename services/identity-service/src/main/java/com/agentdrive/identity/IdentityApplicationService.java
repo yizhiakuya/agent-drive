@@ -90,6 +90,15 @@ public class IdentityApplicationService {
         return Map.of("ok", true, "owner_id", owner.toString(), "kind", request.kind());
     }
 
+    /** 撤销一个过渡期 credential hash。 */
+    @Transactional
+    public Map<String, Object> revokeCredential(String tokenHash) {
+        if (tokenHash == null || tokenHash.isBlank()) {
+            throw new IdentityException(400, "credential_hash_missing", "credential hash is required");
+        }
+        return Map.of("ok", true, "revoked", store.revoke(tokenHash));
+    }
+
     private Map<String, Object> issueSession(UUID owner) {
         Instant expiresAt = Instant.now().plus(SESSION_TTL);
         String token = randomToken();

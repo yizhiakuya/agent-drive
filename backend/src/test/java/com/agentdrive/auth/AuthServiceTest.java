@@ -70,6 +70,35 @@ class AuthServiceTest {
                 .isInstanceOf(AuthService.InvalidPairingException.class);
     }
 
+    @Test
+    void mirrorsNewSessionAndDeviceHashesWhenConfigured() {
+        FakeAccountStore store = new FakeAccountStore();
+        RecordingMirror mirror = new RecordingMirror();
+        AuthService service = new AuthService(store, new PasswordHasher(), mirror);
+
+        service.setup("password-123");
+        service.issueDeviceToken(store.userId, "phone-1", "Phone");
+
+        assertThat(mirror.registeredKinds).containsExactly("SESSION", "DEVICE");
+        assertThat(mirror.registeredHashes).allMatch(hash -> hash.matches("[0-9a-f]{64}"));
+    }
+
+    private static final class RecordingMirror implements CredentialMirror {
+        private final java.util.List<String> registeredKinds = new java.util.ArrayList<>();
+        private final java.util.List<String> registeredHashes = new java.util.ArrayList<>();
+
+        @Override
+        public void register(UUID ownerId, AuthenticatedPrincipal.CredentialKind kind,
+                              String tokenHash, Instant expiresAt) {
+            registeredKinds.add(kind.name());
+            registeredHashes.add(tokenHash);
+        }
+
+        @Override
+        public void revoke(String tokenHash) {
+        }
+    }
+
     private static final class FakeAccountStore implements AuthAccountStore {
         private final UUID userId = UUID.randomUUID();
         private String passwordHash;

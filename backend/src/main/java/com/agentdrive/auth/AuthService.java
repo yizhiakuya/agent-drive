@@ -23,6 +23,7 @@ public final class AuthService {
 
     private final AuthAccountStore store;
     private final PasswordHasher passwords;
+    private final CredentialMirror credentialMirror;
 
     /**
      * 绑定认证数据存储和密码哈希器。
@@ -30,8 +31,14 @@ public final class AuthService {
      * @param passwords 负责 PBKDF2 哈希和验证的服务
      */
     public AuthService(AuthAccountStore store, PasswordHasher passwords) {
+        this(store, passwords, CredentialMirror.noop());
+    }
+
+    /** 创建带可选 Identity Service credential 双写的认证服务。 */
+    public AuthService(AuthAccountStore store, PasswordHasher passwords, CredentialMirror credentialMirror) {
         this.store = store;
         this.passwords = passwords;
+        this.credentialMirror = credentialMirror == null ? CredentialMirror.noop() : credentialMirror;
     }
 
     /**
@@ -90,12 +97,15 @@ public final class AuthService {
     public boolean logout(String cookieCredential, String bearerCredential) {
         boolean revoked = false;
         if (cookieCredential != null && !cookieCredential.isBlank()) {
-            revoked = store.revokeSession(CredentialHash.sha256(cookieCredential)) || revoked;
+            String hash = CredentialHash.sha256(cookieCredential);
+            revoked = store.revokeSession(hash) || revoked;
+            credentialMirror.revoke(hash);
         }
         if (bearerCredential != null && !bearerCredential.isBlank()) {
             String hash = CredentialHash.sha256(bearerCredential);
             boolean sessionRevoked = store.revokeSession(hash);
             boolean deviceRevoked = store.revokeDevice(hash);
+            credentialMirror.revoke(hash);
             revoked = sessionRevoked || deviceRevoked || revoked;
         }
         return revoked;
@@ -114,7 +124,10 @@ public final class AuthService {
         requireUser(userId);
         validateDevice(externalDeviceId, name);
         String token = randomToken();
-        store.replaceDeviceToken(userId, externalDeviceId, CredentialHash.sha256(token), name);
+        String hash = CredentialHash.sha256(token);
+        credentialMirror.register(userId, AuthenticatedPrincipal.CredentialKind.DEVICE, hash,
+                Instant.now().plus(Duration.ofDays(3650)));
+        store.replaceDeviceToken(userId, externalDeviceId, hash, name);
         return new DeviceTokenResult(token, externalDeviceId);
     }
 
@@ -153,17 +166,17 @@ public final class AuthService {
         validateDevice(externalDeviceId, name);
         String token = randomToken();
         String codeHash = CredentialHash.sha256(code);
-        if (store.consumePairingAndReplaceDevice(
-                        codeHash,
-                        externalDeviceId,
-                        CredentialHash.sha256(token),
-                        name
-                ).isEmpty()) {
+        String tokenHash = CredentialHash.sha256(token);
+        Optional<UUID> exchanged = store.consumePairingAndReplaceDevice(
+                codeHash, externalDeviceId, tokenHash, name);
+        if (exchanged.isEmpty()) {
             if (store.pairingWasConsumed(codeHash)) {
                 throw new InvalidPairingException("pairing code has already been used");
             }
             throw new InvalidPairingException("pairing code is invalid or expired");
         }
+        credentialMirror.register(exchanged.get(), AuthenticatedPrincipal.CredentialKind.DEVICE,
+                tokenHash, Instant.now().plus(Duration.ofDays(3650)));
         return new DeviceTokenResult(token, externalDeviceId);
     }
 
@@ -183,7 +196,9 @@ public final class AuthService {
     private LoginResult issueSession(UUID userId) {
         Instant expiresAt = Instant.now().plus(SESSION_TTL);
         String token = randomToken();
-        store.createSession(userId, CredentialHash.sha256(token), expiresAt);
+        String hash = CredentialHash.sha256(token);
+        credentialMirror.register(userId, AuthenticatedPrincipal.CredentialKind.SESSION, hash, expiresAt);
+        store.createSession(userId, hash, expiresAt);
         return new LoginResult(token, expiresAt);
     }
 

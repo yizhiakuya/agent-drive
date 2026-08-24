@@ -96,6 +96,14 @@ public final class IdentityController {
                 request.ownerId(), request.kind(), request.tokenHash(), request.expiresAt()));
     }
 
+    /** 撤销过渡期 credential hash。 */
+    @PostMapping("/credentials/revoke")
+    public Map<String, Object> revokeCredential(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                                @RequestBody CredentialHashBody request) {
+        authorize(token);
+        return service.revokeCredential(request.tokenHash());
+    }
+
     private void authorize(String token) {
         if (properties.internalToken().isBlank() || token == null || !MessageDigest.isEqual(
                 properties.internalToken().getBytes(StandardCharsets.UTF_8),
@@ -123,6 +131,10 @@ public final class IdentityController {
             @JsonProperty("token_hash") @NotBlank @Size(max = 128) String tokenHash,
             @JsonProperty("expires_at") java.time.Instant expiresAt
     ) {
+    }
+
+    /** credential hash 撤销请求体。 */
+    public record CredentialHashBody(@JsonProperty("token_hash") String tokenHash) {
     }
 
     /** 返回稳定身份业务错误 envelope。 */

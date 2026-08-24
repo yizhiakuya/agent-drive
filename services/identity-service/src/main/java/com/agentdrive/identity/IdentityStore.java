@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.sql.Timestamp;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,7 +40,7 @@ public class IdentityStore {
     /** 创建带过期时间的 session credential。 */
     public void createSession(UUID ownerId, String tokenHash, Instant expiresAt) {
         jdbc.update("INSERT INTO identity_credentials(owner_id, kind, token_hash, expires_at) VALUES (?, 'SESSION', ?, ?)",
-                ownerId.toString(), tokenHash, expiresAt);
+                ownerId, tokenHash, Timestamp.from(expiresAt));
     }
 
     /** 注册一个已由过渡期 API 签发的 session/device credential 摘要。 */
@@ -52,7 +53,7 @@ public class IdentityStore {
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (token_hash) DO UPDATE SET owner_id = EXCLUDED.owner_id,
                   kind = EXCLUDED.kind, expires_at = EXCLUDED.expires_at, revoked_at = NULL
-                """, ownerId, kind.toUpperCase(java.util.Locale.ROOT), tokenHash, expiresAt);
+                """, ownerId, kind.toUpperCase(java.util.Locale.ROOT), tokenHash, Timestamp.from(expiresAt));
     }
 
     /** 按 hash 撤销尚未撤销的 credential。 */

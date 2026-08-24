@@ -5,6 +5,8 @@ import com.agentdrive.auth.AuthRateLimiter;
 import com.agentdrive.auth.AuthService;
 import com.agentdrive.auth.CredentialAuthenticator;
 import com.agentdrive.auth.RemoteCredentialAuthenticator;
+import com.agentdrive.auth.CredentialMirror;
+import com.agentdrive.auth.RemoteCredentialMirror;
 import com.agentdrive.auth.ConversationSessionService;
 import com.agentdrive.auth.SessionTitleGenerator;
 import com.agentdrive.agent.ProviderRuntimeResolver;
@@ -103,8 +105,19 @@ public class ApplicationConfiguration {
      * @return 使用给定存储和密码组件的认证服务。
      */
     @Bean
-    AuthService authService(AuthAccountStore store, PasswordHasher passwords) {
-        return new AuthService(store, passwords);
+    AuthService authService(AuthAccountStore store, PasswordHasher passwords, CredentialMirror credentialMirror) {
+        return new AuthService(store, passwords, credentialMirror);
+    }
+
+    /** 根据配置选择本地空镜像或 Identity Service credential 双写适配器。 */
+    @Bean
+    CredentialMirror credentialMirror(AppProperties properties, ObjectMapper objectMapper) {
+        if (properties.identityServiceUrl().isBlank()) return CredentialMirror.noop();
+        if (properties.identityServiceToken().isBlank()) {
+            throw new IllegalStateException("app.identity-service-token is required when identity-service-url is configured");
+        }
+        return new RemoteCredentialMirror(properties.identityServiceUrl(),
+                properties.identityServiceToken(), objectMapper);
     }
 
     /**
