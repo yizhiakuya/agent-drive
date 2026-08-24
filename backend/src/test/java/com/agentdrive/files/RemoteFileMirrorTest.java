@@ -45,6 +45,24 @@ class RemoteFileMirrorTest {
         mirror.syncFile(owner, "docs/a.txt", 4, bytes, md5);
     }
 
+    @Test
+    void sendsMovePathMutation() throws IOException {
+        UUID owner = UUID.randomUUID();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/internal/v1/files/mirror/move", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("POST");
+            assertThat(exchange.getRequestHeaders().getFirst("X-File-Service-Token")).isEqualTo("internal");
+            assertThat(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8))
+                    .contains(owner.toString()).contains("source.txt").contains("moved.txt");
+            respond(exchange, 200, "{\"ok\":true}");
+        });
+        server.start();
+
+        RemoteFileMirror mirror = new RemoteFileMirror(
+                "http://127.0.0.1:" + server.getAddress().getPort(), "internal", new ObjectMapper());
+        mirror.movePath(owner, "source.txt", "moved.txt", false);
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");

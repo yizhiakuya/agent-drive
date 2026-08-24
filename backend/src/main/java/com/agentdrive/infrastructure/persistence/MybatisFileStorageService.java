@@ -1686,6 +1686,10 @@ public class MybatisFileStorageService implements FileStorageService {
         String sourceRelative = relative(ownerId, sourcePath);
         String targetRelative = relative(ownerId, target);
         try (MutationScope mutation = mutationScope()) {
+            boolean[] mirrored = {false};
+            mutation.onPublished(() -> { }, () -> {
+                if (mirrored[0]) mirror.movePath(ownerId, targetRelative, sourceRelative, true);
+            });
             if (sourcePath.equals(target)) {
                 throw new FileStorageException(400, "源与目标相同");
             }
@@ -1727,6 +1731,8 @@ public class MybatisFileStorageService implements FileStorageService {
             mapper.deletePrefix(ownerId.toString(), sourceRelative);
             mapper.deletePrefix(ownerId.toString(), targetRelative);
             refreshMetadata(ownerId, target);
+            mirror.movePath(ownerId, sourceRelative, targetRelative, overwrite);
+            mirrored[0] = true;
             mutation.complete();
             return mapOf(resultKey, normalizePath(source) + " → " + normalizePath(destination));
         } catch (FileStorageException error) {

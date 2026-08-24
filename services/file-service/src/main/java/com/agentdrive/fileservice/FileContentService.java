@@ -177,17 +177,109 @@ public final class FileContentService {
         }
     }
 
+    /** 在 owner 存储内原子移动文件或目录镜像。 */
+    public Map<String, Object> moveMirror(MirrorPathRequest request) {
+        UUID owner = parseOwner(request.ownerId());
+        String source = normalizeRelative(request.source());
+        String destination = normalizeRelative(request.destination());
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        Path sourcePath = resolveExisting(ownerRoot, source);
+        Path target = ownerRoot.resolve(destination).normalize();
+        if (sourcePath.equals(target) || !target.startsWith(ownerRoot)
+                || (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !request.overwrite())) {
+            throw new IllegalArgumentException("mirror move target is invalid or already exists");
+        }
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                && Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS)
+                != Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("mirror move type mismatch");
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(sourcePath, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(sourcePath, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            return Map.of("ok", true, "owner_id", owner.toString(), "source", source,
+                    "destination", destination, "moved", true);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_move_failed", error);
+        }
+    }
+
+    /** 在 owner 存储内复制文件或目录镜像。 */
+    public Map<String, Object> copyMirror(MirrorPathRequest request) {
+        UUID owner = parseOwner(request.ownerId());
+        String source = normalizeRelative(request.source());
+        String destination = normalizeRelative(request.destination());
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        Path sourcePath = resolveExisting(ownerRoot, source);
+        Path target = ownerRoot.resolve(destination).normalize();
+        if (sourcePath.equals(target) || !target.startsWith(ownerRoot)
+                || (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !request.overwrite())) {
+            throw new IllegalArgumentException("mirror copy target is invalid or already exists");
+        }
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                && Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS)
+                != Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("mirror copy type mismatch");
+        }
+        try {
+            if (Files.isDirectory(sourcePath, LinkOption.NOFOLLOW_LINKS)) {
+                copyDirectory(sourcePath, target);
+            } else {
+                Files.createDirectories(target.getParent());
+                Files.copy(sourcePath, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        LinkOption.NOFOLLOW_LINKS);
+            }
+            return Map.of("ok", true, "owner_id", owner.toString(), "source", source,
+                    "destination", destination, "copied", true);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_copy_failed", error);
+        }
+    }
+
     private Path resolve(UUID owner, String path) {
         Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        return resolveExisting(ownerRoot, path);
+    }
+
+    private Path resolveExisting(Path ownerRoot, String path) {
         if (!Files.isDirectory(ownerRoot, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalArgumentException("file_not_found");
         }
         Path target = ownerRoot.resolve(path).normalize();
-        if (!target.startsWith(ownerRoot) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+        if (!target.startsWith(ownerRoot) || !Files.exists(target, LinkOption.NOFOLLOW_LINKS)
                 || hasSymlinkComponent(ownerRoot, target)) {
             throw new IllegalArgumentException("file_not_found");
         }
         return target;
+    }
+
+    private void copyDirectory(Path source, Path target) throws IOException {
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            try (var children = Files.list(target)) {
+                if (children.findAny().isPresent()) {
+                    throw new IllegalArgumentException("mirror copy target directory is not empty");
+                }
+            }
+        } else {
+            Files.createDirectories(target);
+        }
+        try (var paths = Files.walk(source)) {
+            for (Path path : paths.toList()) {
+                Path relative = source.relativize(path);
+                Path destination = target.resolve(relative);
+                if (Files.isSymbolicLink(path)) throw new IllegalArgumentException("mirror copy symlink is invalid");
+                if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
+                    Files.createDirectories(destination);
+                } else {
+                    Files.copy(path, destination, LinkOption.NOFOLLOW_LINKS);
+                }
+            }
+        }
     }
 
     private boolean hasSymlinkComponent(Path ownerRoot, Path target) {

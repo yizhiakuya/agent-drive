@@ -82,6 +82,22 @@ public final class FileContentController {
         return service.deleteMirror(ownerId, path);
     }
 
+    /** 原子移动文件或目录镜像。 */
+    @PostMapping("/files/mirror/move")
+    public Map<String, Object> moveMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                           @Valid @RequestBody MirrorPathRequest request) {
+        authorize(token);
+        return service.moveMirror(request);
+    }
+
+    /** 复制文件或目录镜像。 */
+    @PostMapping("/files/mirror/copy")
+    public Map<String, Object> copyMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                           @Valid @RequestBody MirrorPathRequest request) {
+        authorize(token);
+        return service.copyMirror(request);
+    }
+
     private void authorize(String token) {
         if (properties.internalToken().isBlank() || token == null || !MessageDigest.isEqual(
                 properties.internalToken().getBytes(StandardCharsets.UTF_8),

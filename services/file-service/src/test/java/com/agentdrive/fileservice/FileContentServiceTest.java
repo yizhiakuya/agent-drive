@@ -102,4 +102,21 @@ class FileContentServiceTest {
         assertThat(Files.readString(root.resolve(owner.toString()).resolve("docs/mirror.txt")))
                 .isEqualTo("mirror");
     }
+
+    @Test
+    void movesAndCopiesMirrorPaths(@TempDir Path root) throws Exception {
+        UUID owner = UUID.randomUUID();
+        Path source = root.resolve(owner.toString()).resolve("source.txt");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "content");
+        FileContentService service = new FileContentService(
+                new FileServiceProperties("internal", root.toString(), 1024L));
+
+        service.moveMirror(new MirrorPathRequest(owner.toString(), "source.txt", "moved.txt", false));
+        service.copyMirror(new MirrorPathRequest(owner.toString(), "moved.txt", "copy.txt", false));
+
+        assertThat(Files.exists(root.resolve(owner.toString()).resolve("source.txt"))).isFalse();
+        assertThat(Files.readString(root.resolve(owner.toString()).resolve("moved.txt"))).isEqualTo("content");
+        assertThat(Files.readString(root.resolve(owner.toString()).resolve("copy.txt"))).isEqualTo("content");
+    }
 }

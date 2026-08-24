@@ -19,6 +19,7 @@ import java.util.UUID;
 public final class RemoteFileMirror implements FileMirrorPort {
     private static final Duration TIMEOUT = Duration.ofSeconds(90);
     private static final String TOKEN_HEADER = "X-File-Service-Token";
+    private final URI serviceRoot;
     private final URI mirrorEndpoint;
     private final URI deleteEndpoint;
     private final String token;
@@ -27,6 +28,7 @@ public final class RemoteFileMirror implements FileMirrorPort {
 
     /** 创建远程文件镜像客户端。 */
     public RemoteFileMirror(String serviceUrl, String token, ObjectMapper objectMapper) {
+        this.serviceRoot = endpoint(serviceUrl, "");
         this.mirrorEndpoint = endpoint(serviceUrl, "/internal/v1/files/mirror");
         this.deleteEndpoint = this.mirrorEndpoint;
         this.token = token == null ? "" : token.trim();
@@ -88,6 +90,41 @@ public final class RemoteFileMirror implements FileMirrorPort {
         }
     }
 
+    /** 镜像移动文件或目录。 */
+    @Override
+    public void movePath(UUID ownerId, String source, String destination, boolean overwrite) {
+        pathMutation("/internal/v1/files/mirror/move", ownerId, source, destination, overwrite);
+    }
+
+    /** 镜像复制文件或目录。 */
+    @Override
+    public void copyPath(UUID ownerId, String source, String destination, boolean overwrite) {
+        pathMutation("/internal/v1/files/mirror/copy", ownerId, source, destination, overwrite);
+    }
+
+    private void pathMutation(String path, UUID ownerId, String source, String destination, boolean overwrite) {
+        try {
+            Map<String, Object> body = Map.of("owner_id", ownerId.toString(), "source", source,
+                    "destination", destination, "overwrite", overwrite);
+            HttpRequest request = HttpRequest.newBuilder(endpoint(path))
+                    .timeout(TIMEOUT)
+                    .header(TOKEN_HEADER, token)
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body),
+                            StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = client.send(request,
+                    HttpClientSupport.limitedUtf8BodyHandler(64 * 1024));
+            requireOk(response);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new FileStorageException(502, "文件镜像路径操作中断", error);
+        } catch (IOException error) {
+            throw new FileStorageException(502, "文件镜像路径操作失败", error);
+        }
+    }
+
     private void requireOk(HttpResponse<String> response) throws IOException {
         JsonNode root = objectMapper.readTree(response.body());
         if (response.statusCode() < 200 || response.statusCode() >= 300
@@ -111,5 +148,9 @@ public final class RemoteFileMirror implements FileMirrorPort {
         } catch (Exception error) {
             throw new IllegalArgumentException("file service URL is invalid", error);
         }
+    }
+
+    private URI endpoint(String suffix) {
+        return URI.create(serviceRoot + suffix);
     }
 }
