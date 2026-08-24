@@ -151,6 +151,20 @@
         WHERE run_state-&gt;&gt;'status' = 'running'
     </update>
 
+    <insert id="insertRunEvent">
+        INSERT INTO chat_run_events(session_id, event_name, event_data)
+        VALUES (CAST(#{sessionId, jdbcType=VARCHAR} AS uuid),
+                #{event, jdbcType=VARCHAR}, CAST(#{data, jdbcType=LONGVARCHAR} AS jsonb))
+    </insert>
+
+    <select id="selectRunEvents" resultType="map">
+        SELECT id, event_name, event_data::text AS event_data
+        FROM chat_run_events
+        WHERE session_id = CAST(#{sessionId, jdbcType=VARCHAR} AS uuid)
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
     <select id="selectPending" resultType="string">
         SELECT pending_confirmation::text
         FROM chat_sessions

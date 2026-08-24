@@ -54,12 +54,13 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - 覆盖上传/文本写入前，旧普通文件复制到 owner 私有 `.versions` 目录并在 `file_version_snapshots` 登记；版本列表只返回当前 owner 且仍存在的快照元数据，恢复通过原子上传产生新 revision，不允许客户端直接读取快照路径。
 - Chat 文件上下文只接受当前 owner 的相对 POSIX 路径，后端重新读取文件/文件夹内容，不信任客户端传入正文；文件选择器附件写入 owner-scoped `聊天附件` 目录并沿用上传 MD5、路径和索引边界，剪贴板图片只允许受限 Base64 内联到支持图片的当前模型请求，不持久化。
 - 聊天 relay 按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件，不提供跨进程后台任务入口。
+- `chat_run_events` 只按 owner session 外键保存脱敏 SSE 事件，重连读取前仍执行 session owner 校验；事件表不保存 Cookie/Bearer/API key，实时跨副本 relay 未完成前禁止横向扩展 Agent Service。
 - File Service 的独立存储根不能与 API owner 文件根共享路径；初始镜像已完成但 mutation 同步尚未完成，`AGENT_DRIVE_FILE_SERVICE_URL` 必须保持为空，避免视觉链路读到旧快照。配置远程 URL 后，主 API 启动期必须先验证 File Service readiness；远程读取响应还必须重新验证 owner、相对路径、大小和 MD5，失败返回结构化错误而不是空内容。
 - File Service manifest 只用于受控迁移校验，必须经过内部 token；它不返回文件正文，不改变文件 revision，也不能被 Agent catalog 调用。
 - File Service mirror 写入会重新计算 Base64 内容 MD5、校验 owner/path/revision 并原子替换目标；move/copy/tree-delete/trash/restore 也在独立路径契约中执行，主 API 的 move/copy/trash/restore 已登记回滚钩子。主 API 仅在显式 URL/token 配置时为这些 mutation 调用它，线上失败恢复演练完成前禁止切流。
 - Index Service 的 manifest、文档写入和迁移期检索只允许 loopback + 内部 token；服务不读取主 API 索引表，owner/file/revision 由请求边界重新校验。
-- `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 只启用迁移客户端和 readiness 校验，不会让 Agent 获得 Index Service URL/token，也不会自动绕过本地 IndexStore。
-- Index Service 初始迁移完成后仍保持未切流；历史 vision v1/v2 文档不是当前视觉描述真相源，必须重新描述并校验 source revision 后才能参与正式向量检索。
+- `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 只启用受内部 token 保护的文档双写和 readiness 校验，不会让 Agent 获得 Index Service URL/token；查询切换仍需单独的读路径开关和一致性窗口。
+- Index Service 初始迁移完成后已与主库双写；历史 vision v1/v2 文档已重新描述为当前 v3 并校验 source revision，旧描述不参与正式向量检索。
 
 ## 4. Agent 和外部 provider
 

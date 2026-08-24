@@ -148,12 +148,18 @@ index.updated
 
 - 源码位于 `services/index-service`，自有 `index_documents/index_chunks` schema，提供文档/视觉描述替换、owner manifest 和迁移期 lexical search。
 - 文档写入以 `owner_id/file_id/source_revision/document_type` 为边界，替换正文和 chunks 在同一事务内完成；manifest 不返回正文或向量。
-- 当前服务预留 `embedding_fingerprint`/`embedding` 字段，真正 pgvector 检索和 `RemoteIndexStore` 适配器在数据迁移完成后接入；主 API 仍使用本地 IndexStore。
-- 主 API 已提供 `RemoteIndexDocumentClient` 和 `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 配置；配置后只创建迁移客户端并验证远程 readiness，不会自动替换本地索引流量。
+- 当前服务预留 `embedding_fingerprint`/`embedding` 字段，真正 pgvector 检索和 `RemoteIndexStore` 适配器在数据迁移完成后接入；主 API 仍以本地 IndexStore 为读路径。
+- 主 API 已配置 `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN`，并在文本/视觉文档写入成功后同步双写 Index Service；远程写入失败会让当前索引 operation 失败，避免两边正文版本分叉。查询仍保持本地读，待双写稳定窗口后再切远程读。
 - `scripts/deploy.ps1 -Target index` 要求预置独立数据库和 0600 `index.env`，不会被 `-Target all` 隐式安装。
 - Java backup timer 会在 `index.env` 提供数据库用户/名称时把 Index Service dump 放进同一份归档；Index Service 不允许在没有备份覆盖的情况下切流。
-- 2026-08-24 已完成首批只读迁移：主库 `23 documents / 22 chunks` 与 Index DB 完全一致，manifest 和 lexical migration check 已验证。迁移保留历史 vision v1/v2 文档作为比对快照，正式切流前必须按当前 `vision-description-v3` 重新生成视觉描述和向量。
+- 2026-08-24 已完成首批迁移：主库 `23 documents / 22 chunks` 与 Index DB 完全一致，manifest 和 lexical migration check 已验证；随后历史 5 张 v1/v2 图片已重新生成 `vision-description-v3` 并完成向量同步。当前主库与 Index DB 均为 `6 vision-description-v3 / 0 old vision`。
 
-## 12. 当前阶段验收
+## 12. Agent/Chat 当前实现
+
+- `chat_sessions.run_state`、confirmation、replay、transcript 和 nonce 已在 PostgreSQL；新增 `chat_run_events` 持久化 text/reasoning/tool/done/error 等 SSE 事件。
+- `ChatRunRegistry` 仍在当前进程执行 runtime，但重连不再只依赖 JVM 内存：本进程没有 active run 时会从 owner session 的 `chat_run_events` 回放最近事件，进程重启后已完成/已失败的运行不会丢失可审计结果。
+- 实时跨副本 relay 仍需 Redis/NATS 或数据库轮询优化；在此完成前不横向扩展 Agent Service，不把 `ChatRunRegistry` 当成可跨进程实时队列。
+
+## 13. 当前阶段验收
 
 当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 已独立构建、测试、部署、回滚并接管生产视觉请求；File、Identity、Index Service 可独立构建、测试、部署和回滚，但分别在文件/认证/索引数据迁移前保持未切流。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Index/Agent 迁移为完整多服务生产拓扑。

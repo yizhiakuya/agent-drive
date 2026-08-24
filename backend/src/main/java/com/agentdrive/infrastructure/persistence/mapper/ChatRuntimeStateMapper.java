@@ -66,6 +66,14 @@ public interface ChatRuntimeStateMapper {
     /** 把进程重启前遗留的 running run 标成 interrupted。 */
     int interruptRunningRuns();
 
+    /** 持久化一个可重连的 SSE run 事件。 */
+    int insertRunEvent(@Param("sessionId") String sessionId, @Param("event") String event,
+                       @Param("data") String data);
+
+    /** 读取 run SSE 事件历史。 */
+    List<Map<String, Object>> selectRunEvents(@Param("sessionId") String sessionId,
+                                              @Param("limit") int limit);
+
     /** 读取会话 pending confirmation JSON。 @param sessionId 会话 UUID。 @return pending JSON；不存在时为 {@code null}。 */
     String selectPending(@Param("sessionId") String sessionId);
 

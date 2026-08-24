@@ -5,6 +5,7 @@ import com.agentdrive.agent.ConfirmationStateStore;
 import com.agentdrive.infrastructure.PersistentChatRuntimeStateStore;
 import com.agentdrive.infrastructure.SensitiveDataRedactor;
 import com.agentdrive.agent.ToolReplayStore;
+import com.agentdrive.agent.ChatRunStateStore;
 import com.agentdrive.infrastructure.persistence.mapper.ChatRuntimeStateMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -297,6 +298,27 @@ public class MybatisChatRuntimeStateStore implements PersistentChatRuntimeStateS
     @Override
     public void markInterrupted() {
         mapper.interruptRunningRuns();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void appendEvent(String sessionId, String event, Map<String, Object> data) {
+        if (parseUuid(sessionId) == null || event == null || event.isBlank()) return;
+        mapper.insertRunEvent(sessionId, redactor.text(event), json(redactor.value(data)));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public List<ChatRunStateStore.RunEvent> loadEvents(String sessionId, int limit) {
+        if (parseUuid(sessionId) == null) return List.of();
+        int bounded = Math.max(1, Math.min(limit, 4096));
+        List<Map<String, Object>> rows = mapper.selectRunEvents(sessionId, bounded);
+        if (rows == null) return List.of();
+        return rows.stream().map(row -> new ChatRunStateStore.RunEvent(
+                ((Number) row.get("id")).longValue(),
+                String.valueOf(row.get("event_name")),
+                readMap(row.get("event_data")) == null ? Map.of() : readMap(row.get("event_data"))))
+                .toList();
     }
 
     /**

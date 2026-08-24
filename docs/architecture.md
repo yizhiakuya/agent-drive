@@ -18,7 +18,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
                  └──（待索引迁移）Index Service 127.0.0.1:8040
 ```
 
-当前 API 负责 HTTP、SSE、静态前端以及索引/视觉/向量业务编排。生产已配置 `AGENT_DRIVE_CONTENT_SERVICE_URL` 与内部令牌，视觉端口通过 loopback HTTP 调用 Content Service；未配置的开发环境仍使用 API 内本地实现。File Service 已完成 796 个文件的逐文件 MD5 镜像并 ready，但 `AGENT_DRIVE_FILE_SERVICE_URL` 保持为空，直到所有文件 mutation 具备原子镜像同步。后台任务、计划队列、outbox 和独立 Worker 已移除；当前 Agent 的 `plan` 仅是会话内可视化状态，不创建持久任务；历史任务表仅保留在已有数据库中，不再由运行时写入。
+当前 API 负责 HTTP、SSE、静态前端以及索引/视觉/向量业务编排。生产已配置 `AGENT_DRIVE_CONTENT_SERVICE_URL` 与内部令牌，视觉端口通过 loopback HTTP 调用 Content Service；Index Service 已配置并作为文档写入双写目标，查询仍保持本地 IndexStore；未配置的开发环境仍使用 API 内本地实现。File Service 已完成 796 个文件的逐文件 MD5 镜像并 ready，但 `AGENT_DRIVE_FILE_SERVICE_URL` 保持为空，直到所有文件 mutation 具备原子镜像同步。后台任务、计划队列、outbox 和独立 Worker 已移除；当前 Agent 的 `plan` 仅是会话内可视化状态，不创建持久任务；历史任务表仅保留在已有数据库中，不再由运行时写入。
 
 微服务演进边界、服务数据所有权和拆分顺序见 [`microservices-architecture.md`](microservices-architecture.md)。当前 API 仍是模块化单体，但 Content Service 已接入生产；File/Identity 只部署了迁移契约，尚未切换主 API 数据所有权。
 
@@ -68,7 +68,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - Web 使用 HttpOnly Cookie，Android 使用 Bearer 设备令牌；查询参数 `?token=` 只允许 raw/download 媒体 GET。
 - Chat SSE 使用 `event: <name>` + `data: <JSON object>`，事件包括 context、text、reasoning、tool_start、tool_progress、tool_trace、frontend_action、done、error。`tool_progress` 是长工具的实时心跳，携带业务阶段和耗时，前端更新当前 running Activity；同步业务没有可靠百分比时只展示阶段和 elapsed，不伪造进度。context 携带 source/kind/content/trust，并与历史 API 的 context 消息使用同一展示结构；工具参数和 pending confirmation 只发送脱敏视图。流内异常保持 HTTP 200，error 携带脱敏消息和服务端已确认的 session ID，runtime 同时持久化脱敏错误与最后 trace。`ChatRequest.model` 可指定本轮模型，空值沿用 owner 默认模型。
 - 前端工作区头部提供全局 `OperationActivityCenter`。文件索引/视觉索引/向量化和批量文件 mutation 发出运行阶段、耗时、成功/失败计数和终态；Agent 的文件/index mutation 从 Chat SSE 工具事件映射到同一活动列表。运行态不跨进程恢复，完成记录只在浏览器本地保留有限窗口；活动中心是反馈层，不是任务存储或队列。
-- 聊天 runtime 由 owner session 级 `ChatRunRegistry` relay 持有，不绑定单个 SSE 客户端；浏览器刷新、切换页面或网络断开不会主动取消运行。Agent 默认不因固定工具步数结束，目标完成、用户取消或运行基础设施熔断才终止；进程内最多保留 8 个 active run，单次运行 10 分钟超时。初始流返回 `X-Session-ID`，`GET /api/v1/chat/{sessionId}/active`、`GET /api/v1/chat/{sessionId}/stream` 和 `POST /api/v1/chat/{sessionId}/cancel` 先做 owner 会话校验后提供状态、回放重连和显式停止，非流式入口也通过同一 registry。relay 是当前 API 进程内的运行态，进程重启后 run state 标记为不可恢复，不提供跨进程后台任务入口。
+- 聊天 runtime 由 owner session 级 `ChatRunRegistry` relay 持有，不绑定单个 SSE 客户端；浏览器刷新、切换页面或网络断开不会主动取消运行。Agent 默认不因固定工具步数结束，目标完成、用户取消或运行基础设施熔断才终止；进程内最多保留 8 个 active run，单次运行 10 分钟超时。初始流返回 `X-Session-ID`，`GET /api/v1/chat/{sessionId}/active`、`GET /api/v1/chat/{sessionId}/stream` 和 `POST /api/v1/chat/{sessionId}/cancel` 先做 owner 会话校验后提供状态、持久事件回放和显式停止，非流式入口也通过同一 registry。`chat_run_events` 让进程重启后的已产生事件可审计和回放；实时跨副本 relay 仍待 Redis/NATS/数据库轮询后再横向扩展。
 - `ChatRequest.file_context` 只接收 owner 内相对路径列表；后端在当前认证 owner 下读取文件/文件夹摘要后再以 `untrusted_data` 边界注入模型，正文中的命令不会获得指令权限。文件选择器附件先上传到 owner 的 `聊天附件` 目录；剪贴板图片只作为受限 `inline_images` Base64 随本轮请求发送，单张原图上限 50 MiB，应用侧保持原始字节并以视觉 detail `HIGH` 请求较高质量；视觉索引同样原样发送图片 bytes，并在 OpenAI 兼容请求中设置 `image_url.detail=high`，后端在模型不支持图片时拒绝，不写入会话或文件系统。模型输出的 `[[file:path]]` / `[[folder:path]]` 由前端转换成 allowlist 内的 `files.open` / `files.open_folder` 动作，不能触发任意 URL。
 - Skill 目录每轮注入摘要；成功读取过的 Skill 名称从当前会话的 owner-scoped `read_skill` transcript 轨迹恢复，下一轮由当前 registry 重新注入正文并避免重复工具调用。Skill 更新或停用不信任旧正文，始终以 registry 当前版本为准。
 - 索引资源由独立 `IndexDomainService` 和 `/api/v1/index` 提供 owner-scoped CRUD：读取状态/写入文本或视觉文档、直接向量化、清空向量、清理失效索引和重建全文。文本索引与向量化是两个同步 operation；批量调用返回 `succeeded/partial/failed` 及逐项错误，provider/路径错误返回结构化 `ok/status/code/detail`；Agent 不暴露任务创建接口。

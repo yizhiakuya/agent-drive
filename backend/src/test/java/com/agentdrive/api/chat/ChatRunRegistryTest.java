@@ -105,6 +105,23 @@ class ChatRunRegistryTest {
     }
 
     @Test
+    void replaysPersistedEventsWhenThisProcessHasNoLocalRun() {
+        RecordingStateStore stateStore = new RecordingStateStore();
+        String sessionId = UUID.randomUUID().toString();
+        stateStore.events.add(new com.agentdrive.agent.ChatRunStateStore.RunEvent(
+                1, "text", Map.of("text", "persisted")));
+        stateStore.events.add(new com.agentdrive.agent.ChatRunStateStore.RunEvent(
+                2, "done", Map.of("status", "completed")));
+        ChatRunRegistry registry = new ChatRunRegistry(2, Duration.ofSeconds(30), stateStore);
+
+        List<ChatSseEvent> events = registry.reconnect(sessionId).collectList().block();
+
+        assertThat(events).extracting(ChatSseEvent::event).containsExactly("text", "done");
+        assertThat(events.get(0).data()).containsEntry("text", "persisted");
+        registry.close();
+    }
+
+    @Test
     void enforcesProcessActiveRunCapacity() {
         ChatRunRegistry registry = new ChatRunRegistry(1, Duration.ofSeconds(30));
         ChatRuntime runtime = new ChatRuntime() {
@@ -130,6 +147,7 @@ class ChatRunRegistryTest {
     private static final class RecordingStateStore implements com.agentdrive.agent.ChatRunStateStore {
         private final Map<String, Object> state = new LinkedHashMap<>();
         private int interruptedCalls;
+        private final List<com.agentdrive.agent.ChatRunStateStore.RunEvent> events = new CopyOnWriteArrayList<>();
 
         @Override
         public void start(String sessionId) {
@@ -151,6 +169,11 @@ class ChatRunRegistryTest {
         @Override
         public void markInterrupted() {
             interruptedCalls++;
+        }
+
+        @Override
+        public List<com.agentdrive.agent.ChatRunStateStore.RunEvent> loadEvents(String sessionId, int limit) {
+            return List.copyOf(events);
         }
     }
 }

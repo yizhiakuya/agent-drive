@@ -92,6 +92,7 @@ public final class ChatRunRegistry implements AutoCloseable {
                     .timeout(runTimeout)
                     .subscribeOn(Schedulers.boundedElastic())
                     .doOnNext(event -> {
+                        safeState(() -> stateStore.appendEvent(sessionId, event.event(), event.data()));
                         if ("tool_start".equals(event.event())) safeState(() -> stateStore.update(sessionId, "running", "tool"));
                         else if ("tool_trace".equals(event.event())) safeState(() -> stateStore.update(sessionId, "running", "tool_result"));
                         else if ("done".equals(event.event())) safeState(() -> stateStore.update(sessionId, "running", "finalizing"));
@@ -125,7 +126,9 @@ public final class ChatRunRegistry implements AutoCloseable {
      */
     public Flux<ChatSseEvent> reconnect(String sessionId) {
         ActiveRun run = runs.get(sessionId);
-        return run == null ? Flux.empty() : run.events.asFlux();
+        if (run != null) return run.events.asFlux();
+        return Flux.fromIterable(stateStore.loadEvents(sessionId, 4096))
+                .map(event -> new ChatSseEvent(event.event(), event.data()));
     }
 
     /** @return 当前 session 是否存在仍在执行的 Agent。 */
