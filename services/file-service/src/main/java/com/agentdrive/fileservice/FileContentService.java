@@ -243,7 +243,11 @@ public final class FileContentService {
 
     private Path resolve(UUID owner, String path) {
         Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
-        return resolveExisting(ownerRoot, path);
+        Path target = resolveExisting(ownerRoot, path);
+        if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("file_not_found");
+        }
+        return target;
     }
 
     private Path resolveExisting(Path ownerRoot, String path) {
