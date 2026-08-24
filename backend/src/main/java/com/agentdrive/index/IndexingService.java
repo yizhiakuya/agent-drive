@@ -8,6 +8,8 @@ import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -44,6 +46,7 @@ public class IndexingService {
 
     private final FileContentPort files;
     private final IndexStore index;
+    private final RemoteIndexDocumentClient remote;
 
     /**
      * 创建索引服务，并保存文件读取和索引持久化依赖。
@@ -52,8 +55,16 @@ public class IndexingService {
      * @param index 用于读取文件 revision、写入全文分块及清理失效记录的索引存储。
      */
     public IndexingService(FileContentPort files, IndexStore index) {
+        this(files, index, null);
+    }
+
+    /** 创建可选远程 Index Service 增量同步的索引服务。 */
+    @Autowired
+    public IndexingService(FileContentPort files, IndexStore index,
+                           ObjectProvider<RemoteIndexDocumentClient> remote) {
         this.files = files;
         this.index = index;
+        this.remote = remote == null ? null : remote.getIfAvailable();
     }
 
     /**
@@ -84,6 +95,10 @@ public class IndexingService {
         long revision = number(metadata.get("revision"));
         List<String> chunks = chunks(content);
         index.replaceDocument(userId, fileId, revision, content, EXTRACTOR_VERSION, chunks, CHUNK_VERSION);
+        if (remote != null) {
+            remote.replace(userId, fileId, revision, IndexStore.TEXT_DOCUMENT_TYPE,
+                    EXTRACTOR_VERSION, content, CHUNK_VERSION, chunks);
+        }
         return result(path, true, "indexed", content.length(), IndexStore.TEXT_DOCUMENT_TYPE);
     }
 
@@ -111,6 +126,10 @@ public class IndexingService {
         List<String> chunks = chunks(description);
         index.replaceDocument(userId, fileId, revision, IndexStore.VISION_DOCUMENT_TYPE,
                 description, "vision-description-v3", chunks, "vision-chunk-v3");
+        if (remote != null) {
+            remote.replace(userId, fileId, revision, IndexStore.VISION_DOCUMENT_TYPE,
+                    "vision-description-v3", description, "vision-chunk-v3", chunks);
+        }
         return result(path, true, "vision_indexed", description.length(), IndexStore.VISION_DOCUMENT_TYPE);
     }
 
