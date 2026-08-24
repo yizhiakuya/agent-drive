@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("frontend", "backend", "all")]
+    [ValidateSet("frontend", "backend", "content", "all")]
     [string]$Target = "frontend",
     [ValidatePattern("^[A-Za-z0-9_.@:-]+$")]
     [string]$RemoteHost = "megumin",
@@ -16,10 +16,13 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $FrontendRoot = Join-Path $RepoRoot "frontend"
 $BackendRoot = Join-Path $RepoRoot "backend"
+$ContentRoot = Join-Path $RepoRoot "services/content-service"
 $DeployId = [Guid]::NewGuid().ToString("N")
 $RemoteArchive = "/tmp/agent-drive-out-$DeployId.tar"
 $RemoteJar = "/tmp/agent-drive-backend-$DeployId.jar"
+$RemoteContentJar = "/tmp/agent-drive-content-$DeployId.jar"
 $RemoteApiUnit = "/tmp/agent-drive-java-$DeployId.service"
+$RemoteContentUnit = "/tmp/agent-drive-content-$DeployId.service"
 $RemoteBackupScript = "/tmp/agent-drive-java-backup-$DeployId.sh"
 $RemoteBackupUnit = "/tmp/agent-drive-java-backup-$DeployId.service"
 $RemoteBackupTimer = "/tmp/agent-drive-java-backup-$DeployId.timer"
@@ -275,6 +278,7 @@ rollback() {
   fi
   exit "$rc"
 }
+
 trap rollback EXIT
 
 # Keep track of a legacy fixed file as a rollback release when upgrading an older install.
@@ -375,11 +379,129 @@ printf 'Java API service ready; release=%s previous=%s\n' "$release" "${previous
     }
 }
 
+function Invoke-ContentBuild {
+    Push-Location $ContentRoot
+    try {
+        if (-not $SkipBuild) {
+            if (-not $SkipTests) {
+                Invoke-Checked "mvn" @("-q", "test")
+            }
+            Invoke-Checked "mvn" @("-q", "-DskipTests", "package")
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $artifact = Get-ChildItem -LiteralPath (Join-Path $ContentRoot "target") -Filter "*.jar" -File |
+        Where-Object { $_.Name -notlike "*-plain.jar" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($null -eq $artifact) {
+        throw "Content Service artifact not found under $ContentRoot/target"
+    }
+    return $artifact.FullName
+}
+
+function Deploy-Content {
+    param([Parameter(Mandatory)][string]$Artifact)
+
+    $unit = Join-Path $RepoRoot "deploy/agent-drive-content.service"
+    if (-not (Test-Path $unit)) {
+        throw "Content Service systemd unit is missing: $unit"
+    }
+
+    Invoke-Checked "scp" @($Artifact, "${RemoteHost}:$RemoteContentJar")
+    Invoke-Checked "scp" @($unit, "${RemoteHost}:$RemoteContentUnit")
+
+    $remoteScript = @'
+set -euo pipefail
+artifact='__REMOTE_CONTENT_JAR__'
+unit='__REMOTE_CONTENT_UNIT__'
+release_dir='/opt/agent-drive-content/releases'
+current_link='/opt/agent-drive-content/content-service.jar'
+release="$release_dir/content-service-__DEPLOY_ID__.jar"
+previous_target=''
+rollback_needed=0
+
+test -s "$artifact"
+test -f "$unit"
+mkdir -p /opt/agent-drive-content "$release_dir" /etc/agent-drive-content
+
+rollback() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rollback_needed" -eq 1 ]; then
+    printf 'content deployment failed; attempting rollback\n' >&2
+    if [ -n "$previous_target" ] && [ -f "$previous_target" ]; then
+      ln -s "$previous_target" "${current_link}.rollback.$$"
+      mv -Tf "${current_link}.rollback.$$" "$current_link"
+      systemctl restart agent-drive-content.service || true
+    else
+      systemctl stop agent-drive-content.service || true
+    fi
+  fi
+  exit "$rc"
+}
+trap rollback EXIT
+
+if [ -L "$current_link" ]; then
+  previous_target="$(readlink -f "$current_link")"
+elif [ -f "$current_link" ]; then
+  previous_target="$release_dir/content-service-legacy-$(date +%Y%m%d%H%M%S).jar"
+  mv "$current_link" "$previous_target"
+fi
+
+install -m 0644 "$artifact" "$release"
+install -m 0644 "$unit" /etc/systemd/system/agent-drive-content.service
+systemd-analyze verify /etc/systemd/system/agent-drive-content.service
+systemctl daemon-reload
+systemctl enable agent-drive-content.service
+ln -s "$release" "${current_link}.new.$$"
+mv -Tf "${current_link}.new.$$" "$current_link"
+rollback_needed=1
+systemctl restart agent-drive-content.service
+
+ready=0
+for _ in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8010/health \
+      | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  journalctl -u agent-drive-content.service -n 80 --no-pager
+  exit 1
+fi
+
+find "$release_dir" -maxdepth 1 -type f -name 'content-service-*.jar' -printf '%T@ %p\n' \
+  | sort -nr | awk 'NR > 5 { sub(/^[^ ]+ /, ""); print }' \
+  | while IFS= read -r old; do
+      [ "$old" = "$release" ] || [ "$old" = "$previous_target" ] || rm -f -- "$old"
+    done
+rollback_needed=0
+rm -f "$artifact" "$unit"
+printf 'Content Service ready; release=%s previous=%s\n' "$release" "${previous_target:-none}"
+'@
+    $remoteScript = $remoteScript.Replace("__REMOTE_CONTENT_JAR__", $RemoteContentJar)
+    $remoteScript = $remoteScript.Replace("__REMOTE_CONTENT_UNIT__", $RemoteContentUnit)
+    $remoteScript = $remoteScript.Replace("__DEPLOY_ID__", $DeployId)
+    try {
+        Invoke-RemoteBash $remoteScript
+    }
+    finally {
+        $cleanup = "rm -f '$RemoteContentJar' '$RemoteContentUnit'"
+        try { Invoke-RemoteBash $cleanup } catch { Write-Warning $_.Exception.Message }
+    }
+}
+
 Require-Command "ssh"
 Require-Command "scp"
 
 $frontendOut = $null
 $backendArtifact = $null
+$contentArtifact = $null
 if ($Target -in @("frontend", "all")) {
     Require-Command "npm"
     Require-Command "tar"
@@ -389,9 +511,16 @@ if ($Target -in @("backend", "all")) {
     Require-Command "mvn"
     $backendArtifact = Invoke-BackendBuild
 }
+if ($Target -in @("content", "all")) {
+    Require-Command "mvn"
+    $contentArtifact = Invoke-ContentBuild
+}
 
 if ($Target -in @("frontend", "all")) {
     Deploy-Frontend $frontendOut
+}
+if ($Target -in @("content", "all")) {
+    Deploy-Content $contentArtifact
 }
 if ($Target -in @("backend", "all")) {
     Deploy-Backend $backendArtifact

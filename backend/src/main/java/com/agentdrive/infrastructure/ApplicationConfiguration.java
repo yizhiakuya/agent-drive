@@ -37,6 +37,10 @@ import com.agentdrive.infrastructure.persistence.mapper.IndexMapper;
 import com.agentdrive.infrastructure.persistence.mapper.EmbeddingConfigMapper;
 import com.agentdrive.infrastructure.persistence.mapper.VisionConfigMapper;
 import com.agentdrive.vision.VisionModelClient;
+import com.agentdrive.vision.VisionDescriptionPort;
+import com.agentdrive.vision.VisionDescriptionService;
+import com.agentdrive.vision.RemoteVisionDescriptionService;
+import com.agentdrive.vision.VisionRuntimeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.ObjectProvider;
@@ -182,6 +186,32 @@ public class ApplicationConfiguration {
     @Profile({"java-files", "java-auth", "java-chat"})
     VisionModelClient visionModelClient(ObjectMapper objectMapper) {
         return new VisionModelClient(objectMapper);
+    }
+
+    /**
+     * 根据配置选择本地视觉实现或独立 Content Service 客户端。
+     * @param properties 提供可选 Content Service 地址和内部令牌。
+     * @param configs owner-scoped 视觉模型配置。
+     * @param files owner 文件内容端口。
+     * @param client 本地 OpenAI 兼容视觉客户端。
+     * @param objectMapper HTTP JSON 编解码器。
+     * @return 当前部署拓扑使用的视觉应用端口。
+     */
+    @Bean
+    @Profile({"java-files", "java-auth", "java-chat"})
+    VisionDescriptionPort visionDescriptionPort(AppProperties properties,
+                                                 VisionRuntimeConfig configs,
+                                                 FileStorageService files,
+                                                 VisionModelClient client,
+                                                 ObjectMapper objectMapper) {
+        if (properties.contentServiceUrl().isBlank()) {
+            return new VisionDescriptionService(configs, files, client);
+        }
+        if (properties.contentServiceToken().isBlank()) {
+            throw new IllegalStateException("app.content-service-token is required when content-service-url is configured");
+        }
+        return new RemoteVisionDescriptionService(properties.contentServiceUrl(),
+                properties.contentServiceToken(), configs, files, objectMapper);
     }
 
     /**

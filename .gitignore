@@ -49,3 +49,6 @@ frontend/android/capacitor-cordova-android-plugins/
 # APK 二进制产物（部署时拷入 out/app，不进 git）
 frontend/out/app/
 
+# Standalone Java services
+services/**/target/
+

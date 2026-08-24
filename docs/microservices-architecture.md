@@ -1,6 +1,6 @@
 # 微服务演进架构
 
-> 当前基线仍是 Java 模块化单体。本文件定义可执行的微服务演进边界，不表示服务已经拆分或已经部署。
+> 当前主 API 仍保持 Java 模块化单体；Content Service 已具备独立 jar、HTTP 契约和 systemd 发布入口，默认不接管视觉请求。只有配置 `AGENT_DRIVE_CONTENT_SERVICE_URL` 和内部令牌后，主 API 才切换到远程视觉实现。
 
 ## 1. 当前基线
 
@@ -45,9 +45,9 @@ API Gateway
   +-- Identity Service
   +-- File/Storage Service ---- S3/MinIO
   +-- Agent/Chat Service ------ Chat DB + Redis
-  +-- Content Service ---------- Vision Provider + Jina
-                                  |
-                              Index DB/pgvector
+  +-- Content Service ---------- Vision Provider
+  |                              |
+  |                          Index DB/pgvector
   +-- Device Sync（可选，初期可留在 File Service）
 ```
 
@@ -104,7 +104,7 @@ index.updated
 1. **端口化**：当前单体内先使用 `VisionDescriptionPort`、`FileContentPort`、File/Index application port 和 DTO，禁止跨模块直接依赖实现类；视觉和文本抽取只请求受限原始字节，不接触本地绝对路径。
 2. **Gateway/Identity 边界**：统一 owner、scope、request-id 和内部服务认证；先不拆数据表。
 3. **对象存储**：将 owner 文件根抽象为对象存储，保留 revision、MD5、版本和回收站不变量。
-4. **Content Service**：先外置视觉/内容理解，保留同步调用和原有业务结果；失败仍返回当前响应。
+4. **Content Service**：先外置视觉/内容理解，保留同步调用和原有业务结果；当前已实现 `/internal/v1/vision/describe`、`/internal/v1/ready`、内部令牌、原始图片批量预算和远程端口适配器。URL 未配置时保持本地实现，配置后失败仍在当前响应返回逐项错误。
 5. **Search/Index Service**：迁移 documents/chunks/pgvector，按 revision/fingerprint 做双读校验后切换。
 6. **Agent/Chat Service**：迁移 SSE relay、ChatRunRegistry、replay 和 confirmation，再将 `backend_api` dispatcher 换成内部服务 client。
 7. **Device Sync**：File API 稳定后再独立部署，Android 只依赖公开上传、dedupe 和同步状态契约。
@@ -117,6 +117,13 @@ index.updated
 - 不在 Agent、File、Index 内各自实现一套 owner 鉴权。
 - 不在没有 Redis/事件回放能力前横向扩展 Chat Service。
 
-## 8. 当前阶段验收
+## 8. Content Service 当前实现
 
-当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；所有测试和构建通过；生产仍只有一个 Java API artifact。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才进入真正的网络服务拆分。
+- 源码位于 `services/content-service`，不访问主 API 数据库或 owner 本地路径，也不持久化图片和描述。
+- 请求最多 16 张，主 API 默认按最多 4 张/20 MiB 批次发送；图片保持原始 bytes，Provider 请求使用 `image_url.detail=high`。
+- owner 当前视觉 provider 快照只在一次内网请求中传递；服务环境变量仅作为独立运行时默认配置。响应不会包含 API key，Provider URL 禁止 userInfo/query/fragment，JDK HTTP 客户端禁止跟随重定向。
+- `deploy/agent-drive-content.service` 和 `scripts/deploy.ps1 -Target content|all` 负责独立发布、健康检查和上一版本回滚；服务默认监听 `127.0.0.1:8010`。
+
+## 9. 当前阶段验收
+
+当前阶段的验收是：端口抽象不改变现有 HTTP/Agent 行为；Content Service 可独立构建、测试、部署和回滚；URL 未配置时生产仍只有一个实际承载业务的 Java API。只有完成对象存储、服务鉴权、独立数据所有权和回滚策略后，才把 File/Identity/Agent 迁移为真正的多服务生产拓扑。

@@ -17,7 +17,9 @@ public record AppProperties(
         String systemPrompt,
         Integer maxChatSteps,
         String dataDir,
-        Integer maxUploadMb
+        Integer maxUploadMb,
+        String contentServiceUrl,
+        String contentServiceToken
 ) {
     /**
      * 创建面向最小启动配置的属性对象，其余配置使用完整绑定构造器的默认值。
@@ -25,7 +27,7 @@ public record AppProperties(
      * @param cookieSecure 是否为 Cookie 设置 Secure 标志。
      */
     public AppProperties(String mode, Boolean cookieSecure) {
-        this(mode, cookieSecure, "", "", "", 0, "data", 300);
+        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "");
     }
 
     /**
@@ -49,6 +51,8 @@ public record AppProperties(
         maxChatSteps = maxChatSteps == null ? 0 : maxChatSteps;
         dataDir = dataDir == null || dataDir.isBlank() ? "data" : dataDir.trim();
         maxUploadMb = maxUploadMb == null ? 300 : maxUploadMb;
+        contentServiceUrl = contentServiceUrl == null ? "" : contentServiceUrl.trim();
+        contentServiceToken = contentServiceToken == null ? "" : contentServiceToken.trim();
     }
 
     /**

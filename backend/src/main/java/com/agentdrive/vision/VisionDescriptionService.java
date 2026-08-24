@@ -2,8 +2,6 @@ package com.agentdrive.vision;
 
 import com.agentdrive.files.FileContentPort;
 import com.agentdrive.files.FileStorageException;
-import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -22,8 +20,6 @@ import java.util.UUID;
  * <p>该服务只处理图片识别；索引 operation 调用同一服务后再把描述交给
  * 全文/chunk/embedding 链路，保证模型调用和文件内容变更有清晰边界。</p>
  */
-@Service
-@Profile({"java-files", "java-auth", "java-chat"})
 public final class VisionDescriptionService implements VisionDescriptionPort {
     private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
     private static final long MAX_BATCH_BYTES = 20L * 1024 * 1024;

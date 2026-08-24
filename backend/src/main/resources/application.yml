@@ -33,3 +33,5 @@ app:
   data-dir: ${AGENT_DRIVE_DATA_DIR:data}
   frontend-dir: ${AGENT_DRIVE_FRONTEND_DIR:../frontend/out}
   max-upload-mb: ${AGENT_DRIVE_MAX_UPLOAD_MB:300}
+  content-service-url: ${AGENT_DRIVE_CONTENT_SERVICE_URL:}
+  content-service-token: ${AGENT_DRIVE_CONTENT_SERVICE_TOKEN:}
