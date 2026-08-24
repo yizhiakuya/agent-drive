@@ -11,6 +11,7 @@ import com.agentdrive.agent.ProviderRuntimeResolver;
 import com.agentdrive.index.IndexStore;
 import com.agentdrive.index.EmbeddingRuntimeConfig;
 import com.agentdrive.index.SemanticSearchService;
+import com.agentdrive.index.RemoteIndexDocumentClient;
 import com.agentdrive.devices.DeviceStore;
 import com.agentdrive.auth.PasswordHasher;
 import com.agentdrive.files.FileStorageService;
@@ -52,6 +53,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 
 import java.nio.file.Path;
 
@@ -306,6 +308,25 @@ public class ApplicationConfiguration {
                     properties.identityServiceToken(), objectMapper);
         }
         return new MybatisCredentialAuthenticator(mapper);
+    }
+
+    /**
+     * 在显式配置 Index Service 地址时提供迁移客户端；默认索引流量仍使用本地 IndexStore。
+     * @param properties Index Service 地址和内部令牌
+     * @param objectMapper JSON 编解码器
+     * @return 受内部令牌保护的文档迁移客户端
+     */
+    @Bean
+    @Profile({"java-files", "java-auth", "java-chat"})
+    @ConditionalOnExpression("'${app.index-service-url:}'.length() > 0")
+    RemoteIndexDocumentClient remoteIndexDocumentClient(AppProperties properties, ObjectMapper objectMapper) {
+        if (properties.indexServiceToken().isBlank()) {
+            throw new IllegalStateException("app.index-service-token is required when index-service-url is configured");
+        }
+        RemoteIndexDocumentClient client = new RemoteIndexDocumentClient(
+                properties.indexServiceUrl(), properties.indexServiceToken(), objectMapper);
+        client.requireReady();
+        return client;
     }
 
     /**

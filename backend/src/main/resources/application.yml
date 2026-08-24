@@ -39,3 +39,5 @@ app:
   file-service-token: ${AGENT_DRIVE_FILE_SERVICE_TOKEN:}
   identity-service-url: ${AGENT_DRIVE_IDENTITY_SERVICE_URL:}
   identity-service-token: ${AGENT_DRIVE_IDENTITY_SERVICE_TOKEN:}
+  index-service-url: ${AGENT_DRIVE_INDEX_SERVICE_URL:}
+  index-service-token: ${AGENT_DRIVE_INDEX_SERVICE_TOKEN:}

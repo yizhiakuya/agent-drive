@@ -190,7 +190,7 @@ cd frontend/android && gradlew.bat assembleRelease
 
 ## 5. Java 后端现行约定
 
-- **API 与服务运行模式**：`backend/` 是 Java 21 API 主目录；生产由 `agent-drive-java.service` 运行 `--app.mode=api`，并由独立 `agent-drive-content.service` 承载已接入的视觉内容理解；`agent-drive-file.service` 已部署但在 owner 数据迁移完成前不接管主 API 文件请求。任务/Worker unit 已移除，禁止运行时调用 Python API；Python source/unit 已删除，legacy data/system 只在显式 `migrate` profile 下作为受控迁移/人工恢复输入。
+- **API 与服务运行模式**：`backend/` 是 Java 21 API 主目录；生产由 `agent-drive-java.service` 运行 `--app.mode=api`，并由独立 `agent-drive-content.service` 承载已接入的视觉内容理解；`agent-drive-file.service` 和 `agent-drive-index.service` 已部署但在 owner/索引数据迁移完成前不接管主 API；Identity Service 仅在显式准备数据库后部署。任务/Worker unit 已移除，禁止运行时调用 Python API；Python source/unit 已删除，legacy data/system 只在显式 `migrate` profile 下作为受控迁移/人工恢复输入。
 - **数据库真相源**：结构化运行状态统一进入 PostgreSQL/pgvector；`tasks.sqlite3`、认证/设备/上传索引 JSON 不再是生产真相源。实际二进制文件以及用户可见 Agent 文档暂留 owner-scoped 本地文件系统。
 - **Megumin 迁移数据库**：使用独立 `agent-drive-java-postgres`（`pgvector/pgvector:pg16`）容器和 `/opt/agent-drive-java/postgres` 卷，宿主仅绑定 `127.0.0.1:15433`；数据库凭据与随机 AES-GCM keys 在 0600 的 `/etc/agent-drive-java/java.env`，不得复用其他业务 PostgreSQL 或进 git。
 - **客户端契约**：当前实现必须保持 `/api/v1`、SSE JSON 事件、Cookie/Bearer/设备令牌、Android 同步协议和前端工具步骤的一致性；任何契约变更先补 Java/前端/Android 测试，再更新专题文档。

@@ -148,6 +148,7 @@ index.updated
 - 源码位于 `services/index-service`，自有 `index_documents/index_chunks` schema，提供文档/视觉描述替换、owner manifest 和迁移期 lexical search。
 - 文档写入以 `owner_id/file_id/source_revision/document_type` 为边界，替换正文和 chunks 在同一事务内完成；manifest 不返回正文或向量。
 - 当前服务预留 `embedding_fingerprint`/`embedding` 字段，真正 pgvector 检索和 `RemoteIndexStore` 适配器在数据迁移完成后接入；主 API 仍使用本地 IndexStore。
+- 主 API 已提供 `RemoteIndexDocumentClient` 和 `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 配置；配置后只创建迁移客户端并验证远程 readiness，不会自动替换本地索引流量。
 - `scripts/deploy.ps1 -Target index` 要求预置独立数据库和 0600 `index.env`，不会被 `-Target all` 隐式安装。
 
 ## 12. 当前阶段验收

@@ -39,7 +39,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
 | `services/content-service` | 独立视觉内容理解 HTTP 服务 | 只接收受限原始图片和 owner provider 快照，不读主库/本地路径，不持久化描述 |
 | `services/file-service` | 独立 owner 文件内容读取 HTTP 服务 | 只读取自己的 owner 分区；路径、符号链接、大小和 MD5 在服务边界重新校验 |
 | `services/identity-service` | 独立 owner/session credential 服务 | 自有 identity schema；当前仅提供迁移契约，主 API 认证默认仍使用现有数据库 |
-| `services/index-service` | 独立文档/chunk 索引服务 | 自有 index schema；当前提供正文迁移契约，pgvector 切换前主 API 仍使用本地 IndexStore |
+| `services/index-service` | 独立文档/chunk 索引服务 | 自有 index schema；当前提供正文迁移契约，pgvector 切换前主 API 仍使用本地 IndexStore；远程客户端仅在显式配置时创建 |
 | `infrastructure` | MyBatis、Flyway、PostgreSQL、HTTP client、加密和启动适配器 | 为上层提供实现，不反向承载业务决策 |
 
 跨模块写操作通过 application service 和 PostgreSQL 事务连接。带方法级 `@Transactional` 的持久化适配器保持可代理，当前 Spring 类代理模式要求实现类非 `final`。
