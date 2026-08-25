@@ -153,6 +153,8 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [inlineImages, setInlineImages] = useState<InlineImage[]>([]);
   const [previewImage, setPreviewImage] = useState<InlineImagePreview | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const dropDepthRef = useRef(0);
   const mentionRequestRef = useRef(0);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
@@ -609,6 +611,65 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
     setAttachmentBusy(false);
   }
 
+  function draggedFileItem(event: React.DragEvent<HTMLElement>): FileItem | null {
+    const raw = event.dataTransfer.getData("application/x-agent-drive-file");
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as Partial<FileItem>;
+      if (typeof value.path !== "string" || value.path.trim() === ""
+        || value.path.startsWith("/") || value.path.includes("\\")
+        || value.path.split("/").some((part) => part === "" || part === "." || part === "..")) {
+        return null;
+      }
+      return {
+        name: typeof value.name === "string" && value.name ? value.name : value.path.split("/").pop() || value.path,
+        path: value.path,
+        is_dir: value.is_dir === true,
+        size: typeof value.size === "number" && Number.isFinite(value.size) ? Math.max(0, value.size) : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function handleAttachmentDragEnter(event: React.DragEvent<HTMLDivElement>) {
+    if (busy || attachmentBusy || !event.dataTransfer.types.includes("application/x-agent-drive-file")) return;
+    event.preventDefault();
+    dropDepthRef.current += 1;
+    setDropActive(true);
+  }
+
+  function handleAttachmentDragOver(event: React.DragEvent<HTMLDivElement>) {
+    if (busy || attachmentBusy || !event.dataTransfer.types.includes("application/x-agent-drive-file")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDropActive(true);
+  }
+
+  function handleAttachmentDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      dropDepthRef.current = 0;
+      setDropActive(false);
+      return;
+    }
+    dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
+    if (dropDepthRef.current === 0) setDropActive(false);
+  }
+
+  function handleAttachmentDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    dropDepthRef.current = 0;
+    setDropActive(false);
+    if (busy || attachmentBusy) return;
+    const item = draggedFileItem(event);
+    if (!item) return;
+    setFileContext((current) => {
+      if (current.some((entry) => entry.path === item.path)) return current;
+      return [...current, item].slice(-16);
+    });
+    emitToast({ kind: "ok", text: `已附加文件：${item.name}` });
+  }
+
   function removeFileContext(path: string) {
     setFileContext((current) => current.filter((entry) => entry.path !== path));
   }
@@ -806,7 +867,12 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
           />
            <div
              data-testid="chat-composer"
-             className="overflow-visible rounded-md border border-border bg-panel shadow-sm transition-[border-color,box-shadow] duration-150 has-[[data-slot=chat-input]:focus]:border-accent has-[[data-slot=chat-input]:focus]:ring-2 has-[[data-slot=chat-input]:focus]:ring-accent/10"
+             aria-label="聊天附件投放区"
+             onDragEnter={handleAttachmentDragEnter}
+             onDragOver={handleAttachmentDragOver}
+             onDragLeave={handleAttachmentDragLeave}
+             onDrop={handleAttachmentDrop}
+             className={`overflow-visible rounded-md border bg-panel shadow-sm transition-[border-color,box-shadow] duration-150 has-[[data-slot=chat-input]:focus]:border-accent has-[[data-slot=chat-input]:focus]:ring-2 has-[[data-slot=chat-input]:focus]:ring-accent/10 ${dropActive ? "border-accent bg-accent-soft/40 ring-2 ring-accent/20" : "border-border"}`}
            >
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-border bg-card/60 px-3 py-1.5">
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 lg:flex-nowrap">

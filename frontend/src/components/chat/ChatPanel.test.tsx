@@ -688,6 +688,30 @@ describe("ChatPanel 主流程", () => {
     expect(chatStream.mock.calls[0][9]).toEqual(["notes/today.md"]);
   });
 
+  it("可将右侧文件拖到附件区并按 owner 路径附加", async () => {
+    chatStream.mockResolvedValue(null);
+    render(<ChatPanel />);
+    await act(async () => {});
+    const composer = screen.getByTestId("chat-composer");
+    const data = JSON.stringify({ name: "合同.txt", path: "资料/合同.txt", is_dir: false, size: 75 });
+    const dataTransfer = {
+      types: ["application/x-agent-drive-file"],
+      getData: (type: string) => type === "application/x-agent-drive-file" ? data : "",
+      dropEffect: "none",
+    };
+
+    fireEvent.dragEnter(composer, { dataTransfer });
+    expect(composer).toHaveClass("border-accent");
+    fireEvent.drop(composer, { dataTransfer });
+
+    expect(screen.getByLabelText("已附加文件")).toHaveTextContent("资料/合同.txt");
+    const textarea = screen.getByPlaceholderText("和你的 Agent 对话…");
+    fireEvent.change(textarea, { target: { value: "请查看这个附件" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await waitFor(() => expect(chatStream).toHaveBeenCalled());
+    expect(chatStream.mock.calls[0][9]).toEqual(["资料/合同.txt"]);
+  });
+
   it("@ 文件夹默认进入浏览，点击子文件后才引用", async () => {
     chatStream.mockResolvedValue(null);
     listFiles.mockImplementation(async (path = "") => path === "projects"

@@ -170,7 +170,19 @@ export default function FilePanel({ collapsed, width = WORKSPACE_PANEL_LIMITS.fi
             )}
             {items.map((it) => (
               <div key={it.path}
-                   className={`flex cursor-pointer items-center gap-2 border-b border-border/50 px-2.5 py-2 text-sm transition-colors hover:bg-card ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
+                   draggable
+                   title={`拖动 ${it.name} 到聊天附件`}
+                   onDragStart={(event) => {
+                     event.dataTransfer.effectAllowed = "copy";
+                     event.dataTransfer.setData("application/x-agent-drive-file", JSON.stringify({
+                       name: it.name,
+                       path: it.path,
+                       is_dir: it.is_dir,
+                       size: it.size,
+                     }));
+                     event.dataTransfer.setData("text/plain", it.path);
+                   }}
+                   className={`flex cursor-grab items-center gap-2 border-b border-border/50 px-2.5 py-2 text-sm transition-colors hover:bg-card active:cursor-grabbing ${selected?.path === it.path ? "bg-accent-soft" : ""}`}
                    onClick={() => openItem(it)}
                    onDoubleClick={() => it.is_dir && load(it.path)}>
                 <span className={it.is_dir ? "text-text" : "text-muted"}>{it.is_dir ? <FolderOpen className="size-4" /> : <File className="size-4" />}</span>

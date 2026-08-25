@@ -36,6 +36,7 @@ describe("FilePanel（Next 版）", () => {
     expect(screen.getByText("资料")).toBeInTheDocument();
     expect(screen.getByText("合同.txt")).toBeInTheDocument();
     expect(screen.getByText(/已用/)).toBeInTheDocument();
+    expect(screen.getByText("合同.txt").closest("[draggable=\"true\"]")).not.toBeNull();
   });
 
   it("点击文件显示预览", async () => {
