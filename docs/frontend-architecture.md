@@ -51,7 +51,7 @@ frontend/src/
 
 `useChatStream` 负责编排请求生命周期，纯逻辑按职责拆分。流式忙碌状态只由这个 hook 持有，ChatPanel 不再维护第二份 `busy` 状态，避免发送按钮、停止按钮和流结束回调出现状态分叉：
 
-- `chat-stream-events.ts`：context/text/reasoning/tool_start/tool_progress/tool_trace 等 SSE 事件校验和映射；
+- `chat-stream-events.ts`：context/text/reasoning/tool_start/tool_progress/tool_trace 等 SSE 事件校验和映射；tool trace 保留 `started_at/elapsed_ms`，done 的 `latency_ms/total_elapsed_ms` 收敛为本轮总耗时；
 - `chat-stream-state.ts`：上下文注入顺序、消息、reasoning、工具轮次和终态状态转换；
 - `chat-stream-frame.ts`：80ms 批量刷新、工具轮次边界和最终冲刷。
 - `chat-stream-dispatch.ts`：把已校验事件分发到消息、计划和前端动作处理器；`useChatStream` 只负责请求生命周期。
@@ -72,6 +72,8 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 `FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。`useUploadQueue.ts` 单独持有文件引用、AbortController、进度、取消和失败重试，组件卸载统一终止在途上传；`UploadQueueBar.tsx` 只负责固定高度的状态展示。
 
 `FilePanel` 对目录列表和文件详情使用独立请求代次；`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。上传成功后按智能摄入策略异步触发正文/视觉/向量处理，重试上传复用同一回调；索引失败不能回滚或伪报上传失败。
+
+`useChatStream` 对当前/最近一轮保存总耗时：运行中每秒刷新，完成优先采用服务端 `total_elapsed_ms`，停止或异常使用浏览器测量值。`ToolStep` 在运行中和完成态都展示独立工具耗时；这些字段属于当前 UI/流协议，不创建后台任务。
 
 `SkillsManager` 独立维护列表与详情请求代次，搜索和分页读取摘要，选中后才加载完整 instructions。内置 Skill 只读且始终启用；自定义 Skill 支持新建、编辑、启停和删除，mutation 后重拉当前查询。新建名称保存后不可改名，避免把 rename 隐式实现成跨记录覆盖。
 

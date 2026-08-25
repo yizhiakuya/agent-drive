@@ -14,7 +14,7 @@ import { ContextBar } from "./ContextBar";
 import { PermissionControl } from "./PermissionControl";
 import { PlanCard, PlanStep } from "./PlanCard";
 import { useAppStore } from "@/lib/store";
-import { maskSecretsJson } from "@/lib/format";
+import { fmtElapsedMs, maskSecretsJson } from "@/lib/format";
 import { ArrowDown, ArrowUp, AtSign, Brain, ChevronDown, Cpu, FileSearch, FileText, FolderOpen, ListChecks, Loader2, PanelLeftOpen, Paperclip, Plus, RefreshCw, ShieldAlert, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -308,7 +308,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
     }
   }
 
-  const { send, stop, busy } = useChatStream({
+  const { send, stop, busy, totalElapsedMs } = useChatStream({
     messages,
     sessionId,
     sessionIdRef: sidRef,
@@ -951,7 +951,17 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
                 <PermissionControl value={permissionMode} onChange={setPermissionMode} disabled={busy} />
                 <ContextBar usage={contextUsage ?? DEFAULT_CONTEXT_USAGE} />
               </div>
-              <span className="hidden shrink-0 font-mono text-[10px] text-muted lg:inline">{busy ? "STREAMING" : "READY"}</span>
+              <span
+                className="shrink-0 font-mono text-[10px] text-muted"
+                aria-label={busy
+                  ? `任务运行 ${fmtElapsedMs(totalElapsedMs)}`
+                  : totalElapsedMs !== null ? `本轮任务耗时 ${fmtElapsedMs(totalElapsedMs)}` : "就绪"}
+                title={busy
+                  ? `任务运行 ${fmtElapsedMs(totalElapsedMs)}`
+                  : totalElapsedMs !== null ? `本轮任务耗时 ${fmtElapsedMs(totalElapsedMs)}` : "就绪"}
+              >
+                {busy ? `运行 ${fmtElapsedMs(totalElapsedMs)}` : totalElapsedMs !== null ? `本轮 ${fmtElapsedMs(totalElapsedMs)}` : "READY"}
+              </span>
             </div>
             {fileContext.length > 0 && (
               <div className="flex flex-wrap gap-1.5 border-b border-border px-3 py-2" aria-label="已附加文件">

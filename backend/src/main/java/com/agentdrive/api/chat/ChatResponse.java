@@ -60,6 +60,7 @@ public record ChatResponse(
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("steps", steps);
         data.put("latency_ms", latencyMs);
+        data.put("total_elapsed_ms", latencyMs);
         data.put("tool_trace", toolTrace);
         data.put("plan", plan);
         data.put("usage", usage);

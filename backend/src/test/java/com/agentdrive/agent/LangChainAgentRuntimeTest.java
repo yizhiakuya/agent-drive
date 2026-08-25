@@ -130,8 +130,12 @@ class LangChainAgentRuntimeTest {
                 .containsExactly("reasoning", "tool_start", "tool_trace", "text", "done");
         assertThat(events.get(1).data()).containsEntry("step", 1);
         assertThat(events.get(2).data()).containsEntry("output_truncated", false);
+        assertThat(events.get(2).data().get("started_at")).isInstanceOf(Number.class);
+        assertThat(events.get(2).data().get("elapsed_ms")).isInstanceOf(Number.class);
         assertThat(events.get(2).data().get("parsed")).isInstanceOf(Map.class);
         assertThat(events.get(4).data()).containsEntry("session_id", "session-1");
+        assertThat(events.get(4).data().get("latency_ms")).isInstanceOf(Number.class);
+        assertThat(events.get(4).data().get("total_elapsed_ms")).isEqualTo(events.get(4).data().get("latency_ms"));
         assertThat(events.get(4).data()).containsEntry("routed", "task");
         assertThat(events.get(4).data().get("context_usage"))
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)

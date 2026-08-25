@@ -583,8 +583,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             OperationDefinition definition = definitionFor(request, arguments);
             String progressMessage = progressMessage(definition);
             long toolStartedAt = System.nanoTime();
+            long toolStartedAtEpochMillis = System.currentTimeMillis();
             sink.next(ChatSseEvents.toolStart(step, request.name(), arguments,
-                    progressMessage, System.currentTimeMillis()));
+                    progressMessage, toolStartedAtEpochMillis));
             LOGGER.info("chat_tool_start request_id={} session_id={} owner={} route={} step={} tool={} action={} operation={} path={} parameter_keys={}",
                     requestId(), safeId(input.sessionId()), ownerId(), route(), step, safeId(request.name()),
                     action(arguments), definition == null ? "-" : safeId(definition.operation()),
@@ -626,6 +627,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                 }
             }
 
+            long toolElapsedMillis = elapsedMillis(toolStartedAt);
             ChatSseEvent trace = ChatSseEvents.toolTrace(
                     step,
                     request.name(),
@@ -633,7 +635,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     output,
                     parsed,
                     false,
-                    replayed
+                    replayed,
+                    toolStartedAtEpochMillis,
+                    toolElapsedMillis
             );
             traces.add(new LinkedHashMap<>(trace.data()));
             try {
@@ -654,10 +658,10 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             LOGGER.info("chat_tool_end request_id={} session_id={} owner={} route={} step={} tool={} operation={} http_status={} duration_ms={} replayed={}",
                     requestId(), safeId(input.sessionId()), ownerId(), route(), step, safeId(request.name()),
                     definition == null ? "-" : safeId(definition.operation()), statusCode(parsed, definition),
-                    elapsedMillis(toolStartedAt), replayed);
+                    toolElapsedMillis, replayed);
             BusinessMetrics.agentOperation(input.authenticatedUserId(), request.name(),
                     definition == null ? "-" : definition.operation(),
-                    statusCode(parsed, definition), elapsedMillis(toolStartedAt));
+                    statusCode(parsed, definition), toolElapsedMillis);
             return true;
         }
 

@@ -150,6 +150,28 @@ public final class ChatSseEvents {
     public static ChatSseEvent toolTrace(int step, String tool, Map<String, Object> arguments,
                                          String output, Map<String, Object> parsed,
                                          boolean outputTruncated, boolean replayed) {
+        return toolTrace(step, tool, arguments, output, parsed, outputTruncated, replayed,
+                null, null);
+    }
+
+    /**
+     * 创建带独立工具耗时的完成轨迹。
+     *
+     * @param step Agent 当前执行步数
+     * @param tool 工具名称
+     * @param arguments 工具参数
+     * @param output 工具原始输出
+     * @param parsed 从完整输出解析出的结构化结果
+     * @param outputTruncated 调用方是否已经知道输出被截断
+     * @param replayed 是否命中确定性工具重放
+     * @param startedAtEpochMillis 工具开始的 Unix 毫秒时间戳
+     * @param elapsedMillis 工具执行耗时
+     * @return 包含独立耗时字段的工具轨迹事件
+     */
+    public static ChatSseEvent toolTrace(int step, String tool, Map<String, Object> arguments,
+                                         String output, Map<String, Object> parsed,
+                                         boolean outputTruncated, boolean replayed,
+                                         Long startedAtEpochMillis, Long elapsedMillis) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("step", step);
         data.put("tool", tool == null ? "" : tool);
@@ -164,6 +186,12 @@ public final class ChatSseEvents {
         data.put("output_truncated", truncated);
         if (replayed) {
             data.put("replayed", true);
+        }
+        if (startedAtEpochMillis != null) {
+            data.put("started_at", Math.max(0L, startedAtEpochMillis));
+        }
+        if (elapsedMillis != null) {
+            data.put("elapsed_ms", Math.max(0L, elapsedMillis));
         }
         return new ChatSseEvent("tool_trace", data);
     }

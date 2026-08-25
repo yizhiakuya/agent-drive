@@ -1,6 +1,8 @@
 export interface ToolTrace {
   tool: string;
   step?: number;
+  startedAt?: number;
+  elapsedMs?: number;
   output: string;
   parsed?: Record<string, unknown> | unknown[];
 }
@@ -83,6 +85,8 @@ function parseToolTrace(data: Record<string, unknown>): ChatStreamEvent | null {
   const trace: ToolTrace = {
     tool: data.tool,
     ...(typeof data.step === "number" ? { step: data.step } : {}),
+    ...(typeof data.started_at === "number" ? { startedAt: data.started_at } : {}),
+    ...(typeof data.elapsed_ms === "number" ? { elapsedMs: data.elapsed_ms } : {}),
     output: data.output,
     ...(isStructuredResult(parsed) ? { parsed } : {}),
   };

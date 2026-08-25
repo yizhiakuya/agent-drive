@@ -39,6 +39,8 @@ interface UseChatStreamReturn {
   stop: () => void;
   /** 当前正在查看的会话是否有流式请求在进行中。 */
   busy: boolean;
+  /** 当前/最近一轮 Agent 任务的总耗时；运行中每秒更新，结束时收敛到服务端 latency_ms。 */
+  totalElapsedMs: number | null;
 }
 
 const NEW_SESSION_KEY = "__new_session__";
@@ -48,6 +50,7 @@ interface ActiveChatStream {
   controller: AbortController;
   frame: ChatStreamFrame;
   detached: boolean;
+  startedAt: number;
 }
 
 function streamKey(sessionId: string | null): string {
@@ -104,6 +107,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   const streamsRef = useRef(new Map<string, ActiveChatStream>());
   const onReconcileRef = useRef(onReconcile);
   const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [totalElapsedMs, setTotalElapsedMs] = useState<number | null>(null);
   const busy = runningKeys.has(streamKey(sessionId));
 
   useEffect(() => {
@@ -113,6 +117,18 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   const refreshRunningKeys = useCallback(() => {
     setRunningKeys(new Set(streamsRef.current.keys()));
   }, []);
+
+  // 活动会话只在当前进程内计时；完成后保留最后一次耗时，便于用户判断慢点发生在哪一轮。
+  useEffect(() => {
+    const tick = () => {
+      const run = streamsRef.current.get(streamKey(sessionIdRef.current));
+      if (run) setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
+    };
+    tick();
+    if (!busy) return;
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [busy, sessionIdRef]);
 
   const isVisible = useCallback((run: ActiveChatStream) => (
     streamsRef.current.get(run.key) === run
@@ -151,7 +167,8 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
 
     const controller = new AbortController();
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
-    const run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false };
+    const startedAt = Date.now();
+    const run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false, startedAt };
     const frame = createChatStreamFrame({
       isCurrent: () => streamsRef.current.get(run.key)?.controller === controller
         && streamKey(sessionIdRef.current) === run.key,
@@ -159,6 +176,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     });
     run.frame = frame;
     streamsRef.current.set(key, run);
+    setTotalElapsedMs(0);
     refreshRunningKeys();
     // 将协议事件集中交给 dispatcher，保证文本/思考/工具步骤共享同一个帧和消息状态机。
     const eventHandlers = {
@@ -201,6 +219,12 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
 
       if (streamsRef.current.get(run.key) !== run) return;
       const visible = isVisible(run);
+      const serverElapsed = typeof r?.total_elapsed_ms === "number"
+        ? r.total_elapsed_ms
+        : typeof r?.latency_ms === "number" ? r.latency_ms : null;
+      if (visible) setTotalElapsedMs(serverElapsed === null
+        ? Math.max(0, Date.now() - run.startedAt)
+        : Math.max(0, serverElapsed));
       // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
       if (!frame.flush() && visible) {
         // 无文本事件（仅工具调用）：清掉空助手占位气泡，只留工具步骤
@@ -241,6 +265,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       frame.flush();
       frame.cancel();
       if (visible) {
+        setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
         const message = error instanceof Error ? error.message : String(error);
         setMessages((m) => [
           ...removeEmptyAssistantMessages(m),
@@ -278,7 +303,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
             && streamKey(sessionIdRef.current) === key,
           setMessages,
         });
-        run = { key, controller, frame, detached: false };
+        run = { key, controller, frame, detached: false, startedAt: Date.now() };
         streams.set(key, run);
         refreshRunningKeys();
         const eventHandlers = {
@@ -352,6 +377,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     streamsRef.current.delete(key);
     run.frame.cancel();
     run.controller.abort();
+    setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
     if (sessionIdRef.current) void cancelChatRun(sessionIdRef.current).catch(() => {});
     refreshRunningKeys();
     setMessages((m) => {
@@ -362,5 +388,5 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     });
   }, [refreshRunningKeys, sessionIdRef, setMessages]);
 
-  return { send, stop, busy };
+  return { send, stop, busy, totalElapsedMs };
 }

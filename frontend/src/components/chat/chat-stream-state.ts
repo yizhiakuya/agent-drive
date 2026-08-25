@@ -59,6 +59,8 @@ export function completeToolStep(messages: Message[], trace: ToolTrace): Message
       copy[index] = {
         ...message,
         status: failed ? "error" : "done",
+        ...(typeof trace.startedAt === "number" ? { startedAt: trace.startedAt } : {}),
+        ...(typeof trace.elapsedMs === "number" ? { elapsedMs: trace.elapsedMs } : {}),
         output: trace.output,
         parsed: trace.parsed,
       };

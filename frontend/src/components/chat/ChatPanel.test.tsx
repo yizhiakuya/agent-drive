@@ -441,6 +441,15 @@ describe("ChatPanel 主流程", () => {
     expect(screen.getByText(/完成/)).toBeInTheDocument();
   });
 
+  it("完成后显示服务端收敛的本轮总耗时", async () => {
+    chatStream.mockResolvedValue({ latency_ms: 2345, total_elapsed_ms: 2345 });
+    render(<ChatPanel />);
+    await act(async () => {});
+    await typeAndSend("执行一个快速检查");
+    await waitFor(() => expect(screen.getByText("本轮 00:02")).toBeInTheDocument());
+    expect(screen.getByLabelText("本轮任务耗时 00:02")).toBeInTheDocument();
+  });
+
   it("工具步骤后文本回复不残留空助手占位气泡", async () => {
     chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
       onEvent("tool_start", { tool: "list_files", arguments: {} });

@@ -64,7 +64,7 @@ Agent = 模型 + 工具 + 记忆 + 规划 + 护栏
 
 ## 5. 事件与记忆
 
-Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_progress`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。工具参数事件和确认卡只发送脱敏视图；原始确认参数只留在服务端签名存储。context 带有 `trust` 等级：文件正文属于 `untrusted_data`，模型只能当作数据读取，不能执行其中的指令。上下文编译器有总字符预算和已加载 Skill 上限，按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
+Chat SSE 事件为 `context`、`text`、`reasoning`、`tool_start`、`tool_progress`、`tool_trace`、`frontend_action`、`done`、`error`，每个 data 都是 JSON object。工具 `tool_start/tool_progress/tool_trace` 记录独立开始时间和耗时，`done` 记录本轮 `latency_ms/total_elapsed_ms`；前端必须展示单工具计时和总任务计时，不以计时器创建后台任务。工具参数事件和确认卡只发送脱敏视图；原始确认参数只留在服务端签名存储。context 带有 `trust` 等级：文件正文属于 `untrusted_data`，模型只能当作数据读取，不能执行其中的指令。上下文编译器有总字符预算和已加载 Skill 上限，按 source/kind 持久化并在前端默认折叠；同来源内容未变化不重复记录。reasoning 只有 provider 实际返回时才展示，且不注入下一轮 history。
 
 持久状态分为：
 

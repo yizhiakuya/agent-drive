@@ -43,6 +43,7 @@ export function ToolStep({ step }: { step: ToolStepData }) {
   const activityLabel = fmtToolTitle(step.tool, step.arguments || {});
   const progressMessage = step.progressMessage || fmtToolProgress(step.tool, step.arguments || {});
   const elapsedMs = step.elapsedMs ?? (step.startedAt ? Math.max(0, now - step.startedAt) : null);
+  const elapsedLabel = elapsedMs === null ? null : `耗时 ${fmtElapsedMs(elapsedMs)}`;
   const statsSummary = fileStatsSummary(step.tool, step.arguments || {}, step.parsed);
 
   const statusBadge =
@@ -69,6 +70,7 @@ export function ToolStep({ step }: { step: ToolStepData }) {
         {activityLabel !== toolLabel && <span className="font-mono text-[10px] text-muted">{toolLabel}</span>}
         <code className="min-w-0 flex-1 truncate text-left text-[11px] font-normal text-muted">{argsBrief}</code>
         {statusBadge}
+        {elapsedLabel && effectiveStatus !== "running" && <span className="shrink-0 font-mono text-[10px] text-muted" aria-label={`工具耗时 ${elapsedLabel}`}>{elapsedLabel}</span>}
         <ChevronRight className={`size-3.5 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
       </Button>
       {effectiveStatus === "running" && (
