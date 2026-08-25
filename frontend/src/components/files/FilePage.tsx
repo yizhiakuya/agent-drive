@@ -13,6 +13,7 @@ import {
 } from "@/lib/frontend-actions";
 import type { PendingFrontendAction } from "@/lib/frontend-actions";
 import { useAppStore } from "@/lib/store";
+import { autoIndexUploadedFile } from "@/lib/auto-index";
 import { indexFiles, indexVision, vectorize, type IndexResult } from "@/lib/api/index";
 import {
   finishOperationActivity,
@@ -200,12 +201,53 @@ export default function FilePage() {
     }
   }, []);
 
+  const indexActivityCounts = useCallback((result: IndexResult): Pick<import("@/lib/operation-activity").OperationActivity, "completed" | "total" | "succeeded" | "failed"> => {
+    const items = Array.isArray(result.items) ? result.items : [];
+    const failed = typeof result.failed === "number"
+      ? result.failed
+      : items.filter((item) => item.indexed === false || item.status === "error").length;
+    const embedded = typeof result.embedded === "number" ? result.embedded : undefined;
+    const total = items.length > 0 ? items.length : embedded;
+    const completed = embedded ?? (items.length > 0 ? items.length : undefined);
+    return {
+      completed,
+      total,
+      succeeded: total === undefined ? undefined : Math.max(0, total - failed),
+      failed,
+    };
+  }, []);
+
+  /** 从统一索引 envelope 提取逐项错误，兼容旧响应中的 reason/error 字段。 */
+  const indexFailure = useCallback((result: IndexResult): string | null => {
+    if (result.vectorized === false) return String(result.reason || result.error || "向量化未完成");
+    const failedItem = result.items?.find((item) => item.indexed === false
+      || (item.embedding && typeof item.embedding === "object"
+        && (item.embedding as { vectorized?: unknown }).vectorized === false)
+      || item.status === "error");
+    if (failedItem) return String(failedItem.error || failedItem.status || "索引项失败");
+    if (result.ok === false || result.status === "failed" || result.status === "partial") {
+      return String(result.error || result.reason || "索引未完整完成");
+    }
+    return null;
+  }, []);
+
+  /** 文本文件需要先抽取正文，再按当前 embedding 配置写入向量。 */
+  const indexTextAndVectors = useCallback(async (filePath: string, activityId?: string): Promise<IndexResult> => {
+    if (activityId) updateOperationActivity(activityId, { phase: "extracting", message: "正在抽取文件正文" });
+    const extracted = await indexFiles([filePath]);
+    const extractionFailure = indexFailure(extracted);
+    if (extractionFailure) throw new Error(extractionFailure);
+    if (activityId) updateOperationActivity(activityId, { phase: "embedding", message: "正在生成文本向量" });
+    return vectorize([filePath]);
+  }, [indexFailure]);
+
   const refreshAfterUpload = useCallback(() => {
     void load(pathRef.current, queryRef.current, searchModeRef.current);
   }, [load]);
   const { uploading, uploadQueue, uploadFiles, cancelUpload, retryUpload } = useUploadQueue(
     pathRef,
     refreshAfterUpload,
+    autoIndexUploadedFile,
   );
 
   const loadCollection = useCallback(async (kind: "favorites" | "recent") => {
@@ -488,48 +530,6 @@ export default function FilePage() {
     }
   }
 
-  /** 文本文件需要先抽取正文，再按当前 embedding 配置写入向量。 */
-  async function indexTextAndVectors(filePath: string, activityId?: string): Promise<IndexResult> {
-    if (activityId) updateOperationActivity(activityId, { phase: "extracting", message: "正在抽取文件正文" });
-    const extracted = await indexFiles([filePath]);
-    const extractionFailure = indexFailure(extracted);
-    if (extractionFailure) throw new Error(extractionFailure);
-    if (activityId) updateOperationActivity(activityId, { phase: "embedding", message: "正在生成文本向量" });
-    return vectorize([filePath]);
-  }
-
-  function indexActivityCounts(result: IndexResult): Pick<import("@/lib/operation-activity").OperationActivity, "completed" | "total" | "succeeded" | "failed"> {
-    const items = Array.isArray(result.items) ? result.items : [];
-    const failed = typeof result.failed === "number"
-      ? result.failed
-      : items.filter((item) => item.indexed === false || item.status === "error").length;
-    const embedded = typeof result.embedded === "number" ? result.embedded : undefined;
-    const total = items.length > 0 ? items.length : embedded;
-    const completed = embedded ?? (items.length > 0 ? items.length : undefined);
-    return {
-      completed,
-      total,
-      succeeded: total === undefined ? undefined : Math.max(0, total - failed),
-      failed,
-    };
-  }
-
-  /** 从统一索引 envelope 提取逐项错误，兼容旧响应中的 reason/error 字段。 */
-  function indexFailure(result: IndexResult): string | null {
-    if (result.vectorized === false) {
-      return String(result.reason || result.error || "向量化未完成");
-    }
-    const failedItem = result.items?.find((item) => item.indexed === false
-      || (item.embedding && typeof item.embedding === "object"
-        && (item.embedding as { vectorized?: unknown }).vectorized === false)
-      || item.status === "error");
-    if (failedItem) return String(failedItem.error || failedItem.status || "索引项失败");
-    if (result.ok === false || result.status === "failed" || result.status === "partial") {
-      return String(result.error || result.reason || "索引未完整完成");
-    }
-    return null;
-  }
-
   const crumbs = path ? path.split("/").filter(Boolean) : [];
   const isMarkdown = selected?.info?.path?.toLowerCase().endsWith(".md");
 
@@ -627,21 +627,25 @@ export default function FilePage() {
         setSelectedPaths(new Set());
         emitToast({ kind: failed ? "error" : "ok", text: failed ? `${paths.length - failed} 项完成，${failed} 项失败` : `已处理 ${paths.length} 项` });
       } else if (type === "rename") {
-        await renameFile(item.path, item.is_dir ? item.path.replace(/[^/]+$/, "") + actionValue : item.path.replace(/[^/]+$/, actionValue));
-        emitToast({ kind: "ok", text: "已重命名" });
+        const destination = item.is_dir ? item.path.replace(/[^/]+$/, "") + actionValue : item.path.replace(/[^/]+$/, actionValue);
+        await renameFile(item.path, destination);
+        offerUndo(`已重命名 ${item.name}`, async () => { await renameFile(destination, item.path); });
       } else if (type === "mkdir") {
         await mkdir(path ? path + "/" + actionValue : actionValue);
         emitToast({ kind: "ok", text: "文件夹已创建" });
       } else if (type === "move") {
+        const destination = `${actionValue.trim().replace(/\/$/, "")}/${item.name}`.replace(/^\//, "");
+        const sourceParent = item.path.includes("/") ? item.path.slice(0, item.path.lastIndexOf("/")) : "";
         await moveFile(item.path, actionValue);
-        emitToast({ kind: "ok", text: "已移动" });
+        offerUndo(`已移动 ${item.name}`, async () => { await moveFile(destination, sourceParent); });
       } else if (type === "copy") {
-        await copyFile(item.path, actionValue + "/" + item.name);
-        emitToast({ kind: "ok", text: "已复制" });
+        const destination = `${actionValue.trim().replace(/\/$/, "")}/${item.name}`.replace(/^\//, "");
+        await copyFile(item.path, destination);
+        offerUndo(`已复制 ${item.name}`, async () => { await deleteToTrash(destination); });
       } else if (type === "delete") {
         if (!window.confirm(`删除 ${item.name}？（移入回收站，30 天内可恢复）`)) return;
-        await deleteToTrash(item.path);
-        emitToast({ kind: "ok", text: `已删除到回收站` });
+        const result = await deleteToTrash(item.path) as { trash_id?: string };
+        if (result.trash_id) offerUndo(`已将 ${item.name} 移入回收站`, async () => { await restoreFromTrash(result.trash_id!); });
         invalidateSelectionWork();
         setSelected(null);
         setActionSelection(null);
@@ -661,6 +665,28 @@ export default function FilePage() {
     const name = selected.path.split("/").pop() || "";
     const isDir = items.find((it) => it.path === selected.path)?.is_dir ?? false;
     return { name, path: selected.path, is_dir: isDir };
+  }
+
+  /** 提供一次性的撤销入口；撤销仍复用后端原子文件 API。 */
+  function offerUndo(message: string, undo: () => Promise<void>) {
+    let consumed = false;
+    emitToast({
+      kind: "ok",
+      text: message,
+      action: {
+        label: "撤销",
+        onClick: () => {
+          if (consumed) return;
+          consumed = true;
+          void undo()
+            .then(() => {
+              emitFilesChanged();
+              emitToast({ kind: "ok", text: "已撤销刚才的文件操作" });
+            })
+            .catch((error) => emitToast({ kind: "error", text: `撤销失败：${String(error)}` }));
+        },
+      },
+    });
   }
 
   function beginAction(type: string, candidate = selectedItem()) {
@@ -683,8 +709,8 @@ export default function FilePage() {
   }
 
   const displayItems = useMemo(() => {
-    const threshold = activeSearchMode === "semantic" && minScore.trim()
-      ? Math.max(0, Number(minScore) || 0) / 100
+    const threshold = activeSearchMode === "semantic"
+      ? minScore.trim() ? Math.max(0, Number(minScore) || 0) / 100 : 0.30
       : 0;
     const filtered = items.filter((item) => item.is_dir || activeSearchMode !== "semantic"
       || typeof item.search_score !== "number" || item.search_score >= threshold);
@@ -848,6 +874,7 @@ export default function FilePage() {
          </div>
          {activeQuery && <div className="text-xs text-muted">
            {activeSearchMode === "semantic" ? "语义搜索" : "名称/路径搜索"}“{activeQuery}”，结果包含当前目录子树
+           {activeSearchMode === "semantic" && !minScore.trim() && <span className="ml-2 text-muted">默认只展示相关度 ≥ 30% 的结果</span>}
            {searchHasMore && <span className="ml-2 text-warn">结果已截断，缩小范围以查看更准确匹配</span>}
          </div>}
 
@@ -917,7 +944,11 @@ export default function FilePage() {
                         <p className="text-danger">文件列表加载失败：{listError}</p>
                         <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void load(pathRef.current, queryRef.current, searchModeRef.current)}>重试</Button>
                       </>
-                    ) : <>
+                    ) : activeSearchMode === "semantic" && activeQuery ? <>
+                      <Search className="mx-auto mb-2 size-7" />
+                      <p>没有达到最低相关度的可靠结果</p>
+                      <p className="mt-1 text-xs">可以降低最低相关度，或改用更具体的描述。</p>
+                    </> : <>
                       {dragOver ? <Upload className="mx-auto mb-2 size-7" /> : <FolderOpen className="mx-auto mb-2 size-7" />}
                       {dragOver ? "松开鼠标上传文件" : "目录为空 — 拖文件到这里，或点「上传」"}
                     </>}
@@ -937,6 +968,7 @@ export default function FilePage() {
                     {activeSearchMode === "semantic" && !it.is_dir && (it.search_snippet || searchScoreLabel(it.search_score)) && (
                       <div className="mt-1 flex items-start gap-1.5 pl-5 text-[11px]">
                         {searchScoreLabel(it.search_score) && <Badge variant="secondary" className="shrink-0">相关度 {searchScoreLabel(it.search_score)}</Badge>}
+                        {it.vector_type === "vision" && <Badge variant="outline" className="shrink-0">视觉描述命中</Badge>}
                         {it.search_snippet && <span className="line-clamp-2 text-muted">{it.search_snippet}</span>}
                       </div>
                     )}
@@ -998,6 +1030,22 @@ export default function FilePage() {
               {action.type === "batch-copy" && `复制选中的 ${selectedPaths.size} 项 → 目标目录`}
               {action.type === "batch-delete" && `确认删除选中的 ${selectedPaths.size} 项（移入回收站）`}
             </div>
+            {(action.type === "rename" || action.type === "move" || action.type === "copy") && actionValue.trim() && (
+              <div className="mb-2 rounded border border-border bg-panel px-2.5 py-2 text-xs text-muted">
+                {action.type === "rename" ? `将 ${action.item.path} 改为 ${action.item.path.replace(/[^/]+$/, actionValue.trim())}` :
+                  action.type === "move" ? `将 ${action.item.path} 移动到 ${actionValue.trim().replace(/\/$/, "")}/${action.item.name}` :
+                    `将在 ${actionValue.trim().replace(/\/$/, "")}/${action.item.name} 创建副本`}
+              </div>
+            )}
+            {(action.type === "batch-move" || action.type === "batch-copy" || action.type === "batch-delete") && (
+              <div className="mb-2 rounded border border-border bg-panel px-2.5 py-2 text-xs text-muted">
+                <div className="mb-1 font-medium text-text">变更预览</div>
+                <ul className="max-h-24 space-y-0.5 overflow-auto">
+                  {Array.from(selectedPaths).slice(0, 5).map((source) => <li key={source} className="truncate">{source}</li>)}
+                </ul>
+                {selectedPaths.size > 5 && <div className="mt-1">另有 {selectedPaths.size - 5} 项…</div>}
+              </div>
+            )}
             {action.type !== "delete" && action.type !== "batch-delete" ? (
               <div className="flex gap-2">
                 <Input autoFocus value={actionValue}

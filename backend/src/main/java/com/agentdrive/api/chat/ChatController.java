@@ -4,6 +4,7 @@ import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.api.WebRequestMetadata;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.auth.ConversationSessionService;
+import com.agentdrive.observability.BusinessMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -164,7 +165,9 @@ public final class ChatController {
         return principalResolver.resolve(exchange).flatMap(principal ->
                 blocking(() -> {
                     sessionService.getOwned(principal.userId(), sessionId);
-                    return Map.of("cancelled", runRegistry.cancel(sessionId));
+                    boolean cancelled = runRegistry.cancel(sessionId);
+                    if (cancelled) BusinessMetrics.cancelled(principal.userId(), sessionId);
+                    return Map.of("cancelled", cancelled);
                 }));
     }
 

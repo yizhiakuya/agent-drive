@@ -114,4 +114,24 @@ class SemanticSearchServiceTest {
         assertThat(result).containsEntry("evidence_status", "no_match_or_not_indexed");
         assertThat(result.get("results")).asList().isEmpty();
     }
+
+    @Test
+    void appliesDefaultRelevanceThresholdWhenCallerDoesNotProvideOne() {
+        UUID owner = UUID.randomUUID();
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        IndexStore index = mock(IndexStore.class);
+        when(embeddings.embedQuery(owner, "合同编号"))
+                .thenReturn(new EmbeddingService.QueryEmbedding("[0.1,0.2]", "fingerprint"));
+        when(index.semanticSearch(owner, "fingerprint", "[0.1,0.2]", null, 100))
+                .thenReturn(List.of(
+                        Map.of("path", "low.txt", "search_score", 0.21),
+                        Map.of("path", "good.txt", "search_score", 0.51)));
+
+        Map<String, Object> result = new SemanticSearchService.Jina(embeddings, index)
+                .search(owner, "", "合同编号");
+
+        assertThat(result.get("min_score")).isEqualTo(0.30);
+        assertThat(result.get("min_score_source")).isEqualTo("default");
+        assertThat(result.get("items")).asList().extracting("path").containsExactly("good.txt");
+    }
 }

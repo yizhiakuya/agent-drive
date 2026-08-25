@@ -9,6 +9,7 @@ export const EV = {
 export interface ToastDetail {
   kind?: "ok" | "error";
   text: string;
+  action?: { label: string; onClick: () => void };
 }
 
 export function emitFilesChanged() {

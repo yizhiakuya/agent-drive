@@ -16,6 +16,7 @@ import com.agentdrive.agent.ProviderRuntimeResolver;
 import com.agentdrive.agent.ChatRequestFactory;
 import com.agentdrive.agent.ChatModelCapabilities;
 import com.agentdrive.agent.ThinkingLevel;
+import com.agentdrive.observability.BusinessMetrics;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -654,6 +655,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                     requestId(), safeId(input.sessionId()), ownerId(), route(), step, safeId(request.name()),
                     definition == null ? "-" : safeId(definition.operation()), statusCode(parsed, definition),
                     elapsedMillis(toolStartedAt), replayed);
+            BusinessMetrics.agentOperation(input.authenticatedUserId(), request.name(),
+                    definition == null ? "-" : definition.operation(),
+                    statusCode(parsed, definition), elapsedMillis(toolStartedAt));
             return true;
         }
 

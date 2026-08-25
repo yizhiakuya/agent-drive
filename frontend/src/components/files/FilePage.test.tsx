@@ -351,6 +351,98 @@ describe("FilePage 核心操作", () => {
     }
   });
 
+  it("重命名后可从 toast 撤销", async () => {
+    renameFile.mockResolvedValue({});
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("合同.txt"));
+      await waitFor(() => expect(screen.getByText("重命名")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("重命名"));
+      fireEvent.change(screen.getByPlaceholderText("新名称"), { target: { value: "合同2.txt" } });
+      fireEvent.click(screen.getByRole("button", { name: "确定" }));
+      await waitFor(() => expect(renameFile).toHaveBeenCalledWith("合同.txt", "合同2.txt"));
+
+      const toast = listener.mock.calls.at(-1)?.[0] as CustomEvent<{ action?: { onClick: () => void } }>;
+      expect(toast.detail.action?.onClick).toBeTypeOf("function");
+      toast.detail.action?.onClick();
+      await waitFor(() => expect(renameFile).toHaveBeenCalledWith("合同2.txt", "合同.txt"));
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
+  it("移动后可从 toast 撤销到原目录", async () => {
+    moveFile.mockResolvedValue({});
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("合同.txt"));
+      await waitFor(() => expect(screen.getByText("移动")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("移动"));
+      fireEvent.change(screen.getByPlaceholderText("目标目录（如 资料/合同）"), { target: { value: "资料" } });
+      fireEvent.click(screen.getByRole("button", { name: "确定" }));
+      await waitFor(() => expect(moveFile).toHaveBeenCalledWith("合同.txt", "资料"));
+
+      const toast = listener.mock.calls.at(-1)?.[0] as CustomEvent<{ action?: { onClick: () => void } }>;
+      toast.detail.action?.onClick();
+      await waitFor(() => expect(moveFile).toHaveBeenCalledWith("资料/合同.txt", ""));
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
+  it("复制后可从 toast 撤销副本", async () => {
+    copyFile.mockResolvedValue({});
+    deleteToTrash.mockResolvedValue({ trash_id: "copy-trash" });
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("合同.txt"));
+      await waitFor(() => expect(screen.getByText("复制到")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("复制到"));
+      fireEvent.change(screen.getByPlaceholderText("目标目录（如 资料/合同）"), { target: { value: "资料" } });
+      fireEvent.click(screen.getByRole("button", { name: "确定" }));
+      await waitFor(() => expect(copyFile).toHaveBeenCalledWith("合同.txt", "资料/合同.txt"));
+
+      const toast = listener.mock.calls.at(-1)?.[0] as CustomEvent<{ action?: { onClick: () => void } }>;
+      toast.detail.action?.onClick();
+      await waitFor(() => expect(deleteToTrash).toHaveBeenCalledWith("资料/合同.txt"));
+    } finally {
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
+  it("删除后可从 toast 恢复回收站条目", async () => {
+    deleteToTrash.mockResolvedValue({ trash_id: "t2" });
+    restoreFromTrash.mockResolvedValue({});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const listener = vi.fn();
+    window.addEventListener("agent-drive:toast", listener);
+    try {
+      render(<FilePage />);
+      await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("合同.txt"));
+      await waitFor(() => expect(screen.getByText("删除")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("删除"));
+      fireEvent.click(screen.getByText("确认删除"));
+      await waitFor(() => expect(deleteToTrash).toHaveBeenCalledWith("合同.txt"));
+
+      const toast = listener.mock.calls.at(-1)?.[0] as CustomEvent<{ action?: { onClick: () => void } }>;
+      toast.detail.action?.onClick();
+      await waitFor(() => expect(restoreFromTrash).toHaveBeenCalledWith("t2"));
+    } finally {
+      confirm.mockRestore();
+      window.removeEventListener("agent-drive:toast", listener);
+    }
+  });
+
   it("删除确认后调用 deleteToTrash", async () => {
     deleteToTrash.mockResolvedValue({});
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -513,7 +605,10 @@ describe("FilePage 核心操作", () => {
             ...rootListing,
             query,
             mode,
-            items: [{ ...rootListing.items[1], search_score: 0.923, search_snippet: "合同付款节点和验收条件" }],
+            items: [
+              { ...rootListing.items[1], search_score: 0.923, search_snippet: "合同付款节点和验收条件" },
+              { ...rootListing.items[1], name: "低分.txt", path: "低分.txt", search_score: 0.12, search_snippet: "弱相关内容" },
+            ],
           }
         : rootListing
     );
@@ -530,6 +625,7 @@ describe("FilePage 核心操作", () => {
     expect(screen.getByText("合同付款节点和验收条件")).toBeInTheDocument();
     expect(screen.getByText("相关度 92.3%")).toBeInTheDocument();
     expect(screen.getByText("已向量化")).toBeInTheDocument();
+    expect(screen.queryByText("低分.txt")).not.toBeInTheDocument();
   });
 
   it("提交修改日期筛选时把时间范围传给列表 API", async () => {

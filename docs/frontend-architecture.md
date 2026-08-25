@@ -22,6 +22,9 @@ frontend/src/
     ├── native/          # ServerConfig、PhotoSync Capacitor 桥
     ├── store.ts         # zustand 全局状态和前端动作队列
     ├── events.ts        # 类型化窗口事件总线
+    ├── operation-activity.ts # UI/Agent 长操作活动状态中心
+    ├── index-policy.ts  # 浏览器内智能摄入策略
+    ├── auto-index.ts    # 上传成功后的统一自动索引入口
     └── format.ts        # 时间、大小、工具参数等展示格式化
 ```
 
@@ -33,7 +36,7 @@ frontend/src/
 
 对话工作区的会话列表和桌面文件栏由 `app/page.tsx` 统一维护布局状态；`lib/workspace-layout.ts` 负责版本化 localStorage 的读写与宽度边界，`components/workspace/PanelResizeHandle.tsx` 负责鼠标拖拽、键盘调整和收缩入口。完整会话侧栏在 `xl` 以下隐藏并改用抽屉，文件栏同样在 `xl` 以下隐藏，避免中等宽度挤压聊天 composer；收缩状态不会卸载 ChatPanel，也不会丢失已打开的文件预览状态。设置页的 `SystemStatusCenter` 负责并行健康探测和局部错误展示。
 
-工作区头部的 `OperationActivityCenter` 使用 `lib/operation-activity.ts` 的 `useSyncExternalStore` 外部状态，避免高频操作进度更新导致整个工作区重新渲染。运行中活动只在当前页面进程内保存，完成/部分完成/失败结果按版本化 localStorage 保存有限条目；Toast 只作短摘要。FilePage 的索引和批量 mutation、Chat SSE 的 backend 文件/index mutation 都通过该 store 记录统一生命周期。
+工作区头部的 `OperationActivityCenter` 使用 `lib/operation-activity.ts` 的 `useSyncExternalStore` 外部状态，避免高频操作进度更新导致整个工作区重新渲染。运行中活动只在当前页面进程内保存，完成/部分完成/失败结果按版本化 localStorage 保存有限条目；Toast 只作短摘要。FilePage 的上传、索引和批量 mutation、Chat SSE 的 backend 文件/index mutation 都通过该 store 记录统一生命周期。`index-policy.ts` 保存手动/图片/全部文件三档智能摄入策略；`auto-index.ts` 只在上传 API 成功后触发，索引 promise 不阻塞上传队列，失败由活动中心和 toast 共同反馈。
 
 跨组件刷新使用 `lib/events.ts` 中的类型化事件：
 
@@ -68,7 +71,7 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 
 `FilePage` 对列表、选中文件详情、完整文本、索引刷新和回收站列表分别维护请求代次，并在响应提交前校验当前路径/选中文件/回收站开关。目录切换、文件切换、关闭回收站和卸载都会使对应旧请求失效；迟到响应不能覆盖新状态，迟到失败也不能弹出与当前操作无关的 toast。只有仍属当前代次的详情和回收站失败显示错误反馈。文件变更事件负责统一刷新，mutation 后不重复手动加载旧目录。`useUploadQueue.ts` 单独持有文件引用、AbortController、进度、取消和失败重试，组件卸载统一终止在途上传；`UploadQueueBar.tsx` 只负责固定高度的状态展示。
 
-`FilePanel` 对目录列表和文件详情使用独立请求代次；`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。
+`FilePanel` 对目录列表和文件详情使用独立请求代次；`SettingsPage` 的配置刷新和模型目录探测也必须在响应提交前确认仍属于当前请求。快速点击、切换筛选、修改模型接口配置、全局刷新或组件卸载时，迟到响应只能被丢弃，不能覆盖当前页面状态。上传成功后按智能摄入策略异步触发正文/视觉/向量处理，重试上传复用同一回调；索引失败不能回滚或伪报上传失败。
 
 `SkillsManager` 独立维护列表与详情请求代次，搜索和分页读取摘要，选中后才加载完整 instructions。内置 Skill 只读且始终启用；自定义 Skill 支持新建、编辑、启停和删除，mutation 后重拉当前查询。新建名称保存后不可改名，避免把 rename 隐式实现成跨记录覆盖。
 
@@ -83,15 +86,18 @@ ChatPanel 读取会话历史和模型目录时各自维护请求代次，并在�
 - 全部文件、收藏、最近访问三个集合；收藏可在列表行内切换，最近访问由服务端访问记录排序；
 - 文件类型、修改时间范围和 semantic 最低相关度筛选；有筛选时列表请求显式传递参数，无筛选时保持兼容的三参数调用；
 - semantic 最低相关度过滤、分页和结果截断提示；
+- 默认过滤低于 30% 的语义结果，并在无可靠命中时显示明确空态；结果可标记视觉描述命中；
 - 文本、Markdown、图片、PDF 预览以及受限完整文本读取；
 - revision、全文和向量状态查看；详情面板区分 `text` 文本向量与 `vision` 视觉描述向量，并读取 `/files/versions` 展示真实内容快照，通过 `/files/versions/restore` 恢复为新 revision；
-- embedding/vision 异步索引、上传、移动、复制、回收站和恢复。
+- embedding/vision 异步索引、上传、移动、复制、回收站和恢复；单文件重命名/移动/复制/删除在成功 toast 中提供一次性撤销，批量 mutation 提交前显示受影响路径预览。
 
 移动端预览与回收站是全屏覆盖层；小于 640px 时文件工具栏保持 3×2 触控网格，极窄屏隐藏品牌文字但保留无障碍名称。当前主视图是 tab state，不提供可分享的 URL 路由。上传队列状态只在当前页面生命周期内维护；收藏/最近访问加载失败只影响当前集合，不清空其他列表状态。
 
 ## 5. 状态与自动化中心
 
 `SystemStatusCenter` 并行读取 readiness（含数据库、存储和备份摘要）、Provider 配置、embedding 状态、设备同步和磁盘信息。每个请求通过 `Promise.allSettled` 独立收敛，失败项显示局部告警，已成功的其他项继续渲染；状态行提供 Provider、同步和设备跳转入口，但不携带密钥或文件内容。
+
+质量指标暂不落库：后端 `BusinessMetrics` 通过现有日志链路输出索引/视觉/向量成功数与耗时、语义搜索无结果、文件打开、Agent operation 成功和取消事件。前端活动中心仍是用户反馈真相源，不能把这些日志事件改造成任务队列或可恢复后台任务。
 
 
 ## 6. 认证与原生桥

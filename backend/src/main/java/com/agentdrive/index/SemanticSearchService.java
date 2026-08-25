@@ -1,6 +1,7 @@
 package com.agentdrive.index;
 
 import com.agentdrive.files.FileStorageException;
+import com.agentdrive.observability.BusinessMetrics;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -67,6 +68,7 @@ public interface SemanticSearchService {
     @Profile({"java-files", "java-auth", "java-chat"})
     final class Jina implements SemanticSearchService {
         private static final int MAX_QUERY_LENGTH = 2000;
+        private static final double DEFAULT_MIN_SCORE = 0.30;
         private static final int MAX_RESULTS = 100;
         private static final int MAX_EVIDENCE_RESULTS = 16;
         private static final int MAX_EVIDENCE_NEIGHBORS = 2;
@@ -110,13 +112,19 @@ public interface SemanticSearchService {
         public Map<String, Object> search(UUID ownerId, String path, String query,
                                           int limit, Double minScore, String type,
                                           Double modifiedAfter, Double modifiedBefore) {
+            long startedAt = System.nanoTime();
             String normalizedQuery = normalizeQuery(ownerId, query);
-            EmbeddingService.QueryEmbedding queryEmbedding = queryEmbedding(ownerId, normalizedQuery);
-
             int requestedLimit = Math.max(1, Math.min(limit, 100));
-            double threshold = minScore == null ? Double.NEGATIVE_INFINITY : minScore;
+            double threshold = minScore == null ? DEFAULT_MIN_SCORE : minScore;
             if (minScore != null && (!Double.isFinite(threshold) || threshold < -1.0 || threshold > 1.0)) {
                 throw new FileStorageException(400, "最低相关度必须在 -1 到 1 之间");
+            }
+            EmbeddingService.QueryEmbedding queryEmbedding;
+            try {
+                queryEmbedding = queryEmbedding(ownerId, normalizedQuery);
+            } catch (RuntimeException error) {
+                BusinessMetrics.search("semantic", ownerId, 0, threshold, elapsedMillis(startedAt), false);
+                throw error;
             }
             List<Map<String, Object>> rows;
             try {
@@ -124,10 +132,11 @@ public interface SemanticSearchService {
                         path == null || path.isBlank() ? null : path,
                         Math.min(100, requestedLimit + 1));
             } catch (RuntimeException error) {
+                BusinessMetrics.search("semantic", ownerId, 0, threshold, elapsedMillis(startedAt), false);
                 throw new FileStorageException(502, "语义搜索索引暂时不可用");
             }
 
-            List<Map<String, Object>> items = new ArrayList<>();
+            List<ScoredItem> ranked = new ArrayList<>();
             for (Map<String, Object> row : rows) {
                 Object rawScore = row.get("search_score");
                 double score = rawScore instanceof Number number
@@ -145,8 +154,12 @@ public interface SemanticSearchService {
                 item.put("search_chunk_index", row.get("chunk_index"));
                 item.put("vector_type", row.get("vector_type"));
                 if (!matchesFilter(item, type, modifiedAfter, modifiedBefore)) continue;
-                items.add(item);
+                ranked.add(new ScoredItem(item, lexicalScore(normalizedQuery, filePath,
+                        String.valueOf(row.getOrDefault("search_snippet", "")))));
             }
+            ranked.sort(Comparator.comparingDouble(ScoredItem::rank).reversed()
+                    .thenComparing(value -> String.valueOf(value.item().get("path"))));
+            List<Map<String, Object>> items = ranked.stream().map(ScoredItem::item).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
             boolean hasMore = items.size() > requestedLimit;
             if (hasMore) items = new ArrayList<>(items.subList(0, requestedLimit));
             Map<String, Object> response = new LinkedHashMap<>();
@@ -156,11 +169,32 @@ public interface SemanticSearchService {
             response.put("items", items);
             response.put("limit", requestedLimit);
             response.put("has_more", hasMore);
-            if (minScore != null) response.put("min_score", minScore);
+            response.put("min_score", threshold);
+            response.put("min_score_source", minScore == null ? "default" : "request");
             response.put("type", type == null || type.isBlank() ? "all" : type);
             response.put("modified_after", modifiedAfter);
             response.put("modified_before", modifiedBefore);
+            BusinessMetrics.search("semantic", ownerId, items.size(), threshold, elapsedMillis(startedAt), true);
             return response;
+        }
+
+        /** 用查询词在路径/片段中的命中作为稳定的轻量重排信号，不改变展示的向量分数。 */
+        private double lexicalScore(String query, String path, String snippet) {
+            String haystack = (path + " " + snippet).toLowerCase(java.util.Locale.ROOT);
+            String[] tokens = query.toLowerCase(java.util.Locale.ROOT).split("\\s+");
+            int matched = 0;
+            for (String token : tokens) {
+                if (!token.isBlank() && haystack.contains(token)) matched++;
+            }
+            return tokens.length == 0 ? 0 : (double) matched / tokens.length;
+        }
+
+        private record ScoredItem(Map<String, Object> item, double lexical) {
+            double rank() {
+                Object raw = item.get("search_score");
+                double vector = raw instanceof Number number ? number.doubleValue() : 0;
+                return vector + lexical * 0.08;
+            }
         }
 
         /**
@@ -174,14 +208,22 @@ public interface SemanticSearchService {
                                                    int limit, int neighbors, Double minScore,
                                                    String type, Double modifiedAfter,
                                                    Double modifiedBefore) {
+            long startedAt = System.nanoTime();
             String normalizedQuery = normalizeQuery(ownerId, query);
-            EmbeddingService.QueryEmbedding queryEmbedding = queryEmbedding(ownerId, normalizedQuery);
             int requestedLimit = Math.max(1, Math.min(limit, MAX_EVIDENCE_RESULTS));
             int requestedNeighbors = Math.max(0, Math.min(neighbors, MAX_EVIDENCE_NEIGHBORS));
             validateMinScore(minScore);
             validateTimeRange(modifiedAfter, modifiedBefore);
             String normalizedType = normalizeType(type);
             String normalizedPath = path == null || path.isBlank() ? null : path;
+            double threshold = minScore == null ? DEFAULT_MIN_SCORE : minScore;
+            EmbeddingService.QueryEmbedding queryEmbedding;
+            try {
+                queryEmbedding = queryEmbedding(ownerId, normalizedQuery);
+            } catch (RuntimeException error) {
+                BusinessMetrics.search("semantic_evidence", ownerId, 0, threshold, elapsedMillis(startedAt), false);
+                throw error;
+            }
             int candidateLimit = Math.min(100,
                     requestedLimit * EVIDENCE_CANDIDATE_MULTIPLIER + 1);
 
@@ -190,11 +232,11 @@ public interface SemanticSearchService {
                 rows = index.semanticEvidence(ownerId, queryEmbedding.fingerprint(), queryEmbedding.vector(),
                         normalizedPath, candidateLimit, requestedNeighbors, minScore);
             } catch (RuntimeException error) {
+                BusinessMetrics.search("semantic_evidence", ownerId, 0, threshold, elapsedMillis(startedAt), false);
                 throw new FileStorageException(502, "语义搜索索引暂时不可用");
             }
 
             Map<String, EvidenceBuilder> grouped = new LinkedHashMap<>();
-            double threshold = minScore == null ? Double.NEGATIVE_INFINITY : minScore;
             for (Map<String, Object> row : rows) {
                 double score = score(row.get("search_score"));
                 if (score < threshold) continue;
@@ -232,10 +274,12 @@ public interface SemanticSearchService {
             response.put("limit", requestedLimit);
             response.put("neighbors", requestedNeighbors);
             response.put("has_more", hasMore);
-            if (minScore != null) response.put("min_score", minScore);
+            response.put("min_score", threshold);
+            response.put("min_score_source", minScore == null ? "default" : "request");
             response.put("type", normalizedType);
             response.put("modified_after", modifiedAfter);
             response.put("modified_before", modifiedBefore);
+            BusinessMetrics.search("semantic_evidence", ownerId, results.size(), threshold, elapsedMillis(startedAt), true);
             return response;
         }
 
@@ -326,6 +370,10 @@ public interface SemanticSearchService {
                 throw new FileStorageException(400, "不支持的文件类型筛选");
             }
             return normalized;
+        }
+
+        private long elapsedMillis(long startedAt) {
+            return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         }
 
         private String text(Object value) {

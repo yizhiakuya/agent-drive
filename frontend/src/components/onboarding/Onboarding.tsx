@@ -147,6 +147,12 @@ export default function Onboarding() {
           <p className="text-muted text-sm mt-2 leading-relaxed">AI 中心的私人网盘 — 配置好 Agent 后，一切通过对话完成</p>
         </div>
 
+        <div className="mb-6 grid gap-2 border-y border-border bg-card/50 px-3.5 py-3 text-xs text-muted sm:grid-cols-3">
+          <div><strong className="block text-text">上传即理解</strong><span>文件可自动抽取，图片可生成视觉描述。</span></div>
+          <div><strong className="block text-text">搜索可解释</strong><span>结果显示相关度和命中片段。</span></div>
+          <div><strong className="block text-text">操作可控</strong><span>高风险整理先预览并请求确认。</span></div>
+        </div>
+
         <div className="grid gap-2 mb-4">
           {PROTOCOLS.map((p) => (
             <button key={p.type} type="button" onClick={() => changeProtocol(p.type)}

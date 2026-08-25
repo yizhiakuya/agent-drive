@@ -4,6 +4,7 @@ import com.agentdrive.api.ReactiveExecution;
 import com.agentdrive.api.auth.WebRequestPrincipalResolver;
 import com.agentdrive.files.FileStorageService;
 import com.agentdrive.auth.AuthenticatedPrincipal;
+import com.agentdrive.observability.BusinessMetrics;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -491,6 +492,7 @@ public final class FileController {
                 .flatMap(principal -> ReactiveExecution.blocking(() -> {
                     Path file = files.fileForRead(principal.userId(), path);
                     files.touchAccess(principal.userId(), path);
+                    BusinessMetrics.fileOpen(principal.userId(), download);
                     String contentType = Files.probeContentType(file);
                     String normalizedType = contentType == null ? ""
                             : contentType.toLowerCase(Locale.ROOT).trim();

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { uploadFile } from "@/lib/api/files";
 import { emitToast } from "@/lib/events";
+import { finishOperationActivity, startOperationActivity, updateOperationActivity } from "@/lib/operation-activity";
 
 export type UploadEntry = {
   id: string;
@@ -13,7 +14,11 @@ export type UploadEntry = {
 };
 
 /** 统一管理上传进度、取消、重试和组件卸载清理。 */
-export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () => void) {
+export function useUploadQueue(
+  currentPathRef: RefObject<string>,
+  onSettled: () => void,
+  onUploaded?: (file: File, path: string) => void | Promise<void>,
+) {
   const [uploading, setUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<UploadEntry[]>([]);
   const cancelledRef = useRef(new Set<string>());
@@ -41,6 +46,16 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
     if (mountedRef.current) setUploadQueue(update);
   }, []);
 
+  /** 上传已提交后触发附加处理；模型索引不能阻塞上传队列的完成态。 */
+  const notifyUploaded = useCallback((file: File, path: string) => {
+    if (!onUploaded) return;
+    void Promise.resolve()
+      .then(() => onUploaded(file, path))
+      .catch((error) => {
+        if (mountedRef.current) emitToast({ kind: "error", text: `自动索引 ${file.name} 失败: ${String(error)}` });
+      });
+  }, [onUploaded]);
+
   const beginOperation = useCallback(() => {
     activeOperationsRef.current += 1;
     if (mountedRef.current) setUploading(true);
@@ -62,6 +77,19 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
     entries.forEach((entry, index) => filesRef.current.set(entry.id, files[index]));
     updateQueue((current) => [...current, ...entries].slice(-12));
     beginOperation();
+    const activityId = startOperationActivity({
+      source: "ui",
+      kind: "file-upload",
+      title: files.length === 1 ? "上传文件" : "批量上传文件",
+      target: `${files.length} 个文件`,
+      phase: "uploading",
+      message: `正在上传 0/${files.length} 项`,
+      completed: 0,
+      total: files.length,
+    });
+    let succeeded = 0;
+    let failed = 0;
+    let cancelled = 0;
     try {
       for (let index = 0; index < files.length; index += 1) {
         const file = files[index];
@@ -69,13 +97,14 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
         if (cancelledRef.current.has(entry.id)) {
           updateQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "cancelled" } : item));
           filesRef.current.delete(entry.id);
+          cancelled += 1;
           continue;
         }
         updateQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "uploading" } : item));
         const controller = new AbortController();
         controllersRef.current.set(entry.id, controller);
         try {
-          await uploadFile(
+          const uploaded = await uploadFile(
             file,
             currentPathRef.current,
             (progress) => updateQueue((current) => current.map((item) => item.id === entry.id ? { ...item, progress } : item)),
@@ -83,22 +112,58 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
           );
           updateQueue((current) => current.map((item) => item.id === entry.id ? { ...item, status: "succeeded", progress: 100 } : item));
           filesRef.current.delete(entry.id);
+          succeeded += 1;
+          updateOperationActivity(activityId, {
+            completed: succeeded + failed + cancelled,
+            succeeded,
+            failed,
+            message: `已处理 ${succeeded + failed + cancelled}/${files.length} 项`,
+          });
+          notifyUploaded(file, uploaded.uploaded.path);
           if (mountedRef.current) emitToast({ kind: "ok", text: `已上传 ${file.name}` });
         } catch (error) {
-          const cancelled = controller.signal.aborted;
+          const wasCancelled = controller.signal.aborted;
           updateQueue((current) => current.map((item) => item.id === entry.id
-            ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) }
+            ? { ...item, status: wasCancelled ? "cancelled" : "failed", error: wasCancelled ? undefined : String(error) }
             : item));
-          if (!cancelled && mountedRef.current) emitToast({ kind: "error", text: `上传 ${file.name} 失败: ${error}` });
+          if (!wasCancelled) {
+            failed += 1;
+            updateOperationActivity(activityId, {
+              completed: succeeded + failed + cancelled,
+              succeeded,
+              failed,
+              message: `已处理 ${succeeded + failed + cancelled}/${files.length} 项`,
+            });
+          } else {
+            cancelled += 1;
+          }
+          if (!wasCancelled && mountedRef.current) emitToast({ kind: "error", text: `上传 ${file.name} 失败: ${error}` });
         } finally {
           controllersRef.current.delete(entry.id);
         }
       }
       if (mountedRef.current) onSettled();
+      const status = failed === 0 && cancelled === 0
+        ? "succeeded"
+        : succeeded === 0 && failed === 0
+          ? "cancelled"
+          : succeeded === 0 && cancelled === 0
+            ? "failed"
+            : "partial";
+      finishOperationActivity(activityId, status, {
+        phase: "finished",
+        completed: succeeded + failed + cancelled,
+        succeeded,
+        failed,
+        message: cancelled > 0 && failed === 0
+          ? `已上传 ${succeeded}/${files.length} 项，取消 ${cancelled} 项`
+          : failed === 0 ? `已上传 ${succeeded} 项` : `已上传 ${succeeded}/${files.length} 项`,
+        ...(failed > 0 ? { error: `${failed} 项上传失败` } : {}),
+      });
     } finally {
       finishOperation();
     }
-  }, [beginOperation, currentPathRef, finishOperation, onSettled, updateQueue]);
+  }, [beginOperation, currentPathRef, finishOperation, notifyUploaded, onSettled, updateQueue]);
 
   const cancelUpload = useCallback((id: string) => {
     cancelledRef.current.add(id);
@@ -112,13 +177,24 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
     const file = filesRef.current.get(id);
     if (!file || activeOperationsRef.current > 0) return;
     beginOperation();
+    const activityId = startOperationActivity({
+      source: "ui",
+      kind: "file-upload",
+      title: "重试上传",
+      operation: "POST /api/v1/files/upload",
+      target: file.name,
+      phase: "uploading",
+      message: "正在重试上传",
+      completed: 0,
+      total: 1,
+    });
     const controller = new AbortController();
     controllersRef.current.set(id, controller);
     updateQueue((current) => current.map((item) => item.id === id
       ? { ...item, status: "uploading", progress: 0, error: undefined }
       : item));
     try {
-      await uploadFile(
+      const uploaded = await uploadFile(
         file,
         currentPathRef.current,
         (progress) => updateQueue((current) => current.map((item) => item.id === id ? { ...item, progress } : item)),
@@ -128,6 +204,9 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
         ? { ...item, status: "succeeded", progress: 100 }
         : item));
       filesRef.current.delete(id);
+      updateOperationActivity(activityId, { completed: 1, succeeded: 1, failed: 0, message: "重试上传已完成" });
+      finishOperationActivity(activityId, "succeeded", { phase: "finished", completed: 1, succeeded: 1, failed: 0, message: "重试上传已完成" });
+      notifyUploaded(file, uploaded.uploaded.path);
       if (mountedRef.current) {
         emitToast({ kind: "ok", text: `已重试上传 ${file.name}` });
         onSettled();
@@ -137,12 +216,20 @@ export function useUploadQueue(currentPathRef: RefObject<string>, onSettled: () 
       updateQueue((current) => current.map((item) => item.id === id
         ? { ...item, status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : String(error) }
         : item));
+      finishOperationActivity(activityId, cancelled ? "cancelled" : "failed", {
+        phase: "finished",
+        completed: cancelled ? 0 : 1,
+        succeeded: 0,
+        failed: cancelled ? 0 : 1,
+        message: cancelled ? "重试上传已取消" : "重试上传失败",
+        ...(cancelled ? {} : { error: String(error) }),
+      });
       if (!cancelled && mountedRef.current) emitToast({ kind: "error", text: `重试上传 ${file.name} 失败: ${error}` });
     } finally {
       controllersRef.current.delete(id);
       finishOperation();
     }
-  }, [beginOperation, currentPathRef, finishOperation, onSettled, updateQueue]);
+  }, [beginOperation, currentPathRef, finishOperation, notifyUploaded, onSettled, updateQueue]);
 
   return { uploading, uploadQueue, uploadFiles, cancelUpload, retryUpload };
 }

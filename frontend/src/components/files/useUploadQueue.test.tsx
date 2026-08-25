@@ -43,11 +43,27 @@ describe("useUploadQueue", () => {
     expect(onSettled).toHaveBeenCalledOnce();
   });
 
+  it("does not block upload completion on automatic indexing", async () => {
+    uploadFileMock.mockResolvedValue({ uploaded: { path: "a.txt", size: 1 } });
+    let resolveIndex!: () => void;
+    const onUploaded = vi.fn(() => new Promise<void>((resolve) => { resolveIndex = resolve; }));
+    const { result } = renderHook(() => useUploadQueue({ current: "" }, vi.fn(), onUploaded));
+
+    await act(async () => {
+      await result.current.uploadFiles([new File(["a"], "a.txt")]);
+    });
+
+    expect(result.current.uploadQueue[0]).toMatchObject({ status: "succeeded", progress: 100 });
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledWith(expect.any(File), "a.txt"));
+    resolveIndex();
+  });
+
   it("keeps a failed file available for retry", async () => {
     uploadFileMock
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce({ uploaded: { path: "a.txt", size: 1 } });
-    const { result } = renderHook(() => useUploadQueue({ current: "" }, vi.fn()));
+    const onUploaded = vi.fn();
+    const { result } = renderHook(() => useUploadQueue({ current: "" }, vi.fn(), onUploaded));
 
     await act(async () => {
       await result.current.uploadFiles([new File(["a"], "a.txt")]);
@@ -59,6 +75,7 @@ describe("useUploadQueue", () => {
     });
     expect(result.current.uploadQueue[0].status).toBe("succeeded");
     expect(uploadFileMock).toHaveBeenCalledTimes(2);
+    expect(onUploaded).toHaveBeenCalledWith(expect.any(File), "a.txt");
   });
 
   it("aborts an active upload without reporting it as an error", async () => {

@@ -25,10 +25,12 @@ import { useAppStore } from "@/lib/store";
 import { EV, emitToast } from "@/lib/events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Combobox, ComboboxInput, ComboboxContent, ComboboxList, ComboboxItem, ComboboxEmpty } from "@/components/ui/combobox";
 import { Alert } from "@/components/ui/alert";
 import { Bot, BrainCircuit, Eye, LogOut, RefreshCw, Settings2, SlidersHorizontal } from "lucide-react";
+import { getIndexPolicy, setIndexPolicy, type IndexPolicy } from "@/lib/index-policy";
 
 function sameBaseUrl(left: string, right: string) {
   return left.trim().replace(/\/+$/, "") === right.trim().replace(/\/+$/, "");
@@ -80,6 +82,7 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
   const [llmForm, setLlmForm] = useState({ type: "openai_compat", base_url: "", model: "", api_key: "" });
   const [embForm, setEmbForm] = useState({ provider: "jina", base_url: "https://api.jina.ai/v1", model: "jina-embeddings-v3", api_key: "" });
   const [visionForm, setVisionForm] = useState({ provider: "openai_compat", base_url: "https://api.openai.com/v1", model: "", api_key: "" });
+  const [indexPolicy, setIndexPolicyState] = useState<IndexPolicy>("manual");
   const [saving, setSaving] = useState<"llm" | "emb" | "vision" | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsLoadError, setSettingsLoadError] = useState("");
@@ -190,6 +193,7 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setIndexPolicyState(getIndexPolicy()); }, []);
   useEffect(() => () => {
     loadRequestRef.current += 1;
     modelRequestRef.current += 1;
@@ -660,6 +664,29 @@ export default function SettingsPage({ initialSection = null }: SettingsPageProp
                  className={`mb-3 text-xs ${visionMsg.kind === "ok" ? "bg-success-soft text-success border-success/30" : "bg-danger-soft text-danger border-danger/30"}`}>{visionMsg.text}</Alert>
         )}
         <Button onClick={saveVisionConfig} disabled={saving !== null}>{saving === "vision" ? "测试中…" : "保存并测试"}</Button>
+      </section>
+      <section id="settings-ingestion" className="border-b border-border py-5">
+        <h3 className="flex items-center gap-2 text-sm font-bold"><RefreshCw className="size-4 text-muted" /> 智能摄入</h3>
+        <p className="mb-3 text-xs text-muted">上传完成后决定是否自动抽取正文、理解图片并生成语义向量。</p>
+        <div className="flex flex-col gap-1.5 sm:max-w-md">
+          <label className="text-xs text-muted" htmlFor="index-policy">上传后的索引策略</label>
+          <Select value={indexPolicy} onValueChange={(value) => {
+            if (value === "manual" || value === "auto" || value === "images") {
+              setIndexPolicyState(value);
+              setIndexPolicy(value);
+            }
+          }}>
+            <SelectTrigger id="index-policy" aria-label="上传后的索引策略"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="manual">手动索引</SelectItem>
+              <SelectItem value="images">仅自动理解新图片</SelectItem>
+              <SelectItem value="auto">自动理解全部新文件</SelectItem>
+            </SelectContent>
+          </Select>
+          <span className="text-[10px] leading-snug text-muted">
+            {indexPolicy === "manual" ? "上传后不调用模型，费用和时机完全由你控制。" : indexPolicy === "images" ? "只对新图片生成视觉描述和向量，文本文件仍需手动索引。" : "新文件上传完成后自动抽取并向量化，失败会保留在操作活动中心。"}
+          </span>
+        </div>
       </section>
       </>)}
 

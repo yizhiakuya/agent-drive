@@ -5,6 +5,7 @@ import FilePreview from "./FilePreview";
 import { indexStatusLabel } from "./FileDetails";
 import { fmtSize } from "@/lib/format";
 import { EV, emitToast } from "@/lib/events";
+import { autoIndexUploadedFile } from "@/lib/auto-index";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import PanelResizeHandle from "@/components/workspace/PanelResizeHandle";
@@ -67,9 +68,12 @@ export default function FilePanel({ collapsed, width = WORKSPACE_PANEL_LIMITS.fi
     const file = e.target.files?.[0];
     if (file) {
       try {
-        await uploadFile(file, path);
+        const result = await uploadFile(file, path);
         emitToast({ kind: "ok", text: `已上传 ${file.name}` });
         load(path);
+        void autoIndexUploadedFile(file, result.uploaded.path).catch((indexError) => {
+          emitToast({ kind: "error", text: `自动索引失败：${String(indexError)}` });
+        });
       } catch (err) {
         emitToast({ kind: "error", text: `上传失败: ${err}` });
       }

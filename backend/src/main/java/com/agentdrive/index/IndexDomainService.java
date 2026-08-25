@@ -1,6 +1,7 @@
 package com.agentdrive.index;
 
 import com.agentdrive.vision.VisionDescriptionPort;
+import com.agentdrive.observability.BusinessMetrics;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -81,11 +82,19 @@ public final class IndexDomainService {
     /** 直接抽取并写入文本索引；多文件请求逐个执行并返回逐项结果。 */
     public Map<String, Object> indexFiles(UUID userId, List<String> paths, boolean force) {
         requireUser(userId);
+        long startedAt = System.nanoTime();
         List<String> normalized = normalizePaths(paths);
-        List<Map<String, Object>> results = normalized.stream()
-                .map(path -> executeItem(path, () -> indexFile(userId, path)))
-                .toList();
-        return batchResult("index.file", results);
+        try {
+            List<Map<String, Object>> results = normalized.stream()
+                    .map(path -> executeItem(path, () -> indexFile(userId, path)))
+                    .toList();
+            Map<String, Object> result = batchResult("index.file", results);
+            recordIndexMetric("text", userId, normalized.size(), result, startedAt);
+            return result;
+        } catch (RuntimeException error) {
+            BusinessMetrics.index("text", userId, normalized.size(), 0, normalized.size(), elapsedMillis(startedAt), "");
+            throw error;
+        }
     }
 
     /** 同步读取图片、生成综合描述并写入视觉文档。 */
@@ -96,44 +105,61 @@ public final class IndexDomainService {
     /** 直接执行图片描述、视觉文档写入和视觉向量生成；多图片逐个执行。 */
     public Map<String, Object> indexVision(UUID userId, List<String> paths, boolean force) {
         requireUser(userId);
+        long startedAt = System.nanoTime();
         List<String> normalizedPaths = normalizePaths(paths);
-        vision.requireReady(userId);
-        Map<String, Object> described = vision.describeFiles(userId, normalizedPaths);
-        Map<String, Map<String, Object>> descriptions = new LinkedHashMap<>();
-        Object rawItems = described.get("items");
-        if (rawItems instanceof List<?> items) {
-            for (Object rawItem : items) {
-                if (rawItem instanceof Map<?, ?> item && item.get("path") != null) {
-                    Map<String, Object> value = new LinkedHashMap<>();
-                    item.forEach((key, entry) -> value.put(String.valueOf(key), entry));
-                    descriptions.put(String.valueOf(item.get("path")), value);
+        try {
+            vision.requireReady(userId);
+            Map<String, Object> described = vision.describeFiles(userId, normalizedPaths);
+            Map<String, Map<String, Object>> descriptions = new LinkedHashMap<>();
+            Object rawItems = described.get("items");
+            if (rawItems instanceof List<?> items) {
+                for (Object rawItem : items) {
+                    if (rawItem instanceof Map<?, ?> item && item.get("path") != null) {
+                        Map<String, Object> value = new LinkedHashMap<>();
+                        item.forEach((key, entry) -> value.put(String.valueOf(key), entry));
+                        descriptions.put(String.valueOf(item.get("path")), value);
+                    }
                 }
             }
+            List<Map<String, Object>> results = normalizedPaths.stream().map(path -> {
+                Map<String, Object> item = descriptions.get(path);
+                if (item == null || !(item.get("description") instanceof String description)
+                        || description.isBlank()) {
+                    Map<String, Object> failed = new LinkedHashMap<>();
+                    failed.put("path", path);
+                    failed.put("indexed", false);
+                    failed.put("status", "error");
+                    failed.put("error", item == null
+                            ? "vision description missing"
+                            : String.valueOf(item.getOrDefault("error", "vision description failed")));
+                    return failed;
+                }
+                return executeItem(path, () -> indexVisionDescription(userId, path, item, force));
+            }).toList();
+            Map<String, Object> result = batchResult("index.vision", results);
+            recordIndexMetric("vision", userId, normalizedPaths.size(), result, startedAt);
+            return result;
+        } catch (RuntimeException error) {
+            BusinessMetrics.index("vision", userId, normalizedPaths.size(), 0, normalizedPaths.size(), elapsedMillis(startedAt), "");
+            throw error;
         }
-        List<Map<String, Object>> results = normalizedPaths.stream().map(path -> {
-            Map<String, Object> item = descriptions.get(path);
-            if (item == null || !(item.get("description") instanceof String description)
-                    || description.isBlank()) {
-                Map<String, Object> failed = new LinkedHashMap<>();
-                failed.put("path", path);
-                failed.put("indexed", false);
-                failed.put("status", "error");
-                failed.put("error", item == null
-                        ? "vision description missing"
-                        : String.valueOf(item.getOrDefault("error", "vision description failed")));
-                return failed;
-            }
-            return executeItem(path, () -> indexVisionDescription(userId, path, item, force));
-        }).toList();
-        return batchResult("index.vision", results);
     }
 
     /** 同步向量化指定范围的当前文档块；空 paths 表示 owner 全部文档。 */
     public Map<String, Object> vectorize(UUID userId, List<String> paths, boolean force, int limit) {
         requireUser(userId);
+        long startedAt = System.nanoTime();
         // 空路径是全量向量化的合法语义；只有显式的非空列表才需要逐项路径校验。
         List<String> normalized = paths == null || paths.isEmpty() ? List.of() : normalizePaths(paths);
-        return embeddings.embed(userId, normalized, Math.max(1, Math.min(limit, 1000)), force);
+        try {
+            Map<String, Object> result = embeddings.embed(userId, normalized, Math.max(1, Math.min(limit, 1000)), force);
+            int requested = number(result.get("total"), normalized.isEmpty() ? number(result.get("embedded"), 0) : normalized.size());
+            recordIndexMetric("vector", userId, requested, result, startedAt);
+            return result;
+        } catch (RuntimeException error) {
+            BusinessMetrics.index("vector", userId, normalized.size(), 0, normalized.size(), elapsedMillis(startedAt), "");
+            throw error;
+        }
     }
 
     /** 执行一个批量项并把领域异常转换成可展示的逐项错误。 */
@@ -174,6 +200,33 @@ public final class IndexDomainService {
         String message = error.getMessage();
         if (message == null || message.isBlank()) return error.getClass().getSimpleName();
         return message.length() <= 500 ? message : message.substring(0, 497) + "...";
+    }
+
+    /** 记录索引结果，保持日志字段稳定且不写入文件路径或正文。 */
+    private void recordIndexMetric(String operation, UUID userId, int requested,
+                                   Map<String, Object> result, long startedAt) {
+        int failed = number(result.get("failed"), 0);
+        int succeeded = number(result.get("embedded"), Math.max(0, requested - failed));
+        Object rawItems = result.get("items");
+        if (rawItems instanceof List<?> items) succeeded = Math.max(0, items.size() - failed);
+        if (Boolean.FALSE.equals(result.get("vectorized"))) {
+            failed = Math.max(failed, requested > 0 ? requested : 1);
+            succeeded = 0;
+        }
+        BusinessMetrics.index(operation, userId, requested, succeeded, failed,
+                elapsedMillis(startedAt), stringValue(result.get("provider")));
+    }
+
+    private int number(Object value, int fallback) {
+        return value instanceof Number number ? Math.max(0, number.intValue()) : fallback;
+    }
+
+    private String stringValue(Object value) {
+        return value instanceof String text ? text : "";
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
     /** 直接清空向量列，保留文件和文本/视觉文档正文。 */

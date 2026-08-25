@@ -38,6 +38,7 @@ import AssistantMarkdown from "./AssistantMarkdown";
 import FileMentionPicker from "./FileMentionPicker";
 import { useModelCatalog } from "./useModelCatalog";
 import { isFailedToolResult } from "./chat-stream-state";
+import { autoIndexUploadedFile } from "@/lib/auto-index";
 
 export { chatTextDelta };
 
@@ -45,6 +46,8 @@ const QUICK_ACTIONS: { icon: LucideIcon; label: string; msg: string }[] = [
   { icon: FolderOpen, label: "看看网盘里有什么", msg: "看看网盘里有什么文件" },
   { icon: FileSearch, label: "按内容找文件", msg: "帮我按内容搜索文件（用语义搜索）" },
   { icon: ListChecks, label: "整理文件", msg: "帮我整理一下网盘里的文件" },
+  { icon: FolderOpen, label: "整理下载目录", msg: "先查看下载目录，给我一个按类型和日期整理的方案，执行前先展示变更预览" },
+  { icon: FileSearch, label: "找重复文件", msg: "帮我找出可能重复的文件，先列出证据和候选，不要直接删除" },
   { icon: FileText, label: "写一份周报", msg: "根据最近的会话写一份周报" },
 ];
 
@@ -604,6 +607,9 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
           ? current
           : [...current, { name: file.name, path, is_dir: false, size: file.size }].slice(-16));
         emitToast({ kind: "ok", text: `已添加附件：${file.name}` });
+        void autoIndexUploadedFile(file, path).catch((indexError) => {
+          emitToast({ kind: "error", text: `自动索引失败：${String(indexError)}` });
+        });
       } catch (error) {
         emitToast({ kind: "error", text: `附件上传失败：${file.name}：${String(error)}` });
       }
