@@ -147,7 +147,7 @@ describe("ToolStep 工具步骤", () => {
   it("完成态工具步骤保留独立耗时", () => {
     render(<ToolStep step={{ tool: "backend_api", status: "done", elapsedMs: 4800, output: "{}", parsed: { ok: true } }} />);
     expect(screen.getByText("耗时 00:04")).toBeInTheDocument();
-    expect(screen.getByLabelText("工具耗时 耗时 00:04")).toBeInTheDocument();
+    expect(screen.getByLabelText("工具耗时 00:04")).toBeInTheDocument();
   });
 
   it("历史 backend_api 嵌套失败结果显示失败详情", () => {
