@@ -51,7 +51,7 @@ export default function WorkspaceHeader({ tab, modelName, onTabChange, onSetting
 
   return (
     <>
-      <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel/95 px-3 shadow-sm backdrop-blur sm:px-5">
+      <header className="relative z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel/95 px-3 shadow-sm backdrop-blur sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5">
           <Button
             type="button"
