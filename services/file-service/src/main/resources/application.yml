@@ -2,8 +2,8 @@ spring:
   application:
     name: agent-drive-file-service
   codec:
-    # Mirror requests carry up to 50 MiB raw bytes plus Base64/JSON overhead.
-    max-in-memory-size: ${FILE_MAX_REQUEST_BYTES:83886080}B
+    # The API accepts 300 MiB uploads; mirror JSON adds Base64/JSON overhead.
+    max-in-memory-size: ${FILE_MAX_REQUEST_BYTES:471859200}B
 
 server:
   address: ${FILE_BIND_ADDRESS:127.0.0.1}
@@ -12,4 +12,4 @@ server:
 file:
   internal-token: ${FILE_INTERNAL_TOKEN:}
   storage-root: ${FILE_STORAGE_ROOT:/opt/agent-drive-file/data}
-  max-read-bytes: ${FILE_MAX_READ_BYTES:52428800}
+  max-read-bytes: ${FILE_MAX_READ_BYTES:314572800}

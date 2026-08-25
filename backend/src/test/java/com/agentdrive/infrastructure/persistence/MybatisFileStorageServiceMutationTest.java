@@ -1,5 +1,6 @@
 package com.agentdrive.infrastructure.persistence;
 
+import com.agentdrive.files.FileMirrorPort;
 import com.agentdrive.infrastructure.persistence.mapper.FileMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -167,6 +168,41 @@ class MybatisFileStorageServiceMutationTest {
                 .get(2, TimeUnit.SECONDS);
         assertThat(Files.isDirectory(ownerRoot.resolve("after-rollback"))).isTrue();
         assertNoMutationArtifacts();
+    }
+
+    @Test
+    void mkdirRemoteFailureRestoresNewDirectoryChain() throws Exception {
+        FileMirrorPort mirror = mock(FileMirrorPort.class);
+        doThrow(new IllegalStateException("file service unavailable"))
+                .when(mirror).mkdirPath(owner, "nested/dir");
+        files = new MybatisFileStorageService(mapper, root, 10 * 1024 * 1024L,
+                null, null, mirror);
+
+        assertThatThrownBy(() -> files.mkdir(owner, "nested/dir"))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(Files.exists(ownerRoot.resolve("nested"))).isFalse();
+        verify(mirror).mkdirPath(owner, "nested/dir");
+    }
+
+    @Test
+    void mkdirTransactionRollbackRemovesRemoteDirectoryCreatedByThisMutation() throws Exception {
+        FileMirrorPort mirror = mock(FileMirrorPort.class);
+        when(mirror.mkdirPath(owner, "nested/dir")).thenReturn(true);
+        files = new MybatisFileStorageService(mapper, root, 10 * 1024 * 1024L,
+                null, null, mirror);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            files.mkdir(owner, "nested/dir");
+            assertThat(Files.isDirectory(ownerRoot.resolve("nested/dir"))).isTrue();
+            TransactionSynchronizationManager.getSynchronizations().get(0)
+                    .afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+            verify(mirror).deletePath(owner, "nested/dir");
+            assertThat(Files.exists(ownerRoot.resolve("nested"))).isFalse();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

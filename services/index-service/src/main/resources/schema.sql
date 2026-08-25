@@ -7,9 +7,12 @@ CREATE TABLE IF NOT EXISTS index_documents (
     extractor_version VARCHAR(128) NOT NULL,
     content TEXT NOT NULL,
     chunk_version VARCHAR(128) NOT NULL,
+    file_path VARCHAR(4096),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (owner_id, file_id, source_revision, document_type)
 );
+
+ALTER TABLE index_documents ADD COLUMN IF NOT EXISTS file_path VARCHAR(4096);
 
 CREATE TABLE IF NOT EXISTS index_chunks (
     id UUID PRIMARY KEY,

@@ -25,7 +25,9 @@ public record AppProperties(
         String identityServiceUrl,
         String identityServiceToken,
         String indexServiceUrl,
-        String indexServiceToken
+        String indexServiceToken,
+        String agentServiceUrl,
+        String agentServiceToken
 ) {
     /**
      * 创建面向最小启动配置的属性对象，其余配置使用完整绑定构造器的默认值。
@@ -33,7 +35,7 @@ public record AppProperties(
      * @param cookieSecure 是否为 Cookie 设置 Secure 标志。
      */
     public AppProperties(String mode, Boolean cookieSecure) {
-        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "", "", "", "", "", "", "");
+        this(mode, cookieSecure, "", "", "", 0, "data", 300, "", "", "", "", "", "", "", "", "", "");
     }
 
     /**
@@ -56,6 +58,8 @@ public record AppProperties(
      * @param identityServiceToken API 与 Identity Service 的内部令牌。
      * @param indexServiceUrl 可选 Index Service 根地址；为空时使用本地索引存储。
      * @param indexServiceToken API 与 Index Service 的内部令牌。
+     * @param agentServiceUrl 可选 Agent Service 根地址；为空时使用 API PostgreSQL 状态存储。
+     * @param agentServiceToken API 与 Agent Service 的内部令牌。
      */
     @ConstructorBinding
     public AppProperties {
@@ -73,6 +77,8 @@ public record AppProperties(
         identityServiceToken = identityServiceToken == null ? "" : identityServiceToken.trim();
         indexServiceUrl = indexServiceUrl == null ? "" : indexServiceUrl.trim();
         indexServiceToken = indexServiceToken == null ? "" : indexServiceToken.trim();
+        agentServiceUrl = agentServiceUrl == null ? "" : agentServiceUrl.trim();
+        agentServiceToken = agentServiceToken == null ? "" : agentServiceToken.trim();
     }
 
     /**

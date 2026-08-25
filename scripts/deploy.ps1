@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("frontend", "backend", "content", "file", "identity", "index", "all")]
+    [ValidateSet("frontend", "backend", "content", "file", "identity", "index", "agent", "all")]
     [string]$Target = "frontend",
     [ValidatePattern("^[A-Za-z0-9_.@:-]+$")]
     [string]$RemoteHost = "megumin",
@@ -20,6 +20,7 @@ $ContentRoot = Join-Path $RepoRoot "services/content-service"
 $FileServiceRoot = Join-Path $RepoRoot "services/file-service"
 $IdentityServiceRoot = Join-Path $RepoRoot "services/identity-service"
 $IndexServiceRoot = Join-Path $RepoRoot "services/index-service"
+$AgentServiceRoot = Join-Path $RepoRoot "services/agent-service"
 $DeployId = [Guid]::NewGuid().ToString("N")
 $RemoteArchive = "/tmp/agent-drive-out-$DeployId.tar"
 $RemoteJar = "/tmp/agent-drive-backend-$DeployId.jar"
@@ -32,6 +33,8 @@ $RemoteIdentityJar = "/tmp/agent-drive-identity-$DeployId.jar"
 $RemoteIdentityUnit = "/tmp/agent-drive-identity-$DeployId.service"
 $RemoteIndexJar = "/tmp/agent-drive-index-$DeployId.jar"
 $RemoteIndexUnit = "/tmp/agent-drive-index-$DeployId.service"
+$RemoteAgentJar = "/tmp/agent-drive-agent-$DeployId.jar"
+$RemoteAgentUnit = "/tmp/agent-drive-agent-$DeployId.service"
 $RemoteBackupScript = "/tmp/agent-drive-java-backup-$DeployId.sh"
 $RemoteBackupUnit = "/tmp/agent-drive-java-backup-$DeployId.service"
 $RemoteBackupTimer = "/tmp/agent-drive-java-backup-$DeployId.timer"
@@ -850,6 +853,108 @@ printf 'Index Service ready; release=%s previous=%s\n' "$release" "${previous_ta
     }
 }
 
+function Invoke-AgentServiceBuild {
+    Push-Location $AgentServiceRoot
+    try {
+        if (-not $SkipBuild) {
+            if (-not $SkipTests) { Invoke-Checked "mvn" @("-q", "test") }
+            Invoke-Checked "mvn" @("-q", "-DskipTests", "package")
+        }
+    }
+    finally { Pop-Location }
+
+    $artifact = Get-ChildItem -LiteralPath (Join-Path $AgentServiceRoot "target") -Filter "*.jar" -File |
+        Where-Object { $_.Name -notlike "*-plain.jar" } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -eq $artifact) { throw "Agent Service artifact not found under $AgentServiceRoot/target" }
+    return $artifact.FullName
+}
+
+function Deploy-AgentService {
+    param([Parameter(Mandatory)][string]$Artifact)
+
+    $unit = Join-Path $RepoRoot "deploy/agent-drive-agent.service"
+    if (-not (Test-Path $unit)) { throw "Agent Service systemd unit is missing: $unit" }
+    Invoke-Checked "scp" @($Artifact, "${RemoteHost}:$RemoteAgentJar")
+    Invoke-Checked "scp" @($unit, "${RemoteHost}:$RemoteAgentUnit")
+
+    $remoteScript = @'
+set -euo pipefail
+artifact='__REMOTE_AGENT_JAR__'
+unit='__REMOTE_AGENT_UNIT__'
+release_dir='/opt/agent-drive-agent/releases'
+current_link='/opt/agent-drive-agent/agent-service.jar'
+release="$release_dir/agent-service-__DEPLOY_ID__.jar"
+previous_target=''
+rollback_needed=0
+
+test -s "$artifact"
+test -f "$unit"
+mkdir -p /opt/agent-drive-agent "$release_dir" /etc/agent-drive-agent
+if [ ! -f /etc/agent-drive-agent/agent.env ]; then
+  printf 'Agent Service env is missing; install agent.env before deployment\n' >&2
+  exit 2
+fi
+
+rollback() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rollback_needed" -eq 1 ]; then
+    if [ -n "$previous_target" ] && [ -f "$previous_target" ]; then
+      ln -s "$previous_target" "${current_link}.rollback.$$"
+      mv -Tf "${current_link}.rollback.$$" "$current_link"
+      systemctl restart agent-drive-agent.service || true
+    else
+      systemctl stop agent-drive-agent.service || true
+    fi
+  fi
+  exit "$rc"
+}
+trap rollback EXIT
+
+if [ -L "$current_link" ]; then
+  previous_target="$(readlink -f "$current_link")"
+elif [ -f "$current_link" ]; then
+  previous_target="$release_dir/agent-service-legacy-$(date +%Y%m%d%H%M%S).jar"
+  mv "$current_link" "$previous_target"
+fi
+
+install -m 0644 "$artifact" "$release"
+install -m 0644 "$unit" /etc/systemd/system/agent-drive-agent.service
+systemd-analyze verify /etc/systemd/system/agent-drive-agent.service
+systemctl daemon-reload
+systemctl enable agent-drive-agent.service
+ln -s "$release" "${current_link}.new.$$"
+mv -Tf "${current_link}.new.$$" "$current_link"
+rollback_needed=1
+systemctl restart agent-drive-agent.service
+
+ready=0
+for _ in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8050/internal/v1/health \
+      | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  journalctl -u agent-drive-agent.service -n 80 --no-pager
+  exit 1
+fi
+rollback_needed=0
+rm -f "$artifact" "$unit"
+printf 'Agent Service ready; release=%s previous=%s\n' "$release" "${previous_target:-none}"
+'@
+    $remoteScript = $remoteScript.Replace("__REMOTE_AGENT_JAR__", $RemoteAgentJar)
+    $remoteScript = $remoteScript.Replace("__REMOTE_AGENT_UNIT__", $RemoteAgentUnit)
+    $remoteScript = $remoteScript.Replace("__DEPLOY_ID__", $DeployId)
+    try { Invoke-RemoteBash $remoteScript }
+    finally {
+        $cleanup = "rm -f '$RemoteAgentJar' '$RemoteAgentUnit'"
+        try { Invoke-RemoteBash $cleanup } catch { Write-Warning $_.Exception.Message }
+    }
+}
+
 Require-Command "ssh"
 Require-Command "scp"
 
@@ -859,6 +964,7 @@ $contentArtifact = $null
 $fileArtifact = $null
 $identityArtifact = $null
 $indexArtifact = $null
+$agentArtifact = $null
 if ($Target -in @("frontend", "all")) {
     Require-Command "npm"
     Require-Command "tar"
@@ -884,6 +990,10 @@ if ($Target -eq "index") {
     Require-Command "mvn"
     $indexArtifact = Invoke-IndexServiceBuild
 }
+if ($Target -eq "agent") {
+    Require-Command "mvn"
+    $agentArtifact = Invoke-AgentServiceBuild
+}
 
 if ($Target -in @("frontend", "all")) {
     Deploy-Frontend $frontendOut
@@ -899,6 +1009,9 @@ if ($Target -eq "identity") {
 }
 if ($Target -eq "index") {
     Deploy-IndexService $indexArtifact
+}
+if ($Target -eq "agent") {
+    Deploy-AgentService $agentArtifact
 }
 if ($Target -in @("backend", "all")) {
     Deploy-Backend $backendArtifact

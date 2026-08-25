@@ -2,11 +2,15 @@ package com.agentdrive.infrastructure.persistence;
 
 import com.agentdrive.index.IndexStore;
 import com.agentdrive.infrastructure.persistence.mapper.IndexMapper;
+import com.agentdrive.index.RemoteIndexDocumentClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -15,14 +19,25 @@ import java.util.UUID;
  * 向量查询可按文件路径过滤，清理和更新也保持数据库原子性。</p>
  */
 public class MybatisIndexStore implements IndexStore {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MybatisIndexStore.class);
     private final IndexMapper mapper;
+    private final RemoteIndexDocumentClient remote;
+    private final String readMode;
 
     /**
      * 保存索引 SQL Mapper。
      * @param mapper 读写文档、chunk 和 embedding 的 Mapper。
      */
     public MybatisIndexStore(IndexMapper mapper) {
+        this(mapper, null, "local");
+    }
+
+    /** 创建带 Index Service 语义读路由的存储；local/dual/remote 可随时回退。 */
+    public MybatisIndexStore(IndexMapper mapper, RemoteIndexDocumentClient remote, String readMode) {
         this.mapper = Objects.requireNonNull(mapper, "mapper must not be null");
+        this.remote = remote;
+        String normalized = readMode == null ? "local" : readMode.trim().toLowerCase(java.util.Locale.ROOT);
+        this.readMode = Set.of("local", "dual", "remote").contains(normalized) ? normalized : "local";
     }
 
     /**
@@ -99,9 +114,22 @@ public class MybatisIndexStore implements IndexStore {
         requireUser(userId);
         if (fingerprint == null || fingerprint.isBlank()) return List.of();
         if (vector == null || vector.isBlank()) throw new IllegalArgumentException("query vector is empty");
-        return mapper.semanticSearch(userId.toString(), fingerprint, vector,
+        List<Map<String, Object>> local = mapper.semanticSearch(userId.toString(), fingerprint, vector,
                 prefix == null || prefix.isBlank() ? null : prefix,
                 Math.max(1, Math.min(limit, 1000)));
+        if (remote == null || "local".equals(readMode)) return local;
+        try {
+            List<Map<String, Object>> remoteRows = enrichRemote(userId, remote.searchSemantic(
+                    userId, fingerprint, vector, prefix, Math.max(1, Math.min(limit, 1000))));
+            if ("dual".equals(readMode)) {
+                compareSemantic("semanticSearch", local, remoteRows);
+                return local;
+            }
+            return remoteRows;
+        } catch (RuntimeException error) {
+            LOGGER.warn("remote index semantic read failed; using local fallback: {}", error.getMessage());
+            return local;
+        }
     }
 
     /**
@@ -116,9 +144,51 @@ public class MybatisIndexStore implements IndexStore {
         if (vector == null || vector.isBlank()) throw new IllegalArgumentException("query vector is empty");
         int boundedLimit = Math.max(1, Math.min(limit, 100));
         int boundedNeighbors = Math.max(0, Math.min(neighbors, 2));
-        return mapper.semanticEvidence(userId.toString(), fingerprint, vector,
+        List<Map<String, Object>> local = mapper.semanticEvidence(userId.toString(), fingerprint, vector,
                 prefix == null || prefix.isBlank() ? null : prefix,
                 boundedLimit, boundedNeighbors, minScore);
+        if (remote == null || "local".equals(readMode)) return local;
+        try {
+            List<Map<String, Object>> remoteRows = remote.searchSemantic(userId, fingerprint, vector, prefix,
+                    boundedLimit).stream().map(row -> {
+                        Map<String, Object> value = new java.util.LinkedHashMap<>(row);
+                        value.put("match_chunk_index", row.get("chunk_index"));
+                        value.put("match_content", row.get("search_snippet"));
+                        value.put("result_rank", 0);
+                        return value;
+                    }).toList();
+            if ("dual".equals(readMode)) {
+                compareSemantic("semanticEvidence", local, remoteRows);
+                return local;
+            }
+            return remoteRows;
+        } catch (RuntimeException error) {
+            LOGGER.warn("remote index semantic evidence read failed; using local fallback: {}", error.getMessage());
+            return local;
+        }
+    }
+
+    private List<Map<String, Object>> enrichRemote(UUID userId, List<Map<String, Object>> rows) {
+        return rows.stream().map(row -> {
+            Map<String, Object> value = new java.util.LinkedHashMap<>(row);
+            String path = String.valueOf(row.getOrDefault("path", ""));
+            Map<String, Object> file = mapper.selectFile(userId.toString(), path);
+            if (file != null) {
+                value.putIfAbsent("size", file.get("size_bytes"));
+                value.putIfAbsent("mtime", file.get("mtime"));
+            }
+            return value;
+        }).toList();
+    }
+
+    private void compareSemantic(String operation, List<Map<String, Object>> local,
+                                 List<Map<String, Object>> remoteRows) {
+        List<String> left = local.stream().map(row -> String.valueOf(row.get("file_id"))).toList();
+        List<String> right = remoteRows.stream().map(row -> String.valueOf(row.get("file_id"))).toList();
+        if (!left.equals(right)) {
+            LOGGER.warn("index dual-read mismatch operation={} local_count={} remote_count={}",
+                    operation, left.size(), right.size());
+        }
     }
 
     /**

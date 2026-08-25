@@ -61,6 +61,11 @@ cd services/index-service
 mvn -q test
 mvn -q -DskipTests package
 
+# Agent/Chat State Service
+cd services/agent-service
+mvn -q test
+mvn -q -DskipTests package
+
 # 生产 smoke 通过 systemd units、API health 和 nginx health 验证；legacy-python-data/ 只供显式 migrate/人工恢复，不进入生产运行时
 
 # 前端
@@ -78,10 +83,10 @@ cd frontend/android && gradlew.bat assembleRelease
 ## 3. 部署与发布流程
 
 1. **固化版本**：先检查工作区并提交可复现的变更；禁止把未核对的历史迁移改动与当前修复混在一次提交中。部署脚本不会自动 `commit` 或 `push`。
-2. **推荐发布**：执行 `pwsh -File scripts/deploy.ps1 -Target frontend`、`-Target content`、`-Target file`、`-Target index`、`-Target backend` 或 `-Target all`。脚本从当前工作区构建，递增 Service Worker cache，使用 tar 全量上传并原子替换静态目录；`content` 会安装独立 Content Service artifact/unit、运行 `systemd-analyze verify` 并检查 `127.0.0.1:8010/health`；`file` 会安装独立 File Service artifact/unit 并检查 `127.0.0.1:8020/internal/v1/health`；`index` 会要求预置独立数据库和 0600 `/etc/agent-drive-index/index.env`，并检查 `127.0.0.1:8040/internal/v1/health`；`all` 还会检查 API health/readiness。Identity Service 需要先准备独立数据库和 `/etc/agent-drive-identity/identity.env`，确认迁移窗口后才允许显式执行 `-Target identity`；它不包含在 `all` 中。Index/Identity 也不包含在 `all` 中，避免未迁移数据时误切流。
+2. **推荐发布**：执行 `pwsh -File scripts/deploy.ps1 -Target frontend`、`-Target content`、`-Target file`、`-Target identity`、`-Target index`、`-Target agent`、`-Target backend` 或 `-Target all`。脚本从当前工作区构建，递增 Service Worker cache，使用 tar 全量上传并原子替换静态目录；各独立服务都执行 `systemd-analyze verify`、loopback health 和上一版本回滚。`identity/index/agent` 要求预置各自独立数据库和 0600 env；`all` 仍不隐式切换它们，避免未迁移数据时误切流。
 3. **前端边界**：不要用 PowerShell 通配符 `out\*` scp，必须保留 `.well-known/assetlinks.json`；APK 只在 App 测试或发版时构建，日常部署保留已有 `out/app/agent-drive.apk`。服务器原地重建可用 `bash deploy/rebuild-out.sh`，但仍需先确认备份和当前分支。
 4. **首次安装/unit 变更**：复制 API 和 `agent-drive-java-backup.service/.timer` 到 `/etc/systemd/system/`，执行 `systemd-analyze verify`、`daemon-reload` 和 `enable`；停用旧 Worker unit；`/etc/agent-drive/proxy.env` 从模板创建并 chmod 0600，只允许 HTTP(S) 代理。
-5. **数据备份**：`agent-drive-java-backup.timer` 每日执行 `scripts/backup-java.sh`，把 PostgreSQL dump 与 owner 文件根归档到 `/opt/agent-drive-java/backups/`，保留最近 7 份并生成 SHA-256 校验文件；仓库不再提供旧 Python/SQLite 定时备份入口。若仍需读取 legacy SQLite，只能经 SQLite backup API 生成一致快照，禁止直接打包活动中的 WAL 三件套。
+5. **数据备份**：`agent-drive-java-backup.timer` 每日执行 `scripts/backup-java.sh`，把主库、独立 Index DB、Identity/Agent DB（若 env 存在）与 owner 文件根归档到 `/opt/agent-drive-java/backups/`，保留最近 7 份并生成 SHA-256 校验文件；仓库不再提供旧 Python/SQLite 定时备份入口。
 
 **交付门禁**：代码或运行行为改动完成后，默认继续执行对应测试、构建、生产部署和 health/readiness 检查；`scripts/deploy.ps1 -Target all` 必须在 API/database/storage readiness 通过后才算发布成功，未收敛应触发回滚。文档-only 改动不重建 artifact，但必须通过文档一致性检查。只有用户明确要求暂不发布，或部署被外部条件阻断时，才停在本地验证并说明原因。
 
@@ -99,7 +104,7 @@ cd frontend/android && gradlew.bat assembleRelease
 - **Spring 多构造器 Bean**：生产组件保留测试辅助构造器时，必须在真实依赖构造器上显式标注 `@Autowired`；否则 Spring 会按默认构造器推断并在生产启动时以 `No default constructor found` 失败。相关 Bean 要有构造注入契约回归。
 - **WebFlux 阻塞边界**：Controller/principal resolver 内的 JDBC、文件、provider 或其他同步调用统一使用 `ReactiveExecution.blocking(...)`；已经返回 `Mono` 但源会阻塞时使用 `onBlockingScheduler(...)`。禁止在各 Controller 重新复制 `Mono.fromCallable(...).subscribeOn(boundedElastic())` 私有 helper，也禁止把文件 `transferTo` 等原生 reactive 阶段无故整体搬到 bounded-elastic。
 - **任务系统状态**：任务、计划、outbox、Worker 和进度队列已从当前运行时移除；历史 PostgreSQL 表与迁移仅作为旧数据兼容记录，禁止新代码注入、写入或暴露这些接口。索引、视觉、向量和维护操作必须走各自业务 API，并在当前响应返回成功或结构化错误。
-- **微服务迁移边界**：当前生产仍是 Java 模块化单体；跨模块先使用 Port/DTO，禁止直接依赖另一领域的实现类。真正拆网服务前必须先完成 owner/服务鉴权、对象存储迁移、服务级数据所有权和 ChatRunRegistry 外部化；不得让新服务共享 owner 本地路径或直接读写其他服务数据库，也不得恢复历史任务/outbox 运行链路。
+- **微服务迁移边界**：生产 API 仍是 Java 模块化边缘层，但 Content/File/Identity/Index/Agent Service 已独立部署并通过 Port/DTO + 内部 token 通信；各服务拥有独立 schema/database，禁止共享 owner 本地路径或直接读写其他服务数据库。ChatRunRegistry 的持久状态已外部化到 Agent Service；不得恢复历史任务/outbox 运行链路。
 - **文件内容端口**：视觉和 Tika 抽取必须依赖 `FileContentPort.readBytes(owner_id, path, max_bytes)`，只接收受限原始字节；不得把本地绝对路径传给未来远程服务。`FileStorageService` 可作为本地实现的兼容适配器，但 File Controller 的完整文件 mutation 契约不等同于内容读取端口。
 - **通用 Agent 工具**：生产注册 `backend_api`、`frontend_api`、只读 `read_skill` 和仅记录当前会话可视化进度的 `plan`；前两者只有稳定的 `discover/call` envelope，不为每个后端路由或 React handler 单独注册模型工具。`backend_api` 先发现 `METHOD /api/v1/path` 或 `INTERNAL name`，再调用精确 operation；discover 使用 `discovery_offset/discovery_limit` 稳定分页（默认 6、最大 20），响应必须包含 `total_matches/returned/offset/limit/has_more/next_offset`，每项附 `parameter_schema` 的参数位置和必填字段，call 会再次执行同一 Schema 校验。dispatcher 返回的业务 `{ok:false}` 必须提升到 envelope 顶层并补齐 `status/code/detail`，不能被嵌套结果吞成成功或排队状态；前端历史记录也必须识别旧版嵌套失败。provider 配置写入、模型目录探测和 API key 处理只走设置页 REST，不进入 Agent catalog；Agent 参数递归拒绝 `api_key/base_url/token/secret/authorization` 等字段。Agent 不得主动创建任务系统；`plan` 只能保存本轮完整步骤状态，不创建后台任务或队列。中文“后端/接口/操作”等领域词在目录层统一规范化。`frontend_api` 的能力来自当前浏览器 registry，discover 只返回匹配动作，call 只允许当前 registry 中的 exact operation，绝不接受 JavaScript 函数名、`eval`、任意 URL、请求头或凭据。绿色内部前端导航可直接执行，文件 mutation 和外部调用仍按风险/批准模式处理。前端动作成功后以 `frontend_action` SSE 事件交给本地 handler，前端再次按 registry、schema 和路径规则校验。HTTP 目录排除 auth/chat/health 和外部 URL；模型不能提供 Cookie、Bearer、Authorization、任意请求头、Python/Java 入口或未登记 operation。索引资源接口只接受 owner-relative 路径、当前认证 owner 和各自 Schema；`POST /api/v1/vision/describe` 只返回固定视觉描述。当前请求的认证 owner 由 Java runtime 注入工具上下文，模型不能获得 Cookie、Bearer、API key 或其他凭据。
 - **Skill 系统**：V13 `agent_skills` 是 owner-scoped 自定义 Skill 真相源；名称统一为 1-64 位小写 slug，每 owner 最多 100 个，description ≤500、instructions ≤16000，保存递增 version。每次聊天请求注入当前启用 Skill 的有界摘要目录；已加载正文最多 16 个且受 runtime 字符预算约束。目录要求模型在用户点名或任务匹配时直接用 exact name 调 `read_skill action=read`，discover 只用于搜索/刷新摘要。会话已成功读取的 Skill 名称由服务端从 owner-scoped transcript 记录，后续轮次从当前 registry 重新注入最新正文并标记“已加载”，不得重复调用 `read_skill`；Skill 更新/停用时以当前 registry 为准。自定义创建/更新/启停/删除只走认证 `/api/v1/skills` 或 red `backend_api` operation，已知 key/Bearer 模式落库前不可逆脱敏。`agent-drive-api` 由当前 `OperationCatalog` 动态生成，`skill-authoring` 固化 CRUD/校验规则；两个内置 Skill 都只读且不占 owner 配额。Skill 指令只能编排已登记工具，不能引入任意 URL/header/credential/脚本或扩大 owner 权限。
@@ -190,7 +195,7 @@ cd frontend/android && gradlew.bat assembleRelease
 
 ## 5. Java 后端现行约定
 
-- **API 与服务运行模式**：`backend/` 是 Java 21 API 主目录；生产由 `agent-drive-java.service` 运行 `--app.mode=api`，并由独立 `agent-drive-content.service` 承载已接入的视觉内容理解；`agent-drive-index.service` 已部署并接入文档双写，主 API 查询仍使用本地 IndexStore；`agent-drive-file.service` 已部署，File DB 已完成 796 个文件的逐文件 MD5 镜像但在 mutation 读写切换前不接管主 API；Identity Service 仅在显式准备数据库后部署。任务/Worker unit 已移除，禁止运行时调用 Python API；Python source/unit 已删除，legacy data/system 只在显式 `migrate` profile 下作为受控迁移/人工恢复输入。
+- **API 与服务运行模式**：`backend/` 是 Java 21 API 主目录；生产由 `agent-drive-java.service` 运行 `--app.mode=api`，并由独立 Content/File/Identity/Index/Agent units 承载对应服务边界。Index 生产读模式为 `remote` 并保留 local fallback；File Service 接管原始内容读取和物理 mutation 镜像；Agent Service 持有 session/transcript/replay/confirmation/run/event 状态。任务/Worker unit 已移除，禁止运行时调用 Python API；legacy data/system 只在显式 `migrate` profile 下作为受控迁移/人工恢复输入。
 - **数据库真相源**：结构化运行状态统一进入 PostgreSQL/pgvector；`tasks.sqlite3`、认证/设备/上传索引 JSON 不再是生产真相源。实际二进制文件以及用户可见 Agent 文档暂留 owner-scoped 本地文件系统。
 - **Megumin 迁移数据库**：使用独立 `agent-drive-java-postgres`（`pgvector/pgvector:pg16`）容器和 `/opt/agent-drive-java/postgres` 卷，宿主仅绑定 `127.0.0.1:15433`；数据库凭据与随机 AES-GCM keys 在 0600 的 `/etc/agent-drive-java/java.env`，不得复用其他业务 PostgreSQL 或进 git。
 - **客户端契约**：当前实现必须保持 `/api/v1`、SSE JSON 事件、Cookie/Bearer/设备令牌、Android 同步协议和前端工具步骤的一致性；任何契约变更先补 Java/前端/Android 测试，再更新专题文档。

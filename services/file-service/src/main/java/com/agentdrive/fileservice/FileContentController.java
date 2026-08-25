@@ -73,6 +73,14 @@ public final class FileContentController {
         return service.mirror(request);
     }
 
+    /** 确保一个 owner 目录镜像存在。 */
+    @PutMapping("/files/mirror/directory")
+    public Map<String, Object> mkdirMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                           @Valid @RequestBody MirrorDirectoryRequest request) {
+        authorize(token);
+        return service.mkdirMirror(request);
+    }
+
     /** 删除一个 owner 文件镜像。 */
     @DeleteMapping("/files/mirror")
     public Map<String, Object> deleteMirror(@RequestHeader(value = TOKEN_HEADER, required = false) String token,

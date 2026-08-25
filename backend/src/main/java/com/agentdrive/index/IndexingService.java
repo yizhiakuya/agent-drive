@@ -97,7 +97,7 @@ public class IndexingService {
         index.replaceDocument(userId, fileId, revision, content, EXTRACTOR_VERSION, chunks, CHUNK_VERSION);
         if (remote != null) {
             remote.replace(userId, fileId, revision, IndexStore.TEXT_DOCUMENT_TYPE,
-                    EXTRACTOR_VERSION, content, CHUNK_VERSION, chunks);
+                    EXTRACTOR_VERSION, content, CHUNK_VERSION, chunks, path);
         }
         return result(path, true, "indexed", content.length(), IndexStore.TEXT_DOCUMENT_TYPE);
     }
@@ -128,7 +128,7 @@ public class IndexingService {
                 description, "vision-description-v3", chunks, "vision-chunk-v3");
         if (remote != null) {
             remote.replace(userId, fileId, revision, IndexStore.VISION_DOCUMENT_TYPE,
-                    "vision-description-v3", description, "vision-chunk-v3", chunks);
+                    "vision-description-v3", description, "vision-chunk-v3", chunks, path);
         }
         return result(path, true, "vision_indexed", description.length(), IndexStore.VISION_DOCUMENT_TYPE);
     }

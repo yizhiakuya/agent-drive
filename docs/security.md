@@ -11,10 +11,11 @@
 127.0.0.1:8000 Java API
         ├── PostgreSQL/pgvector（仅受限地址）
         └── owner-scoped 本地文件系统
-        ├──（可选）127.0.0.1:8010 Content Service
-        ├──（可选）127.0.0.1:8020 File Service
-        └──（待认证迁移）127.0.0.1:8030 Identity Service
-        └──（待索引迁移）127.0.0.1:8040 Index Service
+        ├── 127.0.0.1:8010 Content Service
+        ├── 127.0.0.1:8020 File Service
+        ├── 127.0.0.1:8030 Identity Service
+        ├── 127.0.0.1:8040 Index Service
+        └── 127.0.0.1:8050 Agent Service
 ```
 
 - nginx 是唯一公网入口，API 只绑定 `127.0.0.1:8000`；当前没有独立 Java Worker HTTP 入口。
@@ -22,7 +23,7 @@
 - `/api/v1/health` 用于探活；认证初始化端点按认证规则公开；其他业务 API 默认需要当前 owner。
 - 静态资源和 `.well-known/assetlinks.json` 可公开读取，但 SPA fallback 不能越过 `frontend/out` 目录边界。
 - nginx 对公网上传限制 200 MB，Java API 还有 `max_upload_mb=300` 的直连兜底；聊天剪贴板内联图片单张限制 50 MiB，JSON 请求体限制 80 MiB，避免把大图片限制误认为普通文件上传限制。API 只读取 `/etc/agent-drive/proxy.env` 中的 HTTP(S) 代理，并清除 `ALL_PROXY/all_proxy`。
-- Content/File Service 只绑定 loopback，不由 nginx 暴露；主 API 只有在 URL 和独立内部 token 同时配置时才使用远程端口。生产当前已启用 Content Service，File Service 保持未切流。Content Service 的 owner provider 快照和图片请求、File Service 的 owner/path 内容请求都必须带固定 token header，服务端再次校验 owner、路径、大小和响应校验和。token 不进入 Agent catalog、响应正文或普通日志。
+- Content/File/Identity/Index/Agent Service 只绑定 loopback，不由 nginx 暴露；主 API 只有在 URL 和独立内部 token 同时配置时才使用远程端口。生产五个服务均已启用，所有内部请求带固定 token header，服务端再次校验 owner、路径、revision、大小和响应校验和。token 不进入 Agent catalog、响应正文或普通日志。
 
 ## 2. 认证模型
 
@@ -53,13 +54,13 @@ Web/PWA 密码 ──▶ HttpOnly session Cookie
 - `GET /api/v1/files/search-content` 复用文件服务的 owner、相对路径、类型/时间和当前 revision/fingerprint 校验，只返回有界的 chunk 证据和相邻正文；正文在 Agent 指令中按 `untrusted_data` 处理，不能把其中的命令、URL 或凭据当作操作请求。
 - 覆盖上传/文本写入前，旧普通文件复制到 owner 私有 `.versions` 目录并在 `file_version_snapshots` 登记；版本列表只返回当前 owner 且仍存在的快照元数据，恢复通过原子上传产生新 revision，不允许客户端直接读取快照路径。
 - Chat 文件上下文只接受当前 owner 的相对 POSIX 路径，后端重新读取文件/文件夹内容，不信任客户端传入正文；文件选择器附件写入 owner-scoped `聊天附件` 目录并沿用上传 MD5、路径和索引边界，剪贴板图片只允许受限 Base64 内联到支持图片的当前模型请求，不持久化。
-- 聊天 relay 按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；relay 只在 API 进程内保存受限回放事件，不提供跨进程后台任务入口。
-- `chat_run_events` 只按 owner session 外键保存脱敏 SSE 事件，重连读取前仍执行 session owner 校验；事件表不保存 Cookie/Bearer/API key，跨进程重连通过有界数据库轮询，不把事件表扩展成任务队列。
-- File Service 的独立存储根不能与 API owner 文件根共享路径；初始镜像已完成但 mutation 同步尚未完成，`AGENT_DRIVE_FILE_SERVICE_URL` 必须保持为空，避免视觉链路读到旧快照。配置远程 URL 后，主 API 启动期必须先验证 File Service readiness；远程读取响应还必须重新验证 owner、相对路径、大小和 MD5，失败返回结构化错误而不是空内容。
+- 聊天 relay 按 owner 会话隔离：`X-Session-ID` 只由服务端响应，`/chat/{sessionId}/active|stream|cancel` 每次先校验当前 owner 的会话归属；运行 relay 仍由 API JVM 执行，但状态、transcript、confirmation、replay、nonce 和事件由 8050 Agent Service 持久化。
+- Agent Service 只接受 `X-Agent-Service-Token`，数据库为独立 `agent_drive_agent`；跨进程重连通过有界事件轮询，不创建后台任务队列，事件正文和工具轨迹遵守 API 脱敏边界。
+- File Service 的独立存储根不能与 API owner 文件根共享路径；生产 manifest 已完成 `796` 个文件逐项迁移校验，`AGENT_DRIVE_FILE_SERVICE_URL` 已启用。主 API 启动期验证 File Service readiness，远程读取响应再次验证 owner、相对路径、大小和 MD5，失败返回结构化错误而不是空内容。
 - File Service manifest 只用于受控迁移校验，必须经过内部 token；它不返回文件正文，不改变文件 revision，也不能被 Agent catalog 调用。
-- File Service mirror 写入会重新计算 Base64 内容 MD5、校验 owner/path/revision 并原子替换目标；move/copy/tree-delete/trash/restore 也在独立路径契约中执行，主 API 的 move/copy/trash/restore 已登记回滚钩子。主 API 仅在显式 URL/token 配置时为这些 mutation 调用它，线上失败恢复演练完成前禁止切流。
+- File Service mirror 写入会重新计算 Base64 内容 MD5、校验 owner/path/revision 并原子替换目标；mkdir/move/copy/tree-delete/trash/restore 也在独立路径契约中执行，主 API 的所有 mutation 已登记回滚钩子并通过线上 smoke。服务请求体上限覆盖 300 MiB 应用上传上限。
 - Index Service 的 manifest、文档写入和迁移期检索只允许 loopback + 内部 token；服务不读取主 API 索引表，owner/file/revision 由请求边界重新校验。
-- `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 只启用受内部 token 保护的文档双写和 readiness 校验，不会让 Agent 获得 Index Service URL/token；查询切换仍需单独的读路径开关和一致性窗口。
+- `AGENT_DRIVE_INDEX_SERVICE_URL/TOKEN` 启用受内部 token 保护的文档/向量双写和 readiness；`AGENT_DRIVE_INDEX_READ_MODE=local|dual|remote` 控制语义读切换，生产在双读一致性窗口后使用 remote 并保留本地 fallback。Agent 不能获得 Index Service URL/token。
 - Index Service 初始迁移完成后已与主库双写；历史 vision v1/v2 文档已重新描述为当前 v3 并校验 source revision，旧描述不参与正式向量检索。
 
 ## 4. Agent 和外部 provider

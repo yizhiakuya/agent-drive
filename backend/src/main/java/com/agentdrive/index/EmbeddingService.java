@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.agentdrive.net.HttpClientSupport;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -97,6 +99,7 @@ public interface EmbeddingService {
         private final EmbeddingRuntimeConfig configs;
         private final IndexStore index;
         private final ObjectMapper objectMapper;
+        private final RemoteIndexDocumentClient remote;
         private final HttpClient client = HttpClientSupport.builder(TIMEOUT).build();
 
         /**
@@ -108,9 +111,17 @@ public interface EmbeddingService {
          * @param objectMapper 构造请求 JSON 和解析 provider 响应的 Jackson mapper。
          */
         public Jina(EmbeddingRuntimeConfig configs, IndexStore index, ObjectMapper objectMapper) {
+            this(configs, index, objectMapper, null);
+        }
+
+        /** 创建带可选远程 Index Service 向量双写的实现。 */
+        @Autowired
+        public Jina(EmbeddingRuntimeConfig configs, IndexStore index, ObjectMapper objectMapper,
+                    ObjectProvider<RemoteIndexDocumentClient> remote) {
             this.configs = configs;
             this.index = index;
             this.objectMapper = objectMapper;
+            this.remote = remote == null ? null : remote.getIfAvailable();
         }
 
         /**
@@ -268,6 +279,13 @@ public interface EmbeddingService {
                 }
                 UUID chunkId = UUID.fromString(String.valueOf(chunks.get(i).get("id")));
                 int updated = index.updateEmbedding(userId, chunkId, vector, fingerprint);
+                if (remote != null && updated > 0) {
+                    UUID fileId = UUID.fromString(String.valueOf(chunks.get(i).get("file_id")));
+                    long revision = number(chunks.get(i).get("source_revision"));
+                    String documentType = String.valueOf(chunks.get(i).getOrDefault("document_type", "text"));
+                    int chunkIndex = number(chunks.get(i).get("chunk_index"));
+                    remote.updateEmbedding(userId, fileId, revision, documentType, chunkIndex, vector, fingerprint);
+                }
                 embedded += updated;
             }
             return Map.of("vectorized", true, "embedded", embedded);

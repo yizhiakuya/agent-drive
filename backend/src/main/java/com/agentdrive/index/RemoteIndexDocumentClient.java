@@ -62,6 +62,15 @@ public final class RemoteIndexDocumentClient {
     public Map<String, Object> replace(UUID ownerId, UUID fileId, long revision,
                                        String documentType, String extractorVersion,
                                        String content, String chunkVersion, List<String> chunks) {
+        return replace(ownerId, fileId, revision, documentType, extractorVersion,
+                content, chunkVersion, chunks, null);
+    }
+
+    /** 原子替换文档并同步 owner-relative 路径，供远程语义读返回稳定路径。 */
+    public Map<String, Object> replace(UUID ownerId, UUID fileId, long revision,
+                                       String documentType, String extractorVersion,
+                                       String content, String chunkVersion, List<String> chunks,
+                                       String path) {
         Map<String, Object> body = Map.of(
                 "owner_id", ownerId.toString(),
                 "file_id", fileId.toString(),
@@ -70,8 +79,40 @@ public final class RemoteIndexDocumentClient {
                 "extractor_version", extractorVersion,
                 "content", content == null ? "" : content,
                 "chunk_version", chunkVersion,
-                "chunks", chunks == null ? List.of() : chunks);
+                "chunks", chunks == null ? List.of() : chunks,
+                "path", path == null ? "" : path);
         return post("/internal/v1/index/documents", body);
+    }
+
+    /** 按 file/revision/type/chunk 写入远程向量，避免依赖两边随机 chunk UUID 相同。 */
+    public Map<String, Object> updateEmbedding(UUID ownerId, UUID fileId, long revision,
+                                               String documentType, int chunkIndex,
+                                               String embedding, String fingerprint) {
+        return post("/internal/v1/index/embeddings", Map.of(
+                "owner_id", ownerId.toString(), "file_id", fileId.toString(),
+                "source_revision", revision, "document_type", documentType,
+                "chunk_index", chunkIndex, "embedding", embedding, "fingerprint", fingerprint));
+    }
+
+    /** 迁移期补齐远程文档路径元数据。 */
+    public Map<String, Object> updatePath(UUID ownerId, UUID fileId, long revision,
+                                          String documentType, String path) {
+        return put("/internal/v1/index/paths", Map.of(
+                "owner_id", ownerId.toString(), "file_id", fileId.toString(),
+                "source_revision", revision, "document_type", documentType, "path", path));
+    }
+
+    /** 远程语义检索，返回与本地 IndexStore.semanticSearch 相同的行结构。 */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> searchSemantic(UUID ownerId, String fingerprint, String vector,
+                                                    String prefix, int limit) {
+        Map<String, Object> response = post("/internal/v1/index/search-semantic", Map.of(
+                "owner_id", ownerId.toString(), "fingerprint", fingerprint,
+                "vector", vector, "prefix", prefix == null ? "" : prefix, "limit", limit));
+        Object items = response.get("items");
+        if (!(items instanceof List<?> list)) return List.of();
+        return list.stream().filter(Map.class::isInstance)
+                .map(item -> (Map<String, Object>) item).toList();
     }
 
     private Map<String, Object> get(String path) {
@@ -101,6 +142,20 @@ public final class RemoteIndexDocumentClient {
         }
     }
 
+    private Map<String, Object> put(String path, Map<String, Object> body) {
+        try {
+            HttpResponse<String> response = client.send(request(path, "PUT",
+                            objectMapper.writeValueAsString(body)),
+                    HttpClientSupport.limitedUtf8BodyHandler(4 * 1024 * 1024));
+            return parse(response);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("index service request interrupted", error);
+        } catch (IOException error) {
+            throw new IllegalStateException("index service request failed", error);
+        }
+    }
+
     private Map<String, Object> parse(HttpResponse<String> response) throws IOException {
         JsonNode root = objectMapper.readTree(response.body());
         if (response.statusCode() < 200 || response.statusCode() >= 300
@@ -116,9 +171,9 @@ public final class RemoteIndexDocumentClient {
                 .timeout(TIMEOUT)
                 .header(TOKEN_HEADER, token)
                 .header("Accept", "application/json");
-        if ("POST".equals(method)) {
+        if ("POST".equals(method) || "PUT".equals(method)) {
             builder.header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+                    .method(method, HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
         } else {
             builder.GET();
         }

@@ -4,15 +4,33 @@ set -euo pipefail
 
 umask 077
 
+# The Agent Service owns its own database. Load its private env when present so
+# the shared backup timer covers chat sessions, transcript, replay and run events.
+if [[ -f /etc/agent-drive-agent/agent.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source <(sed 's/\r$//' /etc/agent-drive-agent/agent.env)
+  set +a
+fi
+if [[ -f /etc/agent-drive-index/index.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source <(sed 's/\r$//' /etc/agent-drive-index/index.env)
+  set +a
+fi
+
 BACKUP_DIR="${AGENT_DRIVE_BACKUP_DIR:-/opt/agent-drive-java/backups}"
 DATA_DIR="${AGENT_DRIVE_DATA_DIR:-/opt/agent-drive-java/data}"
 POSTGRES_CONTAINER="${AGENT_DRIVE_POSTGRES_CONTAINER:-agent-drive-java-postgres}"
 DATABASE_USER="${AGENT_DRIVE_DATABASE_USERNAME:-agent_drive}"
 DATABASE_NAME="${AGENT_DRIVE_DATABASE_NAME:-agent_drive}"
 DATABASE_PASSWORD="${AGENT_DRIVE_DATABASE_PASSWORD:-}"
-INDEX_DATABASE_USER="${INDEX_DATABASE_USERNAME:-}"
+INDEX_DATABASE_USER="${INDEX_DATABASE_USERNAME:-${INDEX_DATABASE_USER:-}}"
 INDEX_DATABASE_NAME="${INDEX_DATABASE_NAME:-}"
 INDEX_DATABASE_PASSWORD="${INDEX_DATABASE_PASSWORD:-}"
+AGENT_DATABASE_USER="${AGENT_DATABASE_USERNAME:-}"
+AGENT_DATABASE_NAME="${AGENT_DATABASE_NAME:-agent_drive_agent}"
+AGENT_DATABASE_PASSWORD="${AGENT_DATABASE_PASSWORD:-}"
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 ARCHIVE="$BACKUP_DIR/agent-drive-java-$TIMESTAMP.tar.gz"
 STAGING_DIR=""
@@ -34,10 +52,22 @@ mkdir -p "$BACKUP_DIR"
 STAGING_DIR="$(mktemp -d "$BACKUP_DIR/.agent-drive-java-backup.XXXXXX")"
 DUMP="$STAGING_DIR/postgres.sql.gz"
 INDEX_DUMP="$STAGING_DIR/index-postgres.sql.gz"
+AGENT_DUMP="$STAGING_DIR/agent-postgres.sql.gz"
 
 docker_args=()
 if [[ -n "$DATABASE_PASSWORD" ]]; then
   docker_args=(-e "PGPASSWORD=$DATABASE_PASSWORD")
+fi
+
+if [[ -n "$AGENT_DATABASE_USER" && -n "$AGENT_DATABASE_NAME" ]]; then
+  agent_docker_args=()
+  if [[ -n "$AGENT_DATABASE_PASSWORD" ]]; then
+    agent_docker_args=(-e "PGPASSWORD=$AGENT_DATABASE_PASSWORD")
+  fi
+  docker exec "${agent_docker_args[@]}" "$POSTGRES_CONTAINER" \
+    pg_dump --clean --if-exists --no-owner --no-privileges \
+    --format=plain --username="$AGENT_DATABASE_USER" --dbname="$AGENT_DATABASE_NAME" \
+    | gzip -9 > "$AGENT_DUMP"
 fi
 
 docker exec "${docker_args[@]}" "$POSTGRES_CONTAINER" \
@@ -66,6 +96,10 @@ fi
     printf 'index_postgres_database=%s\n' "$INDEX_DATABASE_NAME"
     printf 'index_postgres_user=%s\n' "$INDEX_DATABASE_USER"
   fi
+  if [[ -f "$AGENT_DUMP" ]]; then
+    printf 'agent_postgres_database=%s\n' "$AGENT_DATABASE_NAME"
+    printf 'agent_postgres_user=%s\n' "$AGENT_DATABASE_USER"
+  fi
 } > "$STAGING_DIR/backup-manifest.txt"
 
 # Atomic file publication is handled by the application; tar captures the owner tree
@@ -73,6 +107,9 @@ fi
 archive_inputs=(backup-manifest.txt postgres.sql.gz)
 if [[ -f "$INDEX_DUMP" ]]; then
   archive_inputs+=(index-postgres.sql.gz)
+fi
+if [[ -f "$AGENT_DUMP" ]]; then
+  archive_inputs+=(agent-postgres.sql.gz)
 fi
 tar -czf "$ARCHIVE" \
   --exclude='.storage.lock' \

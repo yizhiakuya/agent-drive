@@ -41,3 +41,8 @@ app:
   identity-service-token: ${AGENT_DRIVE_IDENTITY_SERVICE_TOKEN:}
   index-service-url: ${AGENT_DRIVE_INDEX_SERVICE_URL:}
   index-service-token: ${AGENT_DRIVE_INDEX_SERVICE_TOKEN:}
+  # local keeps the API query path; dual compares remote results and returns local;
+  # remote reads from Index Service with local fallback on transport errors.
+  index-read-mode: ${AGENT_DRIVE_INDEX_READ_MODE:local}
+  agent-service-url: ${AGENT_DRIVE_AGENT_SERVICE_URL:}
+  agent-service-token: ${AGENT_DRIVE_AGENT_SERVICE_TOKEN:}

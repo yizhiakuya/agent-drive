@@ -96,6 +96,7 @@ public class MybatisFileStorageService implements FileStorageService {
     private final EmbeddingRuntimeConfig embeddingConfigs;
     private final SemanticSearchService semanticSearch;
     private final FileMirrorPort mirror;
+    private final com.agentdrive.files.FileContentPort remoteContent;
     private final ReentrantLock mutationLock = new ReentrantLock();
 
     public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes) {
@@ -114,12 +115,22 @@ public class MybatisFileStorageService implements FileStorageService {
                                      EmbeddingRuntimeConfig embeddingConfigs,
                                      SemanticSearchService semanticSearch,
                                      FileMirrorPort mirror) {
+        this(mapper, root, maxUploadBytes, embeddingConfigs, semanticSearch, mirror, null);
+    }
+
+    /** Create a storage adapter with an optional remote content read source. */
+    public MybatisFileStorageService(FileMapper mapper, Path root, long maxUploadBytes,
+                                     EmbeddingRuntimeConfig embeddingConfigs,
+                                     SemanticSearchService semanticSearch,
+                                     FileMirrorPort mirror,
+                                     com.agentdrive.files.FileContentPort remoteContent) {
         this.mapper = mapper;
         this.root = root.toAbsolutePath().normalize();
         this.maxUploadBytes = maxUploadBytes;
         this.embeddingConfigs = embeddingConfigs;
         this.semanticSearch = semanticSearch;
         this.mirror = mirror == null ? FileMirrorPort.noop() : mirror;
+        this.remoteContent = remoteContent;
         try {
             Files.createDirectories(this.root);
         } catch (IOException error) {
@@ -776,6 +787,13 @@ public class MybatisFileStorageService implements FileStorageService {
         return requireOwnedFile(ownerId, path);
     }
 
+    /** Read bytes from the independent File Service when cutover is enabled. */
+    @Override
+    public byte[] readBytes(UUID ownerId, String path, long maxBytes) {
+        if (remoteContent != null) return remoteContent.readBytes(ownerId, normalizePath(path), maxBytes);
+        return FileStorageService.super.readBytes(ownerId, path, maxBytes);
+    }
+
     /**
      * 在存储根目录创建受控的上传临时文件。
      * <p>临时文件不属于任何 owner，文件名以 {@code .upload.} 开头；只有经过
@@ -921,12 +939,20 @@ public class MybatisFileStorageService implements FileStorageService {
             throw new FileStorageException(400, "目录路径不能为空");
         }
         Path directory = safePath(ownerId, normalized, false);
-        try (StorageLock ignored = storageLock()) {
+        try (MutationScope mutation = mutationScope()) {
             if (Files.exists(directory, LinkOption.NOFOLLOW_LINKS) && !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
                 throw new FileStorageException(409, "目标不是目录");
             }
+            List<Path> createdDirectories = newlyMissingDirectories(ownerRoot(ownerId), directory);
+            mutation.onPublished(() -> { }, () -> rollbackCreatedDirectories(createdDirectories));
             Files.createDirectories(directory);
             mapper.upsertMetadata(ownerId.toString(), normalized, true, 0);
+            boolean[] remoteCreated = {false};
+            mutation.onPublished(() -> { }, () -> {
+                if (remoteCreated[0]) mirror.deletePath(ownerId, normalized);
+            });
+            remoteCreated[0] = mirror.mkdirPath(ownerId, normalized);
+            mutation.complete();
             return mapOf("created", normalized);
         } catch (IOException error) {
             throw new FileStorageException(500, "创建目录失败", error);
@@ -2000,6 +2026,26 @@ public class MybatisFileStorageService implements FileStorageService {
             return "";
         }
         return raw.trim().replace('\\', '/').replaceAll("^/+|/+$", "");
+    }
+
+    /** 返回本次 mkdir 需要新建的目录链，供事务回滚时按反向顺序删除。 */
+    private List<Path> newlyMissingDirectories(Path ownerRoot, Path directory) {
+        List<Path> missing = new ArrayList<>();
+        Path current = ownerRoot;
+        for (Path part : ownerRoot.relativize(directory)) {
+            current = current.resolve(part);
+            if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                missing.add(current);
+            }
+        }
+        return missing;
+    }
+
+    /** 只删除本次 mkdir 创建且仍为空的目录，避免回滚误删既有内容。 */
+    private void rollbackCreatedDirectories(List<Path> directories) throws IOException {
+        for (int index = directories.size() - 1; index >= 0; index--) {
+            Files.deleteIfExists(directories.get(index));
+        }
     }
 
     /**

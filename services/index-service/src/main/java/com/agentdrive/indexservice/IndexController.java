@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -64,7 +65,34 @@ public final class IndexController {
         authorize(token);
         return service.replace(new IndexDocumentService.ReplaceRequest(body.ownerId(), body.fileId(),
                 body.sourceRevision(), body.documentType(), body.extractorVersion(), body.content(),
-                body.chunkVersion(), body.chunks()));
+                body.chunkVersion(), body.chunks(), body.path()));
+    }
+
+    /** 写入一个当前 revision/chunk 的 embedding；文件正文仍由 replace 契约原子管理。 */
+    @PostMapping("/index/embeddings")
+    public Map<String, Object> embedding(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                         @Valid @RequestBody EmbeddingBody body) {
+        authorize(token);
+        return service.updateEmbedding(new IndexDocumentService.EmbeddingRequest(
+                body.ownerId(), body.fileId(), body.sourceRevision(), body.documentType(),
+                body.chunkIndex(), body.embedding(), body.fingerprint()));
+    }
+
+    /** 迁移期补齐文件路径元数据，不接收或返回正文。 */
+    @PutMapping("/index/paths")
+    public Map<String, Object> path(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                    @Valid @RequestBody PathBody body) {
+        authorize(token);
+        return service.updatePath(body.ownerId(), body.fileId(), body.sourceRevision(),
+                body.documentType(), body.path());
+    }
+
+    /** 远程语义检索；查询向量只在当前内部请求内传递，不落库。 */
+    @PostMapping("/index/search-semantic")
+    public Map<String, Object> semanticSearch(@RequestHeader(value = TOKEN_HEADER, required = false) String token,
+                                              @Valid @RequestBody SemanticSearchBody body) {
+        authorize(token);
+        return service.semanticSearch(body.ownerId(), body.fingerprint(), body.vector(), body.prefix(), body.limit());
     }
 
     /** 迁移期文本检索校验接口。 */
@@ -94,7 +122,40 @@ public final class IndexController {
             @JsonProperty("extractor_version") @NotBlank @Size(max = 128) String extractorVersion,
             @JsonProperty("content") @Size(max = 20_000_000) String content,
             @JsonProperty("chunk_version") @NotBlank @Size(max = 128) String chunkVersion,
-            @JsonProperty("chunks") @Size(max = 16_384) List<@NotBlank String> chunks
+            @JsonProperty("chunks") @Size(max = 16_384) List<@NotBlank String> chunks,
+            @JsonProperty("path") @Size(max = 4096) String path
+    ) {
+    }
+
+    /** 当前 revision 的单个 chunk 向量写入请求。 */
+    public record EmbeddingBody(
+            @JsonProperty("owner_id") @NotBlank @Size(max = 64) String ownerId,
+            @JsonProperty("file_id") @NotBlank @Size(max = 64) String fileId,
+            @JsonProperty("source_revision") long sourceRevision,
+            @JsonProperty("document_type") @NotBlank @Size(max = 32) String documentType,
+            @JsonProperty("chunk_index") int chunkIndex,
+            @JsonProperty("embedding") @NotBlank @Size(max = 2_000_000) String embedding,
+            @JsonProperty("fingerprint") @NotBlank @Size(max = 256) String fingerprint
+    ) {
+    }
+
+    /** 远程语义检索请求。 */
+    public record SemanticSearchBody(
+            @JsonProperty("owner_id") @NotBlank @Size(max = 64) String ownerId,
+            @JsonProperty("fingerprint") @NotBlank @Size(max = 256) String fingerprint,
+            @JsonProperty("vector") @NotBlank @Size(max = 2_000_000) String vector,
+            @JsonProperty("prefix") @Size(max = 4096) String prefix,
+            @JsonProperty("limit") int limit
+    ) {
+    }
+
+    /** 迁移期文档路径补齐请求。 */
+    public record PathBody(
+            @JsonProperty("owner_id") @NotBlank @Size(max = 64) String ownerId,
+            @JsonProperty("file_id") @NotBlank @Size(max = 64) String fileId,
+            @JsonProperty("source_revision") long sourceRevision,
+            @JsonProperty("document_type") @NotBlank @Size(max = 32) String documentType,
+            @JsonProperty("path") @NotBlank @Size(max = 4096) String path
     ) {
     }
 

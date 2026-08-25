@@ -90,6 +90,34 @@ public final class RemoteFileMirror implements FileMirrorPort {
         }
     }
 
+    /** 确保远程目录存在，并返回服务端是否实际创建了目录。 */
+    @Override
+    public boolean mkdirPath(UUID ownerId, String path) {
+        if (ownerId == null || path == null || path.isBlank()) {
+            throw new FileStorageException(400, "文件镜像目录参数无效");
+        }
+        try {
+            Map<String, Object> body = Map.of("owner_id", ownerId.toString(), "path", path);
+            HttpRequest request = HttpRequest.newBuilder(endpoint("/internal/v1/files/mirror/directory"))
+                    .timeout(TIMEOUT)
+                    .header(TOKEN_HEADER, token)
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body),
+                            StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = client.send(request,
+                    HttpClientSupport.limitedUtf8BodyHandler(64 * 1024));
+            JsonNode root = requireOk(response);
+            return root.path("created").asBoolean(false);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new FileStorageException(502, "文件镜像目录请求中断", error);
+        } catch (IOException error) {
+            throw new FileStorageException(502, "文件镜像目录请求失败", error);
+        }
+    }
+
     /** 删除远程文件或目录镜像树。 */
     @Override
     public void deletePath(UUID ownerId, String path) {
@@ -206,7 +234,7 @@ public final class RemoteFileMirror implements FileMirrorPort {
         }
     }
 
-    private void requireOk(HttpResponse<String> response) throws IOException {
+    private JsonNode requireOk(HttpResponse<String> response) throws IOException {
         JsonNode root = objectMapper.readTree(response.body());
         if (response.statusCode() < 200 || response.statusCode() >= 300
                 || root == null || !root.path("ok").asBoolean(false)) {
@@ -214,6 +242,7 @@ public final class RemoteFileMirror implements FileMirrorPort {
                     : root.path("detail").asText(root.path("error").asText("file service mirror failed"));
             throw new FileStorageException(response.statusCode(), detail);
         }
+        return root;
     }
 
     private URI endpoint(String raw, String suffix) {

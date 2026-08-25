@@ -80,6 +80,24 @@ class RemoteFileMirrorTest {
     }
 
     @Test
+    void sendsDirectoryMirrorAndReturnsCreatedFlag() throws IOException {
+        UUID owner = UUID.randomUUID();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/internal/v1/files/mirror/directory", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("PUT");
+            assertThat(exchange.getRequestHeaders().getFirst("X-File-Service-Token")).isEqualTo("internal");
+            assertThat(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8))
+                    .contains(owner.toString()).contains("nested/dir");
+            respond(exchange, 200, "{\"ok\":true,\"created\":true}");
+        });
+        server.start();
+
+        RemoteFileMirror mirror = new RemoteFileMirror(
+                "http://127.0.0.1:" + server.getAddress().getPort(), "internal", new ObjectMapper());
+        assertThat(mirror.mkdirPath(owner, "nested/dir")).isTrue();
+    }
+
+    @Test
     void sendsTrashAndRestoreMutations() throws IOException {
         UUID owner = UUID.randomUUID();
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

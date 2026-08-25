@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: agent-drive-agent-service
+  sql:
+    init:
+      mode: always
+  datasource:
+    url: ${AGENT_DATABASE_URL:jdbc:postgresql://127.0.0.1:5432/agent_drive_agent}
+    username: ${AGENT_DATABASE_USERNAME:agent_drive_agent}
+    password: ${AGENT_DATABASE_PASSWORD:}
+
+server:
+  address: ${AGENT_BIND_ADDRESS:127.0.0.1}
+  port: ${AGENT_PORT:8050}
+
+agent:
+  internal-token: ${AGENT_INTERNAL_TOKEN:}
+  max-event-rows: ${AGENT_MAX_EVENT_ROWS:4096}

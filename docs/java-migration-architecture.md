@@ -1,20 +1,20 @@
 # Java 后端架构与迁移记录
 
-> 状态：Java API 已接管生产；任务/Worker 运行链路已移除，索引业务直接执行，旧 Python 清理已完成（2026-08-22）。本文保留迁移决策和切换证据，不是待办路线图。
+> 状态：Java API 已接管生产；任务/Worker 运行链路已移除，索引业务直接执行，Content/File/Identity/Index/Agent State Service 已独立部署并接入 loopback 内部 token（2026-08-25）。本文保留 Java 迁移决策和切换证据，不是待办路线图。
 
 ## 1. 当前基线
 
-Agent Drive 的唯一后端是 Java 21 Maven 工程：
+Agent Drive 的 API 核心是 Java 21 Maven 工程，外围业务状态由独立 Java 服务承载：
 
 | 层 | 当前实现 |
 |----|----------|
 | Web | Spring Boot 3.5.x + WebFlux |
-| 模块边界 | Spring Modulith 1.4.x，模块化单体，不拆网络微服务 |
+| 模块边界 | API 内保持 Spring Modulith 1.4.x；Content/File/Identity/Index/Agent State 通过 Port/DTO + 内部 token 独立进程 |
 | Agent | LangChain4j 1.19.x，原生 structured tool calling |
 | 持久化 | PostgreSQL 16 + pgvector、MyBatis-Plus/Mapper XML、Flyway V1-V14 |
 | 文件 | Java NIO owner-scoped 本地文件系统 |
 | 抽取 | Apache Tika（图片不走 OCR，图片由视觉模型描述） |
-| 构建 | Maven；单 API artifact |
+| 构建 | Maven；API + 五个独立 service artifact |
 
 生产结构化状态只进入 PostgreSQL。实际文件和用户可见 Agent 文档仍在 owner-scoped 文件根；旧 SQLite/JSON 和 Python 资料只作归档恢复输入。
 
@@ -25,13 +25,14 @@ nginx :13311
       │
       ▼
 Java API 127.0.0.1:8000 ─── PostgreSQL/pgvector
-      │
-      └── frontend/out
-
-Java API ─────────────────── 文件根、Tika 文档抽取、embedding/vision provider
+      ├── Content :8010   ─── vision provider
+      ├── File :8020      ─── owner content/mutation mirror
+      ├── Identity :8030  ─── credential introspection
+      ├── Index :8040     ─── document/chunk/embedding read/write
+      └── Agent :8050     ─── session/transcript/replay/run/SSE state
 ```
 
-当前只启动 API：
+开发环境只启动 API 即可；生产同时启动 Content/File/Identity/Index/Agent State units：
 
 ```bash
 mvn spring-boot:run -Dspring-boot.run.profiles=db,java-chat -Dspring-boot.run.arguments="--app.mode=api"

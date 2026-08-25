@@ -8,6 +8,7 @@ import com.agentdrive.auth.RemoteCredentialAuthenticator;
 import com.agentdrive.auth.CredentialMirror;
 import com.agentdrive.auth.RemoteCredentialMirror;
 import com.agentdrive.auth.ConversationSessionService;
+import com.agentdrive.auth.ConversationSessionStore;
 import com.agentdrive.auth.SessionTitleGenerator;
 import com.agentdrive.agent.ProviderRuntimeResolver;
 import com.agentdrive.index.IndexStore;
@@ -53,10 +54,12 @@ import com.agentdrive.vision.VisionRuntimeConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.annotation.Primary;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 
 import java.nio.file.Path;
@@ -134,6 +137,29 @@ public class ApplicationConfiguration {
         return new MybatisChatRuntimeStateStore(mapper, objectMapper);
     }
 
+    /** 在显式配置 Agent Service 时提供跨进程聊天状态客户端。 */
+    @Bean
+    @Profile({"java-auth", "java-chat"})
+    @ConditionalOnExpression("'${app.agent-service-url:}'.length() > 0")
+    RemoteAgentStateClient remoteAgentStateClient(AppProperties properties, ObjectMapper objectMapper) {
+        if (properties.agentServiceToken().isBlank()) {
+            throw new IllegalStateException("app.agent-service-token is required when agent-service-url is configured");
+        }
+        RemoteAgentStateClient client = new RemoteAgentStateClient(
+                properties.agentServiceUrl(), properties.agentServiceToken(), objectMapper);
+        client.requireReady();
+        return client;
+    }
+
+    /** 远程 Agent 状态是生产真相源；未配置时仍使用本地 MyBatis 适配器。 */
+    @Bean
+    @Primary
+    @Profile({"java-auth", "java-chat"})
+    @ConditionalOnExpression("'${app.agent-service-url:}'.length() > 0")
+    PersistentChatRuntimeStateStore remoteChatRuntimeStateStore(RemoteAgentStateClient client) {
+        return new RemoteChatRuntimeStateStore(client);
+    }
+
     /**
      * 装配 owner-scoped 会话存储。
      * @param mapper 访问会话元数据和消息表的 Mapper。
@@ -143,6 +169,15 @@ public class ApplicationConfiguration {
     @Bean
     MybatisConversationSessionStore mybatisConversationSessionStore(ConversationSessionMapper mapper, ObjectMapper objectMapper) {
         return new MybatisConversationSessionStore(mapper, objectMapper);
+    }
+
+    /** 远程 Agent Service 的 owner-scoped 会话目录和消息适配器。 */
+    @Bean
+    @Primary
+    @Profile({"java-auth", "java-chat"})
+    @ConditionalOnExpression("'${app.agent-service-url:}'.length() > 0")
+    ConversationSessionStore remoteConversationSessionStore(RemoteAgentStateClient client) {
+        return new RemoteConversationSessionStore(client);
     }
 
     /**
@@ -172,8 +207,10 @@ public class ApplicationConfiguration {
      * @return 将数据库索引行转换为索引领域结构的存储实现。
      */
     @Bean
-    MybatisIndexStore mybatisIndexStore(IndexMapper mapper) {
-        return new MybatisIndexStore(mapper);
+    MybatisIndexStore mybatisIndexStore(IndexMapper mapper,
+                                        ObjectProvider<RemoteIndexDocumentClient> remote,
+                                        @Value("${app.index-read-mode:local}") String readMode) {
+        return new MybatisIndexStore(mapper, remote == null ? null : remote.getIfAvailable(), readMode);
     }
 
     /**
@@ -311,8 +348,14 @@ public class ApplicationConfiguration {
             }
             mirror = new RemoteFileMirror(properties.fileServiceUrl(), properties.fileServiceToken(), objectMapper);
         }
+        RemoteFileContentPort remoteContent = null;
+        if (!properties.fileServiceUrl().isBlank()) {
+            remoteContent = new RemoteFileContentPort(properties.fileServiceUrl(),
+                    properties.fileServiceToken(), objectMapper);
+            remoteContent.requireReady();
+        }
         return new MybatisFileStorageService(mapper, Path.of(properties.dataDir()), properties.maxUploadBytes(),
-                embeddingConfigs, semanticSearch, mirror);
+                embeddingConfigs, semanticSearch, mirror, remoteContent);
     }
 
     /**
@@ -360,7 +403,7 @@ public class ApplicationConfiguration {
      */
     @Bean
     ConversationSessionService conversationSessionService(
-            MybatisConversationSessionStore store,
+            ConversationSessionStore store,
             ObjectProvider<SessionTitleGenerator> titleGenerator
     ) {
         return new ConversationSessionService(store, titleGenerator.getIfAvailable());

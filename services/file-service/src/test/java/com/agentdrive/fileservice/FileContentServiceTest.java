@@ -104,6 +104,20 @@ class FileContentServiceTest {
     }
 
     @Test
+    void createsDirectoryMirrorIdempotently(@TempDir Path root) {
+        UUID owner = UUID.randomUUID();
+        FileContentService service = new FileContentService(
+                new FileServiceProperties("internal", root.toString(), 1024L));
+
+        var first = service.mkdirMirror(new MirrorDirectoryRequest(owner.toString(), "nested/dir"));
+        var second = service.mkdirMirror(new MirrorDirectoryRequest(owner.toString(), "nested/dir"));
+
+        assertThat(first).containsEntry("created", true);
+        assertThat(second).containsEntry("created", false);
+        assertThat(Files.isDirectory(root.resolve(owner.toString()).resolve("nested/dir"))).isTrue();
+    }
+
+    @Test
     void movesAndCopiesMirrorPaths(@TempDir Path root) throws Exception {
         UUID owner = UUID.randomUUID();
         Path source = root.resolve(owner.toString()).resolve("source.txt");

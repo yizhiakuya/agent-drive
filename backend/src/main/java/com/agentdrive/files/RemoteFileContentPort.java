@@ -26,7 +26,7 @@ import java.util.UUID;
  */
 public final class RemoteFileContentPort implements FileContentPort {
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
-    private static final int MAX_RESPONSE_BYTES = 80 * 1024 * 1024;
+    private static final int MAX_RESPONSE_BYTES = 320 * 1024 * 1024;
     private static final String TOKEN_HEADER = "X-File-Service-Token";
 
     private final ObjectMapper objectMapper;

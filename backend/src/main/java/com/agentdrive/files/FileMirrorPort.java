@@ -15,6 +15,11 @@ public interface FileMirrorPort {
     /** 删除一个远程文件镜像。 */
     void deleteFile(UUID ownerId, String path);
 
+    /** 确保远程 owner 目录存在，并返回本次是否新建了目录。 */
+    default boolean mkdirPath(UUID ownerId, String path) {
+        throw new UnsupportedOperationException("file mirror mkdir is not supported");
+    }
+
     /** 删除远程文件或目录镜像树。 */
     default void deletePath(UUID ownerId, String path) {
         deleteFile(ownerId, path);
@@ -54,6 +59,11 @@ public interface FileMirrorPort {
 
             @Override
             public void deleteFile(UUID ownerId, String path) {
+            }
+
+            @Override
+            public boolean mkdirPath(UUID ownerId, String path) {
+                return false;
             }
 
             @Override

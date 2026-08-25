@@ -90,7 +90,8 @@
     </select>
 
     <select id="selectFile" resultType="map">
-        SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256
+        SELECT id::text AS id, path, is_dir, size_bytes, revision, content_md5, content_sha256,
+               EXTRACT(EPOCH FROM updated_at) AS mtime
         FROM files
         WHERE user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND path = #{path, jdbcType=VARCHAR}

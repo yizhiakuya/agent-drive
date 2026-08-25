@@ -164,6 +164,29 @@ public final class FileContentService {
         }
     }
 
+    /** 确保一个 owner 目录镜像存在；重复调用保持幂等并报告是否新建。 */
+    public Map<String, Object> mkdirMirror(MirrorDirectoryRequest request) {
+        UUID owner = parseOwner(request.ownerId());
+        String path = normalizeRelative(request.path());
+        Path ownerRoot = properties.rootPath().resolve(owner.toString()).normalize();
+        Path target = ownerRoot.resolve(path).normalize();
+        if (!target.startsWith(ownerRoot) || isInternalPath(ownerRoot, target)
+                || hasSymlinkComponent(ownerRoot, target)) {
+            throw new IllegalArgumentException("mirror mkdir target is invalid");
+        }
+        boolean created = !Files.exists(target, LinkOption.NOFOLLOW_LINKS);
+        if (!created && !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("mirror mkdir target is not a directory");
+        }
+        try {
+            Files.createDirectories(target);
+            return Map.of("ok", true, "owner_id", owner.toString(), "path", path,
+                    "created", created);
+        } catch (IOException error) {
+            throw new IllegalStateException("mirror_mkdir_failed", error);
+        }
+    }
+
     /** 删除一个 owner 镜像文件；目录和内部路径不会被删除。 */
     public Map<String, Object> deleteMirror(String ownerId, String path) {
         UUID owner = parseOwner(ownerId);
