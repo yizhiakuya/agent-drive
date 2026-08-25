@@ -224,7 +224,15 @@ export default function FilePage() {
       || (item.embedding && typeof item.embedding === "object"
         && (item.embedding as { vectorized?: unknown }).vectorized === false)
       || item.status === "error");
-    if (failedItem) return String(failedItem.error || failedItem.status || "索引项失败");
+    if (failedItem) {
+      const embedding = failedItem.embedding && typeof failedItem.embedding === "object"
+        ? failedItem.embedding as { vectorized?: unknown; reason?: unknown; error?: unknown }
+        : null;
+      if (embedding?.vectorized === false) {
+        return String(embedding.error || embedding.reason || failedItem.error || failedItem.status || "向量化未完成");
+      }
+      return String(failedItem.error || failedItem.status || "索引项失败");
+    }
     if (result.ok === false || result.status === "failed" || result.status === "partial") {
       return String(result.error || result.reason || "索引未完整完成");
     }

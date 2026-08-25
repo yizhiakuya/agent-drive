@@ -74,6 +74,25 @@ class ContentDescriptionServiceTest {
     }
 
     @Test
+    void acceptsSegmentedProviderContent() throws IOException {
+        provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        provider.createContext("/v1/chat/completions", exchange ->
+                respond(exchange, 200, "{\"choices\":[{\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"image_id: image-0\\n\"},{\"type\":\"text\",\"text\":\"蓝紫色抽象图标。\"}]}}]}"));
+        provider.start();
+        String data = Base64.getEncoder().encodeToString(new byte[]{1, 2, 3});
+        ContentServiceProperties properties = new ContentServiceProperties(
+                "internal", "openai_compat", "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1",
+                "vision", "secret", 4, 1024L, 2048, 8192L);
+        ContentDescriptionController.DescribeRequest request = new ContentDescriptionController.DescribeRequest(
+                List.of(new ContentDescriptionController.ImageRequest("image-0", "x.png", "image/png", data)));
+
+        Map<String, Object> result = new ContentDescriptionService(properties, new ObjectMapper()).describe(request);
+
+        assertThat(result).containsEntry("ok", true);
+        assertThat(result.get("items").toString()).contains("蓝紫色抽象图标");
+    }
+
+    @Test
     void rejectsProviderUrlWithQueryOrCredentials() {
         ContentServiceProperties properties = new ContentServiceProperties(
                 "internal", "openai_compat", "https://user:pass@example.test/v1?leak=1",

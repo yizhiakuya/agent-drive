@@ -332,7 +332,7 @@
     </update>
 
     <select id="selectChunks" resultType="map">
-        SELECT c.id::text AS id, c.content, c.source_revision, c.chunk_version,
+        SELECT c.id::text AS id, f.id::text AS file_id, c.chunk_index, c.content, c.source_revision, c.chunk_version,
                d.id::text AS document_id, d.document_type AS vector_type, f.path
         FROM document_chunks c
         JOIN documents d ON d.id = c.document_id

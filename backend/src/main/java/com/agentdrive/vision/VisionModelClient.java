@@ -222,9 +222,36 @@ public final class VisionModelClient {
     }
 
     private String content(JsonNode root) {
-        String content = root == null ? "" : root.path("choices").path(0).path("message").path("content").asText("");
+        JsonNode choice = root == null ? null : root.path("choices").path(0);
+        String content = contentText(choice == null ? null : choice.path("message").path("content"));
+        if (content.isBlank()) content = contentText(choice == null ? null : choice.path("text"));
+        if (content.isBlank()) content = contentText(root == null ? null : root.path("output_text"));
+        if (content.isBlank()) content = contentText(root == null ? null : root.path("output"));
         if (content.isBlank()) throw new IllegalStateException("vision provider returned empty content");
         return content;
+    }
+
+    /** 兼容 Chat Completions 和 Responses 兼容层返回的多种文本节点形状。 */
+    private String contentText(JsonNode value) {
+        if (value == null || value.isMissingNode() || value.isNull()) return "";
+        if (value.isTextual()) return value.asText("");
+        StringBuilder result = new StringBuilder();
+        if (value.isArray()) {
+            for (JsonNode part : value) appendContentText(result, part);
+        } else if (value.isObject()) {
+            for (String field : List.of("text", "output_text", "content", "value")) {
+                if (value.has(field)) appendContentText(result, value.get(field));
+            }
+        }
+        return result.toString();
+    }
+
+    private void appendContentText(StringBuilder target, JsonNode value) {
+        String text = contentText(value);
+        if (!text.isBlank()) {
+            if (target.length() > 0) target.append('\n');
+            target.append(text);
+        }
     }
 
     /**

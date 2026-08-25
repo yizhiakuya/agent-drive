@@ -37,7 +37,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
 | `devices` | 设备登记、撤销、心跳和同步状态 | 所有查询按 owner 限定 |
 | `skills` | owner Skill registry、内置 provider、校验和分页 | 自定义 Skill 在 PostgreSQL；内置 Skill 由代码动态生成 |
 | `index` | Tika 文档抽取、文本 chunk/Jina 向量、视觉内容语义描述/Jina 向量 | 由索引业务 API 直接执行；图片不走独立 OCR |
-| `services/content-service` | 独立视觉内容理解 HTTP 服务 | 只接收受限原始图片和 owner provider 快照，不读主库/本地路径，不持久化描述 |
+| `services/content-service` | 独立视觉内容理解 HTTP 服务 | 只接收受限原始图片和 owner provider 快照，不读主库/本地路径，不持久化描述；兼容 Chat Completions/Responses 的字符串、分段数组和 `output_text` 响应 |
 | `services/file-service` | 独立 owner 文件内容读取 HTTP 服务 | 只读取自己的 owner 分区；路径、符号链接、大小和 MD5 在服务边界重新校验 |
 | `services/identity-service` | 独立 owner/session credential 服务 | 自有 identity schema；生产由主 API 通过内部 token introspection |
 | `services/index-service` | 独立文档/chunk/embedding 索引服务 | 自有 index schema；生产双写并远程语义读，`local/dual/remote` 可回退 |
@@ -85,7 +85,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 文件列表的 name 搜索最多保留 1000 个 top-k 候选，并只批量同步缺失或变化的 metadata；列表可按文件类型和修改时间筛选，并附 owner-scoped 收藏标记。semantic 搜索使用 Jina `retrieval.query` 和当前 embedding fingerprint 的 pgvector chunk，按文件去重并返回最佳 `search_score/search_snippet`。Agent 需要回答文件原文时调用 `search-content`，数据库在同一 owner/current revision/fingerprint 范围内返回全局多 chunk 候选，并按每文件最多三个匹配 chunk 做多样性限制；每个匹配可带两侧以内相邻 chunk，结果受 limit/上下文预算约束。`file_favorites` 与 `file_accesses` 记录只保存相对路径，收藏/访问集合重新校验物理路径后才展示；移动/重命名在同一事务内迁移源/目标路径前缀。
 
-写入、移动、复制或删除会使旧全文/向量失效；索引业务由 `/api/v1/index` 直接执行。普通文档使用 Tika、chunk 和 Jina 文本向量；图片显式索引时按最多四张一批发送到视觉模型，每张图片返回一段 `vision-description-v3` 综合描述，再由同一 Jina embedding 生成 `vision` 向量。该方案不缓存旧描述，也不启用独立 OCR；图片中的精确逐字文本不属于当前检索保证范围。provider、持久化或 source revision 错误直接返回明确错误，不能伪报成功；`documents.document_type` 明确区分 `text` 和 `vision`。
+写入、移动、复制或删除会使旧全文/向量失效；索引业务由 `/api/v1/index` 直接执行。普通文档使用 Tika、chunk 和 Jina 文本向量；图片显式索引时按最多四张一批发送到视觉模型，每张图片返回一段 `vision-description-v3` 综合描述，再由同一 Jina embedding 生成 `vision` 向量。该方案不缓存旧描述，也不启用独立 OCR；图片中的精确逐字文本不属于当前检索保证范围。provider、持久化或 source revision 错误直接返回明确错误，不能伪报成功；`documents.document_type` 明确区分 `text` 和 `vision`。远程 Index Service 向量写回必须同时携带 `file_id`、`source_revision` 和 `chunk_index`，避免迁移模式下把有效索引误报为成功。
 
 ## 6. 业务错误与执行边界
 
