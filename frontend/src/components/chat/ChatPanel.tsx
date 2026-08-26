@@ -317,7 +317,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
     }
   }
 
-  const { send, stop, busy, totalElapsedMs } = useChatStream({
+  const { send, stop, busy, totalElapsedMs, modelElapsedMs } = useChatStream({
     messages,
     sessionId,
     sessionIdRef: sidRef,
@@ -874,7 +874,11 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
         </div>
       </div>
 
-      {plan.length > 0 && <div className="px-4 pb-2 sm:px-6"><div className="mx-auto max-w-4xl"><PlanCard plan={plan} /></div></div>}
+      {plan.length > 0 && <div className="px-4 pb-2 sm:px-6"><div className="mx-auto max-w-4xl"><PlanCard
+        plan={plan}
+        phase={busy ? (hasRunningTool ? "tool" : "model") : undefined}
+        modelElapsedMs={modelElapsedMs}
+      /></div></div>}
 
       <div data-testid="chat-input-bar" className="input-bar-safe shrink-0 bg-panel px-4 py-2 sm:px-6 sm:py-2">
         <div className="mx-auto max-w-4xl">

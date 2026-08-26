@@ -42,6 +42,8 @@ interface UseChatStreamReturn {
   busy: boolean;
   /** 当前/最近一轮 Agent 任务的总耗时；运行中每秒更新，结束时收敛到服务端 latency_ms。 */
   totalElapsedMs: number | null;
+  /** 当前/最近一轮累计模型等待/思考耗时；不包含工具执行耗时。 */
+  modelElapsedMs: number | null;
 }
 
 const NEW_SESSION_KEY = "__new_session__";
@@ -54,6 +56,9 @@ interface ActiveChatStream {
   startedAt: number;
   activityId: string;
   toolActivityIds: Set<string>;
+  phase: "model" | "tool";
+  phaseStartedAt: number;
+  modelElapsedMs: number;
 }
 
 function streamKey(sessionId: string | null): string {
@@ -117,6 +122,23 @@ function trackToolActivity(run: ActiveChatStream, event: string, data: Record<st
   }
 }
 
+function updateRunPhase(run: ActiveChatStream, event: string) {
+  const nextPhase = event === "tool_start" || event === "tool_progress"
+    ? "tool"
+    : event === "tool_trace" ? "model" : run.phase;
+  if (nextPhase === run.phase) return;
+  const now = Date.now();
+  if (run.phase === "model") run.modelElapsedMs += Math.max(0, now - run.phaseStartedAt);
+  run.phase = nextPhase;
+  run.phaseStartedAt = now;
+}
+
+function currentModelElapsedMs(run: ActiveChatStream) {
+  return Math.max(0, run.modelElapsedMs + (run.phase === "model"
+    ? Date.now() - run.phaseStartedAt
+    : 0));
+}
+
 /**
  * 流式对话发送 hook：按 session 隔离 chatStream、80ms 节流帧、事件→消息映射、
  * 会话建立/列表刷新/计划流、AbortController 生命周期与错误兜底。
@@ -143,6 +165,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   const onReconcileRef = useRef(onReconcile);
   const [runningKeys, setRunningKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [totalElapsedMs, setTotalElapsedMs] = useState<number | null>(null);
+  const [modelElapsedMs, setModelElapsedMs] = useState<number | null>(null);
   const busy = runningKeys.has(streamKey(sessionId));
 
   useEffect(() => {
@@ -157,7 +180,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
   useEffect(() => {
     const tick = () => {
       const run = streamsRef.current.get(streamKey(sessionIdRef.current));
-      if (run) setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
+      if (run) {
+        setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
+        setModelElapsedMs(currentModelElapsedMs(run));
+      }
     };
     tick();
     if (!busy) return;
@@ -218,6 +244,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     const run = {
       key, controller, frame: null as unknown as ChatStreamFrame, detached: false, startedAt, activityId,
       toolActivityIds: new Set<string>(),
+      phase: "model" as const, phaseStartedAt: startedAt, modelElapsedMs: 0,
     };
     const frame = createChatStreamFrame({
       isCurrent: () => streamsRef.current.get(run.key)?.controller === controller
@@ -246,6 +273,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         const streamEvent = parseChatStreamEvent(event, data);
         if (!streamEvent) return;
         trackToolActivity(run, event, data);
+        updateRunPhase(run, event);
         updateOperationActivity(run.activityId, agentActivityPhase(event, data));
         const visible = isVisible(run);
         if (!visible) run.detached = true;
@@ -278,6 +306,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       if (visible) setTotalElapsedMs(serverElapsed === null
         ? Math.max(0, Date.now() - run.startedAt)
         : Math.max(0, serverElapsed));
+      setModelElapsedMs(currentModelElapsedMs(run));
       // 流结束：冲刷最后一帧（节流定时器里的内容立即落 UI）
       if (!frame.flush() && visible) {
         // 无文本事件（仅工具调用）：清掉空助手占位气泡，只留工具步骤
@@ -380,6 +409,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         run = {
           key, controller, frame, detached: false, startedAt: Date.now(), activityId,
           toolActivityIds: new Set<string>(),
+          phase: "model", phaseStartedAt: Date.now(), modelElapsedMs: 0,
         };
         streams.set(key, run);
         refreshRunningKeys();
@@ -398,6 +428,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
           const streamEvent = parseChatStreamEvent(event, data);
           if (!streamEvent) return;
           trackToolActivity(run, event, data);
+          updateRunPhase(run, event);
           updateOperationActivity(run.activityId, agentActivityPhase(event, data));
            if (streamEvent.type === "tool_trace" && isFileMutationTrace(streamEvent.trace)) {
              emitFilesChanged();
@@ -465,6 +496,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     settleRunToolActivities(run, "cancelled", "工具执行已停止");
     finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
     setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
+    setModelElapsedMs(currentModelElapsedMs(run));
     if (sessionIdRef.current) void cancelChatRun(sessionIdRef.current).catch(() => {});
     refreshRunningKeys();
     setMessages((m) => {
@@ -476,5 +508,5 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     });
   }, [refreshRunningKeys, sessionIdRef, setMessages]);
 
-  return { send, stop, busy, totalElapsedMs };
+  return { send, stop, busy, totalElapsedMs, modelElapsedMs };
 }

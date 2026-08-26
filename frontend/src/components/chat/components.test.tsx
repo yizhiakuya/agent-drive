@@ -111,6 +111,11 @@ describe("PlanCard 计划卡片", () => {
     expect(screen.getByText("当前会话")).toBeInTheDocument();
     expect(screen.getByText("扫描文件")).toBeInTheDocument();
   });
+
+  it("模型等待阶段显示独立思考耗时", () => {
+    render(<PlanCard plan={[{ text: "执行目录级视觉索引", status: "in_progress" }]} phase="model" modelElapsedMs={125000} />);
+    expect(screen.getByText("模型思考 02:05")).toBeInTheDocument();
+  });
 });
 
 describe("ToolStep 工具步骤", () => {
@@ -126,6 +131,21 @@ describe("ToolStep 工具步骤", () => {
     expect(screen.getByText("00:02")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: /正在生成文件向量/ })).toBeInTheDocument();
     expect(screen.queryByText("此步骤没有可展示的返回内容")).not.toBeInTheDocument();
+  });
+  it("运行中的索引工具显示真实处理计数", () => {
+    render(<ToolStep step={{
+      tool: "backend_api",
+      arguments: { operation: "PUT /api/v1/index/vision" },
+      status: "running",
+      progressMessage: "正在调用视觉模型分析图片",
+      completed: 12,
+      total: 40,
+      succeeded: 11,
+      skipped: 1,
+      failed: 0,
+    }} />);
+    expect(screen.getByText("12/40")).toBeInTheDocument();
+    expect(screen.getByText(/成功 11 · 跳过 1 · 失败 0/)).toBeInTheDocument();
   });
 
   it("running 状态显示执行中", () => {

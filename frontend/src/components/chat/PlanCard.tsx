@@ -1,5 +1,6 @@
 "use client";
 import { CheckCircle2, Circle, CircleX, ListChecks, LoaderCircle, SkipForward } from "lucide-react";
+import { fmtElapsedMs } from "@/lib/format";
 
 export interface PlanStep {
   text: string;
@@ -14,13 +15,21 @@ const ICONS = {
   failed: CircleX,
 } as const;
 
-export function PlanCard({ plan }: { plan: PlanStep[] }) {
+export function PlanCard({ plan, phase, modelElapsedMs }: {
+  plan: PlanStep[];
+  phase?: "model" | "tool";
+  modelElapsedMs?: number | null;
+}) {
   const doneCount = plan.filter((s) => s.status === "done").length;
   return (
     <div className="rounded-lg border border-border bg-panel px-4 py-3 text-sm">
       <div className="mb-2 flex items-center justify-between font-semibold">
         <span className="flex items-center gap-1.5"><ListChecks className="size-3.5 text-muted" /> 执行计划（{doneCount}/{plan.length}）</span>
-        <span className="font-mono text-[10px] text-muted">当前会话</span>
+        <span className="font-mono text-[10px] text-muted">
+          {phase === "model" && typeof modelElapsedMs === "number"
+            ? `模型思考 ${fmtElapsedMs(modelElapsedMs)}`
+            : phase === "tool" ? "执行工具中" : "当前会话"}
+        </span>
       </div>
       {plan.map((s, i) => (
         <div key={i} className={`flex items-center gap-2 border-t border-border/70 py-1.5 ${s.status === "failed" ? "text-danger" : s.status === "in_progress" ? "text-warn" : ""}`}>
