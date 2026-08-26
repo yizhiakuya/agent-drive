@@ -157,6 +157,15 @@ export default function FilePage() {
     return request;
   }, []);
 
+  const clearListSelection = useCallback(() => {
+    invalidateSelectionWork();
+    setSelected(null);
+    setActionSelection(null);
+    setSelectedPaths(new Set());
+    setView("preview");
+    setContentTruncated(false);
+  }, [invalidateSelectionWork]);
+
   const load = useCallback(async (p: string, q = queryRef.current, mode = searchModeRef.current) => {
     const request = ++listRequestRef.current;
     const requestMode = q.trim() ? mode : "name";
@@ -259,6 +268,7 @@ export default function FilePage() {
   );
 
   const loadCollection = useCallback(async (kind: "favorites" | "recent") => {
+    clearListSelection();
     const request = ++listRequestRef.current;
     setListLoading(true);
     setListError("");
@@ -285,7 +295,7 @@ export default function FilePage() {
     } finally {
       if (request === listRequestRef.current) setListLoading(false);
     }
-  }, []);
+  }, [clearListSelection]);
 
   const openFilePath = useCallback(async (filePath: string) => {
     const selectionRequest = invalidateSelectionWork();
@@ -423,6 +433,7 @@ export default function FilePage() {
   function submitSearch(event?: React.FormEvent) {
     event?.preventDefault();
     const query = searchInput.trim();
+    clearListSelection();
     filtersRef.current = {
       type: fileType,
       modifiedAfter: modifiedAfterInput,
@@ -436,8 +447,10 @@ export default function FilePage() {
 
   /** 切换搜索模式；已有查询会立即用新模式重新执行。 */
   function changeSearchMode(mode: FileSearchMode) {
+    clearListSelection();
     setSearchMode(mode);
     searchModeRef.current = mode;
+    if (mode === "semantic") setSortBy("name");
     if (queryRef.current.trim()) void load(pathRef.current, queryRef.current, mode);
   }
 
@@ -724,6 +737,12 @@ export default function FilePage() {
       || typeof item.search_score !== "number" || item.search_score >= threshold);
     return [...filtered].sort((left, right) => {
       if (left.is_dir !== right.is_dir) return left.is_dir ? -1 : 1;
+      if (activeSearchMode === "semantic") {
+        const leftScore = typeof left.search_score === "number" ? left.search_score : Number.NEGATIVE_INFINITY;
+        const rightScore = typeof right.search_score === "number" ? right.search_score : Number.NEGATIVE_INFINITY;
+        if (leftScore !== rightScore) return rightScore - leftScore;
+        return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+      }
       if (sortBy === "size") return (left.size || 0) - (right.size || 0);
       if (sortBy === "mtime") return (left.mtime || 0) - (right.mtime || 0);
       return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
@@ -823,7 +842,13 @@ export default function FilePage() {
               className="pl-8 pr-8"
             />
             {searchInput && (
-              <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-foreground" onClick={() => { setSearchInput(""); queryRef.current = ""; void load(path, "", searchMode); }} aria-label="清除搜索">
+              <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-foreground" onClick={() => {
+                clearListSelection();
+                setSearchInput("");
+                queryRef.current = "";
+                searchModeRef.current = "name";
+                void load(path, "", "name");
+              }} aria-label="清除搜索">
                 <X className="size-4" />
               </button>
             )}
@@ -835,9 +860,10 @@ export default function FilePage() {
          <div className="flex flex-wrap items-center gap-2">
            <label className="flex items-center gap-1.5 text-xs text-muted">
              <span>排序</span>
-             <Select value={sortBy} onValueChange={(value) => { if (value === "name" || value === "mtime" || value === "size") setSortBy(value); }}>
-               <SelectTrigger size="sm" aria-label="文件排序" className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
+             <Select value={activeSearchMode === "semantic" ? "score" : sortBy} onValueChange={(value) => { if (value === "name" || value === "mtime" || value === "size") setSortBy(value); }} disabled={activeSearchMode === "semantic"}>
+               <SelectTrigger size="sm" aria-label="文件排序" title={activeSearchMode === "semantic" ? "语义搜索按相关度降序" : "文件排序"} className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
                <SelectContent>
+                 {activeSearchMode === "semantic" && <SelectItem value="score">相关度</SelectItem>}
                  <SelectItem value="name">名称</SelectItem>
                  <SelectItem value="mtime">修改时间</SelectItem>
                  <SelectItem value="size">大小</SelectItem>

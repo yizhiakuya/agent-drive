@@ -61,6 +61,7 @@ const THINKING_OPTIONS: { value: ThinkingLevel; label: string; description: stri
 const DEFAULT_CONTEXT_USAGE: ContextUsage = { used: 0, total: 262144, percent: 0 };
 const PERMISSION_STORAGE_KEY = "agent-drive-permission-mode";
 const MAX_INLINE_IMAGE_BYTES = 50 * 1024 * 1024;
+const MODEL_WAIT_NOTICE_MS = 10_000;
 
 function finiteNumber(value: unknown): number | null {
   const number = typeof value === "number" ? value : Number(value);
@@ -769,6 +770,7 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
           if (m.type === "context") return <ContextInjection key={i} source={m.source || "context"} content={m.content} />;
           const isThinking = busy && m.type === "assistant" && m.content === "" && !m.reasoning && i === messages.length - 1;
           const isLatestReasoning = busy && m.type === "assistant" && i === messages.length - 1;
+          const waitingForModel = isThinking && !hasRunningTool && (totalElapsedMs ?? 0) >= MODEL_WAIT_NOTICE_MS;
           return (
             <div key={i} className={`flex ${m.type === "user" ? "justify-end" : "justify-start"} animate-slide-in`}>
               <div className={`whitespace-pre-wrap text-sm leading-relaxed ${
@@ -782,7 +784,11 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
                   <div className="flex items-center gap-2 text-muted" aria-live="polite">
                     <Skeleton className="h-2 w-2 rounded-full" />
                     <Skeleton className="h-2 w-28" />
-                    <span className="text-xs whitespace-nowrap">{hasRunningTool ? "正在执行操作…" : "Agent 思考中…"}</span>
+                    <span className="text-xs whitespace-nowrap">{hasRunningTool
+                      ? "正在执行操作…"
+                      : waitingForModel
+                        ? `等待模型响应 · ${fmtElapsedMs(totalElapsedMs)}`
+                        : "Agent 思考中…"}</span>
                   </div>
                 ) : m.type === "assistant" ? (
                   <>

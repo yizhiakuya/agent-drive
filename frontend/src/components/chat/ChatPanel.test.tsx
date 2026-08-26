@@ -450,6 +450,21 @@ describe("ChatPanel 主流程", () => {
     expect(screen.getByLabelText("本轮任务耗时 00:02")).toBeInTheDocument();
   });
 
+  it("首轮模型长时间无事件时显示等待模型响应阶段", async () => {
+    vi.useFakeTimers();
+    try {
+      chatStream.mockImplementation(() => new Promise(() => {}));
+      render(<ChatPanel />);
+      await act(async () => {});
+      await typeAndSend("等待模型响应");
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(screen.getByText(/等待模型响应 ·/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("工具步骤后文本回复不残留空助手占位气泡", async () => {
     chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (e: string, d: Record<string, unknown>) => void) => {
       onEvent("tool_start", { tool: "list_files", arguments: {} });

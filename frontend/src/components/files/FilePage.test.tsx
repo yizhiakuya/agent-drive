@@ -628,6 +628,58 @@ describe("FilePage 核心操作", () => {
     expect(screen.queryByText("低分.txt")).not.toBeInTheDocument();
   });
 
+  it("语义结果固定按相关度降序展示", async () => {
+    listFiles.mockImplementation(async (_path: string, _query: string, mode: string) => mode === "semantic"
+      ? {
+          ...rootListing,
+          items: [
+            { name: "低分.txt", path: "低分.txt", is_dir: false, size: 1, search_score: 0.42, search_snippet: "低" },
+            { name: "高分.txt", path: "高分.txt", is_dir: false, size: 1, search_score: 0.91, search_snippet: "高" },
+            { name: "中分.txt", path: "中分.txt", is_dir: false, size: 1, search_score: 0.65, search_snippet: "中" },
+          ],
+        }
+      : rootListing);
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "语义" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "描述你要找的内容" }), { target: { value: "内容" } });
+    fireEvent.submit(screen.getByRole("search"));
+    await waitFor(() => expect(screen.getByText("高分.txt")).toBeInTheDocument());
+
+    const rows = Array.from(screen.getByRole("table").querySelectorAll("tbody tr"))
+      .map((row) => row.textContent || "");
+    expect(rows[0]).toContain("高分.txt");
+    expect(rows[1]).toContain("中分.txt");
+    expect(rows[2]).toContain("低分.txt");
+    expect(screen.getByRole("combobox", { name: "文件排序" })).toHaveTextContent("相关度");
+  });
+
+  it("清空语义搜索恢复目录并清理旧预览与选择", async () => {
+    listFiles.mockImplementation(async (_path: string, query: string, mode: string) => mode === "semantic" && query
+      ? {
+          ...rootListing,
+          items: [{ ...rootListing.items[1], search_score: 0.88, search_snippet: "命中" }],
+        }
+      : rootListing);
+    getFileInfo.mockResolvedValue(fileInfo("合同.txt", "合同摘要"));
+    render(<FilePage />);
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "语义" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "描述你要找的内容" }), { target: { value: "合同" } });
+    fireEvent.submit(screen.getByRole("search"));
+    await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("合同.txt"));
+    await waitFor(() => expect(screen.getByTestId("file-selection-toolbar")).toHaveTextContent("已选: 合同.txt"));
+
+    fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+    await waitFor(() => expect(screen.getByText("资料")).toBeInTheDocument());
+    expect(screen.getByTestId("file-selection-toolbar")).not.toHaveTextContent("已选");
+    expect(screen.queryByTestId("file-batch-toolbar")).not.toBeInTheDocument();
+    expect(listFiles).toHaveBeenLastCalledWith("", "", "name");
+  });
+
   it("提交修改日期筛选时把时间范围传给列表 API", async () => {
     render(<FilePage />);
     await waitFor(() => expect(screen.getByText("合同.txt")).toBeInTheDocument());
