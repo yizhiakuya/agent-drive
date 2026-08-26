@@ -87,6 +87,13 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
     @Override
     public Map<String, Object> describeFiles(UUID userId, List<String> paths,
                                               Consumer<Map<String, Object>> progressListener) {
+        return describeFiles(userId, paths, progressListener, null);
+    }
+
+    @Override
+    public Map<String, Object> describeFiles(UUID userId, List<String> paths,
+                                              Consumer<Map<String, Object>> progressListener,
+                                              Consumer<List<Map<String, Object>>> batchListener) {
         Optional<VisionRuntimeConfig.Config> config = configs.find(userId);
         if (config.isEmpty() || config.get().apiKey() == null || config.get().apiKey().isBlank()) {
             return Map.of("ok", false, "error", "vision_not_configured", "items", List.of());
@@ -100,7 +107,9 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
                 PreparedImage image = prepareImage(userId, path, "image-" + sequence++);
                 if (!pending.isEmpty() && (pending.size() >= MAX_BATCH_IMAGES
                         || pendingBytes + image.bytes().length > MAX_BATCH_BYTES)) {
+                    int before = items.size();
                     appendBatch(items, pending, config.get());
+                    notifyBatch(batchListener, items, before);
                     reportProgress(progressListener, items, paths.size());
                     pending = new ArrayList<>();
                     pendingBytes = 0;
@@ -108,11 +117,16 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
                 pending.add(image);
                 pendingBytes += image.bytes().length;
             } catch (Exception error) {
-                items.add(failure(path, error));
+                Map<String, Object> failed = failure(path, error);
+                items.add(failed);
+                if (batchListener != null) batchListener.accept(List.of(failed));
+                reportProgress(progressListener, items, paths.size());
             }
         }
         if (!pending.isEmpty()) {
+            int before = items.size();
             appendBatch(items, pending, config.get());
+            notifyBatch(batchListener, items, before);
             reportProgress(progressListener, items, paths.size());
         }
 
@@ -124,6 +138,12 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
         result.put("items", List.copyOf(items));
         if (!anySuccess) result.put("error", "vision_all_files_failed");
         return Map.copyOf(result);
+    }
+
+    private void notifyBatch(Consumer<List<Map<String, Object>>> listener,
+                             List<Map<String, Object>> items, int before) {
+        if (listener == null || before >= items.size()) return;
+        listener.accept(List.copyOf(items.subList(before, items.size())));
     }
 
     private void reportProgress(Consumer<Map<String, Object>> listener,

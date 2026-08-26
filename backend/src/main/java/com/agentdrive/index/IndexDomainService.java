@@ -134,50 +134,62 @@ public final class IndexDomainService {
                 recordIndexMetric("vision", userId, selection.skipped().size(), result, startedAt);
                 return result;
             }
-            Consumer<Map<String, Object>> visionProgress = progress -> {
-                if (progress == null) return;
-                int completed = number(progress.get("completed"), 0);
-                int succeeded = number(progress.get("succeeded"), 0);
-                int failed = number(progress.get("failed"), 0);
-                reportProgress(progressListener, "vision",
-                        String.valueOf(progress.getOrDefault("message", "正在调用视觉模型分析图片")),
-                        completed + selection.skipped().size() + selection.alreadyIndexed().size(), progressTotal,
-                        succeeded + selection.alreadyIndexed().size(), failed,
-                        selection.skipped().size());
-            };
-            Map<String, Object> described = progressListener == null
-                    ? vision.describeFiles(userId, normalizedPaths)
-                    : vision.describeFiles(userId, normalizedPaths, visionProgress);
-            Map<String, Map<String, Object>> descriptions = new LinkedHashMap<>();
-            Object rawItems = described.get("items");
-            if (rawItems instanceof List<?> items) {
-                for (Object rawItem : items) {
-                    if (rawItem instanceof Map<?, ?> item && item.get("path") != null) {
-                        Map<String, Object> value = new LinkedHashMap<>();
-                        item.forEach((key, entry) -> value.put(String.valueOf(key), entry));
-                        descriptions.put(String.valueOf(item.get("path")), value);
-                    }
-                }
-            }
             List<Map<String, Object>> results = new java.util.ArrayList<>();
             int completed = selection.skipped().size() + selection.alreadyIndexed().size();
             int succeeded = selection.alreadyIndexed().size();
             int failed = 0;
+            final int[] counters = {completed, succeeded, failed};
+            Consumer<List<Map<String, Object>>> batchListener = batch -> {
+                for (Map<String, Object> item : batch) {
+                    Object rawPath = item.get("path");
+                    if (!(rawPath instanceof String path) || path.isBlank()) continue;
+                    Map<String, Object> resultItem;
+                    Object rawDescription = item.get("description");
+                    if (!(rawDescription instanceof String description) || description.isBlank()) {
+                        Map<String, Object> failedItem = new LinkedHashMap<>();
+                        failedItem.put("path", path);
+                        failedItem.put("indexed", false);
+                        failedItem.put("status", "error");
+                        failedItem.put("error", String.valueOf(item.getOrDefault("error", "vision description failed")));
+                        resultItem = failedItem;
+                    } else {
+                        resultItem = new LinkedHashMap<>(
+                                executeItem(path, () -> indexVisionDescription(userId, path, item, force)));
+                        resultItem.putIfAbsent("path", path);
+                    }
+                    results.add(resultItem);
+                    counters[0]++;
+                    if (itemSucceeded(resultItem)) counters[1]++;
+                    else counters[2]++;
+                }
+                reportProgress(progressListener, "writing", "已写入本批视觉索引",
+                        counters[0], progressTotal, counters[1], counters[2], selection.skipped().size());
+            };
+            // The batch listener is deliberately part of the vision port contract:
+            // every completed provider batch is persisted before the next batch starts.
+            vision.describeFiles(userId, normalizedPaths, null, batchListener);
+            /*
+             * Keep the local variables above named for the progress contract and make
+             * the final envelope derive from the items committed by the batch listener.
+             */
+            completed = counters[0];
+            succeeded = counters[1];
+            failed = counters[2];
+            /*
+             * Older adapters may return an item without invoking the new callback. The
+             * default port implementation invokes it once, so this branch is only a
+             * defensive no-op for a malformed adapter response.
+             */
             for (String path : normalizedPaths) {
-                Map<String, Object> item = descriptions.get(path);
+                if (results.stream().anyMatch(item -> path.equals(item.get("path")))) continue;
                 Map<String, Object> resultItem;
-                if (item == null || !(item.get("description") instanceof String description)
-                        || description.isBlank()) {
+                {
                     Map<String, Object> failedItem = new LinkedHashMap<>();
                     failedItem.put("path", path);
                     failedItem.put("indexed", false);
                     failedItem.put("status", "error");
-                    failedItem.put("error", item == null
-                            ? "vision description missing"
-                            : String.valueOf(item.getOrDefault("error", "vision description failed")));
+                    failedItem.put("error", "vision description missing");
                     resultItem = failedItem;
-                } else {
-                    resultItem = executeItem(path, () -> indexVisionDescription(userId, path, item, force));
                 }
                 results.add(resultItem);
                 completed++;

@@ -31,6 +31,27 @@ public interface VisionDescriptionPort {
     }
 
     /**
+     * 批次级描述回调：每个视觉 Provider 批次完成后立即交给索引层写入。
+     * 这样连接中断时，已完成批次仍然可在下一轮增量跳过。
+     */
+    default Map<String, Object> describeFiles(UUID userId, List<String> paths,
+                                               Consumer<Map<String, Object>> progressListener,
+                                               Consumer<List<Map<String, Object>>> batchListener) {
+        Map<String, Object> result = describeFiles(userId, paths, progressListener);
+        if (batchListener != null && result.get("items") instanceof List<?> items) {
+            List<Map<String, Object>> batch = items.stream()
+                    .filter(Map.class::isInstance)
+                    .map(item -> {
+                        Map<String, Object> copy = new java.util.LinkedHashMap<>();
+                        ((Map<?, ?>) item).forEach((key, value) -> copy.put(String.valueOf(key), value));
+                        return copy;
+                    }).toList();
+            if (!batch.isEmpty()) batchListener.accept(batch);
+        }
+        return result;
+    }
+
+    /**
      * 检查当前 owner 的视觉配置和 Provider 是否可用。
      * @param userId 当前 owner UUID
      * @return ready 状态和模型信息
