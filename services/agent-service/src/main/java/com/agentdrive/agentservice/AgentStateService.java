@@ -60,7 +60,10 @@ public class AgentStateService {
             case "runtime.invalidate_replay" -> invalidateReplay(request);
             case "runtime.load_history" -> loadHistory(request);
             case "runtime.loaded_skills" -> loadedSkills(request);
-            case "runtime.append_user" -> appendMessage(request, "user", null, null, null, null, null);
+            // Preserve the user message body. The API keeps an optimistic copy in
+            // memory, but reload/reconnect restores this owner-scoped transcript.
+            case "runtime.append_user" -> appendMessage(request, "user",
+                    text(request.get("content")), null, null, null, null);
             case "runtime.append_context" -> appendContext(request);
             case "runtime.append_assistant" -> appendMessage(request, "assistant",
                     text(request.get("content")), text(request.get("reasoning")), null, null, null);

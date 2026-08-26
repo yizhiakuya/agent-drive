@@ -19,7 +19,7 @@ Java API 127.0.0.1:8000 ───── PostgreSQL/pgvector
                  └── Agent Service 127.0.0.1:8050
 ```
 
-当前 API 负责 HTTP、SSE、静态前端和跨服务业务编排。生产已接入 Content/File/Identity/Index/Agent Service：视觉和文件内容读取走 loopback HTTP，索引正文/向量双写并以远程语义读为主，认证由 Identity Service introspection，聊天 session/transcript/replay/confirmation/run/event 状态由 Agent Service 保存。未配置的开发环境仍可使用 API 内本地适配器。后台任务、计划队列、outbox 和独立 Worker 已移除；`plan` 仍仅是会话内可视化状态，不创建持久任务。
+当前 API 负责 HTTP、SSE、静态前端和跨服务业务编排。生产已接入 Content/File/Identity/Index/Agent Service：视觉和文件内容读取走 loopback HTTP，索引正文/向量双写并以远程语义读为主，认证由 Identity Service introspection，聊天 session/transcript/replay/confirmation/run/event 状态由 Agent Service 保存，用户消息正文必须随 transcript 一起持久化以支持刷新恢复。未配置的开发环境仍可使用 API 内本地适配器。后台任务、计划队列、outbox 和独立 Worker 已移除；`plan` 仍仅是会话内可视化状态，不创建持久任务。
 
 微服务演进边界、服务数据所有权和拆分顺序见 [`microservices-architecture.md`](microservices-architecture.md)。当前 API 保留模块化单体的事务编排和 fallback，五个独立服务已完成内部鉴权、独立数据库/存储和生产切流。
 
