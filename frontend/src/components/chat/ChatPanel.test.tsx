@@ -664,6 +664,7 @@ describe("ChatPanel 主流程", () => {
     fireEvent.click(stopBtn);
     await act(async () => {});
     expect(abortSpy).toHaveBeenCalled();
+    expect(screen.getByText("长时间任务")).toBeInTheDocument();
     expect(screen.getByText("已停止本次任务。")).toBeInTheDocument();
     expect(screen.getByText("已停止")).toBeInTheDocument();
     expect(screen.queryByText("执行中")).not.toBeInTheDocument();
