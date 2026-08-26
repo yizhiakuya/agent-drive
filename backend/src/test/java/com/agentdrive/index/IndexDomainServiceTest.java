@@ -84,6 +84,36 @@ class IndexDomainServiceTest {
     }
 
     @Test
+    void expandsDirectoryVisionRequestToSupportedImagesAndSkipsUnsupportedFormats() {
+        IndexStore index = mock(IndexStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        VisionDescriptionPort vision = mock(VisionDescriptionPort.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        UUID owner = UUID.randomUUID();
+        when(index.files(owner, "photos")).thenReturn(List.of(
+                Map.of("path", "photos/a.png"),
+                Map.of("path", "photos/b.heic"),
+                Map.of("path", "photos/note.txt")));
+        when(vision.isImage("photos/a.png")).thenReturn(true);
+        when(vision.isImage("photos/b.heic")).thenReturn(false);
+        when(vision.isImage("photos/note.txt")).thenReturn(false);
+        when(vision.describeFiles(owner, List.of("photos/a.png"))).thenReturn(Map.of(
+                "ok", true,
+                "items", List.of(Map.of("path", "photos/a.png", "description", "一张图片"))));
+        when(indexing.indexDescription(eq(owner), eq("photos/a.png"), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Map.of("indexed", true));
+        when(embeddings.embed(eq(owner), eq(List.of("photos/a.png")), eq(64), eq(false)))
+                .thenReturn(Map.of("vectorized", true));
+
+        Map<String, Object> result = new IndexDomainService(index, indexing, embeddings,
+                emptyConfig(), vision).indexVision(owner, List.of("photos"), false);
+
+        verify(vision).describeFiles(owner, List.of("photos/a.png"));
+        assertThat(result).containsEntry("status", "partial").containsEntry("skipped", 1);
+        assertThat((List<?>) result.get("items")).hasSize(1);
+    }
+
+    @Test
     void returnsPartialStatusInsteadOfAbortingOnOneTextFileFailure() {
         IndexStore index = mock(IndexStore.class);
         IndexingService indexing = mock(IndexingService.class);

@@ -10,6 +10,7 @@ type ContextUsage = {
   input?: number;
   output?: number;
   estimated?: boolean;
+  compacted?: boolean;
 };
 
 export function ContextBar({ usage }: { usage: ContextUsage }) {
@@ -22,7 +23,8 @@ export function ContextBar({ usage }: { usage: ContextUsage }) {
   const offset = circumference * (1 - pct / 100);
   const remaining = Math.max(0, total - used);
   const estimatePrefix = usage.estimated ? "估算 " : "";
-  const label = `${estimatePrefix}上下文窗口 ${Math.round(pct)}%，已用 ${fmtTokens(used)} / ${fmtTokens(total)}`;
+  const compactPrefix = usage.compacted ? "已自动压缩 · " : "";
+  const label = `${compactPrefix}${estimatePrefix}上下文窗口 ${Math.round(pct)}%，已用 ${fmtTokens(used)} / ${fmtTokens(total)}`;
 
   useEffect(() => {
     const details = detailsRef.current;
@@ -74,7 +76,7 @@ export function ContextBar({ usage }: { usage: ContextUsage }) {
           <span className="absolute inset-0 grid place-items-center font-mono text-[7px] font-semibold tabular-nums text-muted">{Math.round(pct)}%</span>
         </span>
         <span className="whitespace-nowrap font-medium">上下文</span>
-        <span className="whitespace-nowrap font-mono tabular-nums">{estimatePrefix}{fmtTokens(used)} / {fmtTokens(total)}</span>
+        <span className="whitespace-nowrap font-mono tabular-nums">{compactPrefix}{estimatePrefix}{fmtTokens(used)} / {fmtTokens(total)}</span>
         <ChevronDown className="size-3 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
       <div
@@ -85,7 +87,7 @@ export function ContextBar({ usage }: { usage: ContextUsage }) {
       >
         <div className="flex items-center justify-between gap-3">
           <span className="font-medium text-text">上下文窗口</span>
-          <span className="font-mono tabular-nums text-muted">{estimatePrefix}{fmtTokens(used)} / {fmtTokens(total)} ({Math.round(pct)}%)</span>
+          <span className="font-mono tabular-nums text-muted">{compactPrefix}{estimatePrefix}{fmtTokens(used)} / {fmtTokens(total)} ({Math.round(pct)}%)</span>
         </div>
         <div
           role="progressbar"

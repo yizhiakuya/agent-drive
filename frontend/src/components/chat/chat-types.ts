@@ -58,4 +58,5 @@ export interface ContextUsage {
   input?: number;
   output?: number;
   estimated?: boolean;
+  compacted?: boolean;
 }

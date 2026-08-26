@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -106,9 +107,18 @@ public final class IndexDomainService {
     public Map<String, Object> indexVision(UUID userId, List<String> paths, boolean force) {
         requireUser(userId);
         long startedAt = System.nanoTime();
-        List<String> normalizedPaths = normalizePaths(paths);
+        VisionPathSelection selection = expandVisionPaths(userId, normalizePaths(paths));
+        List<String> normalizedPaths = selection.paths();
         try {
             vision.requireReady(userId);
+            if (normalizedPaths.isEmpty()) {
+                Map<String, Object> result = batchResult("index.vision", List.of());
+                result.put("status", selection.skipped().isEmpty() ? "succeeded" : "partial");
+                result.put("ok", selection.skipped().isEmpty());
+                addSkipped(result, selection.skipped());
+                recordIndexMetric("vision", userId, selection.skipped().size(), result, startedAt);
+                return result;
+            }
             Map<String, Object> described = vision.describeFiles(userId, normalizedPaths);
             Map<String, Map<String, Object>> descriptions = new LinkedHashMap<>();
             Object rawItems = described.get("items");
@@ -137,12 +147,63 @@ public final class IndexDomainService {
                 return executeItem(path, () -> indexVisionDescription(userId, path, item, force));
             }).toList();
             Map<String, Object> result = batchResult("index.vision", results);
+            addSkipped(result, selection.skipped());
             recordIndexMetric("vision", userId, normalizedPaths.size(), result, startedAt);
             return result;
         } catch (RuntimeException error) {
             BusinessMetrics.index("vision", userId, normalizedPaths.size(), 0, normalizedPaths.size(), elapsedMillis(startedAt), "");
             throw error;
         }
+    }
+
+    /**
+     * 将目录视觉索引请求展开为服务端支持的图片文件，避免 Agent 把目录误传给单图接口。
+     * 非图片文件不进入视觉批次；HEIF 等图片扩展名会作为 skipped 返回，不触发重复失败调用。
+     */
+    private VisionPathSelection expandVisionPaths(UUID userId, List<String> requested) {
+        LinkedHashSet<String> supported = new LinkedHashSet<>();
+        LinkedHashSet<String> skipped = new LinkedHashSet<>();
+        for (String path : requested) {
+            List<Map<String, Object>> listed = index.files(userId, path);
+            boolean directFile = listed.stream().anyMatch(item -> path.equals(String.valueOf(item.get("path"))));
+            if (listed.isEmpty()) {
+                // A new physical file may not have an index row yet. Keep the
+                // direct path so the vision port can perform the authoritative
+                // existence/type check instead of silently skipping it.
+                supported.add(path);
+                continue;
+            }
+            if (directFile) {
+                if (vision.isImage(path)) supported.add(path);
+                else if (looksLikeImage(path)) skipped.add(path);
+                continue;
+            }
+            for (Map<String, Object> item : listed) {
+                Object rawPath = item.get("path");
+                if (!(rawPath instanceof String childPath) || childPath.isBlank()) continue;
+                if (vision.isImage(childPath)) supported.add(childPath);
+                else if (looksLikeImage(childPath)) skipped.add(childPath);
+            }
+        }
+        return new VisionPathSelection(List.copyOf(supported), List.copyOf(skipped));
+    }
+
+    private boolean looksLikeImage(String path) {
+        String lower = path == null ? "" : path.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".heic") || lower.endsWith(".heif") || lower.endsWith(".avif")
+                || lower.endsWith(".tif") || lower.endsWith(".tiff");
+    }
+
+    private void addSkipped(Map<String, Object> result, List<String> skipped) {
+        result.put("skipped", skipped.size());
+        if (!skipped.isEmpty()) {
+            result.put("ok", false);
+            result.put("status", "partial");
+            result.put("skipped_paths", skipped.stream().limit(64).toList());
+        }
+    }
+
+    private record VisionPathSelection(List<String> paths, List<String> skipped) {
     }
 
     /** 同步向量化指定范围的当前文档块；空 paths 表示 owner 全部文档。 */

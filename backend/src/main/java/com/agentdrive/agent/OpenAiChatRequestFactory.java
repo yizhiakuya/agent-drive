@@ -28,6 +28,9 @@ public final class OpenAiChatRequestFactory implements ChatRequestFactory {
     ) {
         OpenAiChatRequestParameters.Builder parameters = OpenAiChatRequestParameters.builder();
         parameters.toolSpecifications(toolSpecifications);
+        // Sub2API 的 OpenAI-compatible 多工具流在一次响应返回多个 tool call 时，
+        // 可能在上游已经产生首字后迟迟不关闭 SSE；串行工具调用避免把尾部等待误算成模型/工具耗时。
+        parameters.parallelToolCalls(false);
         if (thinkingLevel.providerValue() != null) {
             parameters.reasoningEffort(thinkingLevel.providerValue());
         }

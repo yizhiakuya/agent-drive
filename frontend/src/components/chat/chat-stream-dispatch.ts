@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { appendContextMessage, appendToolStep, completeToolStep, planFromToolTrace, updateToolProgress } from "./chat-stream-state";
 import type { PlanStep } from "./PlanCard";
 import type { Message } from "./chat-types";
+import type { ContextUsage } from "./chat-types";
 import type { ChatStreamEvent, ToolTrace } from "./chat-stream-events";
 import type { ChatStreamFrame } from "./chat-stream-frame";
 import {
@@ -36,6 +37,7 @@ export interface ChatStreamEventHandlers {
   frame: ChatStreamFrame;
   setMessages: Dispatch<SetStateAction<Message[]>>;
   setPlan: Dispatch<SetStateAction<PlanStep[]>>;
+  setContextUsage: Dispatch<SetStateAction<ContextUsage | null>>;
   onFrontendAction: (data: Record<string, unknown>) => void;
 }
 
@@ -73,8 +75,8 @@ function traceStatus(trace: ToolTrace): "succeeded" | "partial" | "failed" {
     ? parsed.result as Record<string, unknown>
     : null;
   const result = nested || parsed;
-  if (result.ok === false || result.status === "failed") return "failed";
   if (result.status === "partial") return "partial";
+  if (result.ok === false || result.status === "failed") return "failed";
   return "succeeded";
 }
 
@@ -103,13 +105,16 @@ export function dispatchChatStreamEvent(
   event: ChatStreamEvent,
   handlers: ChatStreamEventHandlers,
 ) {
-  const { frame, setMessages, setPlan, onFrontendAction } = handlers;
+  const { frame, setMessages, setPlan, setContextUsage, onFrontendAction } = handlers;
   switch (event.type) {
     case "text":
       frame.appendText(event.delta);
       break;
     case "reasoning":
       frame.appendReasoning(event.delta);
+      break;
+    case "context_usage":
+      setContextUsage(event.usage);
       break;
     case "context":
       setMessages((messages) => appendContextMessage(messages, {

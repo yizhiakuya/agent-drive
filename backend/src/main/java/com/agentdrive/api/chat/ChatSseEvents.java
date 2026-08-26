@@ -39,6 +39,11 @@ public final class ChatSseEvents {
         return new ChatSseEvent("reasoning", Map.of("text", text == null ? "" : text));
     }
 
+    /** 创建模型上下文用量/压缩状态事件，供前端在运行中更新上下文圆环。 */
+    public static ChatSseEvent contextUsage(Map<String, Object> usage) {
+        return new ChatSseEvent("context_usage", usage == null ? Map.of() : usage);
+    }
+
     /**
      * 创建可由前端折叠展示的上下文注入事件。
      * @param context 已校验的上下文快照

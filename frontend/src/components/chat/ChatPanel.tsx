@@ -78,12 +78,13 @@ function normalizeContextUsage(value: unknown): ContextUsage | null {
   const input = finiteNumber(raw.input);
   const output = finiteNumber(raw.output);
   return {
-    used: Math.max(0, used),
+    used: Math.min(total, Math.max(0, used)),
     total,
-    percent,
+    percent: Math.max(0, Math.min(100, percent)),
     ...(input !== null && input > 0 ? { input } : {}),
     ...(output !== null && output > 0 ? { output } : {}),
     ...(raw.estimated === true ? { estimated: true } : {}),
+    ...(raw.compacted === true || used > total ? { compacted: true } : {}),
   };
 }
 

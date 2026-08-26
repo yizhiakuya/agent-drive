@@ -66,10 +66,12 @@ public final class LangChainAgentRuntime implements ChatRuntime {
     private static final String TRUNCATION_MESSAGE = "工具步骤已达到上限，请继续发送消息。";
     private static final int DEFAULT_MAX_STEPS = 0;
     private static final int DEFAULT_CONTEXT_WINDOW = 262_144;
+    private static final int LIVE_CONTEXT_USAGE_THRESHOLD = 16_384;
     /** 给系统提示、历史和工具上下文预留输出空间的保守字符预算。 */
     private static final int MAX_CONTEXT_CHARS = 700_000;
     private static final int MAX_CONTEXT_ITEM_CHARS = 96_000;
-    private static final int MAX_TOOL_CONTEXT_CHARS = 200_000;
+    /** 工具完整结果仍写入 transcript，但进入下一轮模型上下文只保留有界摘要。 */
+    private static final int MAX_TOOL_CONTEXT_CHARS = 12_000;
 
     private final ProviderRuntimeResolver providerRuntimeResolver;
     private final Map<String, AgentTool> agentTools;
@@ -533,6 +535,9 @@ public final class LangChainAgentRuntime implements ChatRuntime {
                 finish(true);
                 return;
             }
+            if (estimatedContextTokens() >= LIVE_CONTEXT_USAGE_THRESHOLD) {
+                sink.next(ChatSseEvents.contextUsage(contextUsageEstimate()));
+            }
             dev.langchain4j.model.chat.request.ChatRequest request = requestFactory.create(
                     List.copyOf(messages),
                     toolSpecifications,
@@ -764,8 +769,24 @@ public final class LangChainAgentRuntime implements ChatRuntime {
         /** 工具完整结果仍可审计，但进入下一轮模型上下文时必须有界。 */
         private String toolContextOutput(String output) {
             if (output == null || output.length() <= MAX_TOOL_CONTEXT_CHARS) return output;
-            return output.substring(0, MAX_TOOL_CONTEXT_CHARS)
-                    + "\n[工具结果已截断；如需更多内容请使用分页或更具体的查询]";
+            int head = MAX_TOOL_CONTEXT_CHARS * 2 / 3;
+            int tail = MAX_TOOL_CONTEXT_CHARS - head;
+            return output.substring(0, head)
+                    + "\n[工具结果已自动压缩；中间内容省略，请使用分页或更具体的查询]\n"
+                    + output.substring(Math.max(head, output.length() - tail));
+        }
+
+        /** 计算当前已组装消息的保守上下文用量，并明确告知前端已经压缩工具结果。 */
+        private Map<String, Object> contextUsageEstimate() {
+            int used = Math.min(DEFAULT_CONTEXT_WINDOW, estimatedContextTokens());
+            double percent = DEFAULT_CONTEXT_WINDOW == 0 ? 0d : used * 100d / DEFAULT_CONTEXT_WINDOW;
+            return Map.of(
+                    "used", used,
+                    "total", DEFAULT_CONTEXT_WINDOW,
+                    "percent", Math.min(100d, percent),
+                    "estimated", true,
+                    "compacted", true
+            );
         }
 
         /**
@@ -962,7 +983,8 @@ public final class LangChainAgentRuntime implements ChatRuntime {
         private Map<String, Object> contextUsageData() {
             Integer inputCount = latestTokenUsage == null ? null : latestTokenUsage.inputTokenCount();
             Integer totalCount = latestTokenUsage == null ? null : latestTokenUsage.totalTokenCount();
-            int used = inputCount != null ? inputCount : totalCount != null ? totalCount : estimatedContextTokens();
+            int rawUsed = inputCount != null ? inputCount : totalCount != null ? totalCount : estimatedContextTokens();
+            int used = Math.min(DEFAULT_CONTEXT_WINDOW, Math.max(0, rawUsed));
             int input = latestTokenUsage == null || latestTokenUsage.inputTokenCount() == null
                     ? 0
                     : latestTokenUsage.inputTokenCount();
@@ -975,6 +997,7 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             usage.put("total", DEFAULT_CONTEXT_WINDOW);
             usage.put("percent", Math.min(100d, percent));
             if (inputCount == null && totalCount == null) usage.put("estimated", true);
+            if (rawUsed > DEFAULT_CONTEXT_WINDOW) usage.put("compacted", true);
             if (input > 0) {
                 usage.put("input", input);
             }

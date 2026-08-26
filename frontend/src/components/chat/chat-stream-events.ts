@@ -1,3 +1,5 @@
+import type { ContextUsage } from "./chat-types";
+
 export interface ToolTrace {
   tool: string;
   step?: number;
@@ -17,6 +19,7 @@ export interface ContextTrace {
 export type ChatStreamEvent =
   | { type: "text"; delta: string }
   | { type: "reasoning"; delta: string }
+  | { type: "context_usage"; usage: ContextUsage }
   | { type: "context"; context: ContextTrace }
   | { type: "frontend_action"; data: Record<string, unknown> }
   | { type: "tool_start"; data: Record<string, unknown> }
@@ -41,6 +44,8 @@ export function parseChatStreamEvent(event: string, data: Record<string, unknown
       const delta = chatTextDelta(data);
       return delta ? { type: "reasoning", delta } : null;
     }
+    case "context_usage":
+      return parseContextUsage(data);
     case "context":
       return parseContext(data);
     case "frontend_action":
@@ -75,6 +80,25 @@ function parseContext(data: Record<string, unknown>): ChatStreamEvent | null {
       kind: data.kind,
       content: data.content,
       ...(typeof trust === "string" ? { trust: trust as ContextTrace["trust"] } : {}),
+    },
+  };
+}
+
+function parseContextUsage(data: Record<string, unknown>): ChatStreamEvent | null {
+  const used = typeof data.used === "number" ? data.used : Number(data.used);
+  const total = typeof data.total === "number" ? data.total : Number(data.total);
+  const percent = typeof data.percent === "number" ? data.percent : Number(data.percent);
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0 || !Number.isFinite(percent)) return null;
+  return {
+    type: "context_usage",
+    usage: {
+      used: Math.max(0, Math.min(total, used)),
+      total,
+      percent: Math.max(0, Math.min(100, percent)),
+      ...(data.estimated === true ? { estimated: true } : {}),
+      ...(data.compacted === true ? { compacted: true } : {}),
+      ...(typeof data.input === "number" && data.input > 0 ? { input: data.input } : {}),
+      ...(typeof data.output === "number" && data.output > 0 ? { output: data.output } : {}),
     },
   };
 }

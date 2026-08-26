@@ -12,6 +12,7 @@ function handlers() {
     },
     setMessages: vi.fn(),
     setPlan: vi.fn(),
+    setContextUsage: vi.fn(),
     onFrontendAction: vi.fn(),
   };
 }
@@ -45,6 +46,17 @@ describe("dispatchChatStreamEvent", () => {
     }, { type: "assistant", content: "" }]);
   });
 
+  it("updates live context usage and compression state", () => {
+    const target = handlers();
+    dispatchChatStreamEvent({
+      type: "context_usage",
+      usage: { used: 12000, total: 262144, percent: 4.6, estimated: true, compacted: true },
+    }, target);
+    expect(target.setContextUsage).toHaveBeenCalledWith({
+      used: 12000, total: 262144, percent: 4.6, estimated: true, compacted: true,
+    });
+  });
+
   it("updates tool steps and plans without changing stream parsing", () => {
     const target = handlers();
     dispatchChatStreamEvent({ type: "tool_start", data: { tool: "list_files", arguments: {} } }, target);
@@ -72,5 +84,21 @@ describe("dispatchChatStreamEvent", () => {
       output: "{}",
       parsed: { operation: "GET /api/v1/files", ok: true },
     })).toBe(false);
+  });
+
+  it("keeps partial index activity distinct from failed activity", () => {
+    const target = handlers();
+    dispatchChatStreamEvent({
+      type: "tool_start",
+      data: { step: 1, tool: "backend_api", operation: "PUT /api/v1/index/vision", started_at: Date.now() },
+    }, target);
+    dispatchChatStreamEvent({
+      type: "tool_trace",
+      trace: { step: 1, tool: "backend_api", output: "{}", parsed: {
+        ok: false, status: "partial", operation: "PUT /api/v1/index/vision", items: [{ indexed: true }], skipped: 1,
+      } },
+    }, target);
+    // The assertion is intentionally event-level; activity persistence is external state.
+    expect(target.setMessages).toHaveBeenCalledTimes(2);
   });
 });

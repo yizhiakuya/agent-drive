@@ -26,7 +26,7 @@ public class ChatBackendApiOperations {
                 http("GET", "/api/v1/index", "读取当前 owner 的索引状态和索引文件列表"),
                 http("GET", "/api/v1/index/file", "读取单个文件的索引元数据"),
                 http("PUT", "/api/v1/index/file", "直接抽取并写入单个文本文件索引"),
-                http("PUT", "/api/v1/index/vision", "直接识别、写入视觉描述并向量化图片"),
+                http("PUT", "/api/v1/index/vision", "直接识别、写入视觉描述并向量化图片或目录"),
                 http("PUT", "/api/v1/index/vectors", "直接向量化当前索引文档块"),
                 http("DELETE", "/api/v1/index/vectors", "直接删除当前 owner 的文本和视觉向量，保留正文和原文件"),
                 http("DELETE", "/api/v1/index/stale", "删除当前 owner 已失效的索引文档"),

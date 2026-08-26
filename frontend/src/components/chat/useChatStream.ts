@@ -10,6 +10,7 @@ import { parseChatStreamEvent } from "./chat-stream-events";
 import { dispatchChatStreamEvent, isFileMutationTrace } from "./chat-stream-dispatch";
 import { buildChatHistory, removeEmptyAssistantMessages } from "./chat-stream-state";
 import type { ContextUsage, InlineImage, InlineImagePreview, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
+import { finishOperationActivity, startOperationActivity, updateOperationActivity } from "@/lib/operation-activity";
 
 export type { ContextUsage, InlineImage, InlineImagePreview, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
 export { chatTextDelta } from "./chat-stream-events";
@@ -51,6 +52,7 @@ interface ActiveChatStream {
   frame: ChatStreamFrame;
   detached: boolean;
   startedAt: number;
+  activityId: string;
 }
 
 function streamKey(sessionId: string | null): string {
@@ -80,6 +82,17 @@ function currentErrorSessionId(error: unknown): string | null {
   if (typeof error !== "object" || error === null) return null;
   const sessionId = (error as { sessionId?: unknown }).sessionId;
   return typeof sessionId === "string" && sessionId.trim() ? sessionId : null;
+}
+
+function agentActivityPhase(event: string, data: Record<string, unknown>) {
+  if (event === "tool_start" || event === "tool_progress") {
+    return {
+      phase: "tool",
+      message: typeof data.progress_message === "string" ? data.progress_message
+        : typeof data.message === "string" ? data.message : "正在执行工具",
+    };
+  }
+  return { phase: "model", message: "正在等待模型响应" };
 }
 
 /**
@@ -168,7 +181,19 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     const controller = new AbortController();
     setMessages((m) => [...m, { type: "assistant", content: "" }]);
     const startedAt = Date.now();
-    const run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false, startedAt };
+    const activityId = `agent-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    startOperationActivity({
+      id: activityId,
+      source: "agent",
+      kind: "agent-run",
+      title: "Agent 运行",
+      target: "当前会话",
+      operation: "POST /api/v1/chat/stream",
+      phase: "model",
+      message: "正在等待模型响应",
+      startedAt,
+    });
+    const run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false, startedAt, activityId };
     const frame = createChatStreamFrame({
       isCurrent: () => streamsRef.current.get(run.key)?.controller === controller
         && streamKey(sessionIdRef.current) === run.key,
@@ -183,6 +208,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       frame,
       setMessages,
       setPlan,
+      setContextUsage,
       onFrontendAction: (data: Record<string, unknown>) => {
         const action = normalizeFrontendAction(data);
         if (action) useAppStore.getState().enqueueFrontendAction(action);
@@ -194,6 +220,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (streamsRef.current.get(run.key) !== run) return;
         const streamEvent = parseChatStreamEvent(event, data);
         if (!streamEvent) return;
+        updateOperationActivity(run.activityId, agentActivityPhase(event, data));
         const visible = isVisible(run);
         if (!visible) run.detached = true;
         // 文件变更通知与当前会话视图解耦；切换会话时后台运行也必须刷新文件栏。
@@ -249,6 +276,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
         if (onFinish) setTimeout(onFinish, 50);
       }
+      finishOperationActivity(run.activityId, r?.pending_confirmation || r?.truncated ? "partial" : "succeeded", {
+        phase: "finished",
+        message: r?.pending_confirmation ? "等待用户确认" : r?.truncated ? "运行达到边界" : "Agent 运行完成",
+      });
     } catch (error) {
       if ((error as Error).name === "AbortError" || streamsRef.current.get(run.key) !== run) return;
       const visible = isVisible(run);
@@ -273,6 +304,11 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         ]);
         if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
       }
+      finishOperationActivity(run.activityId, "failed", {
+        phase: "finished",
+        message: "Agent 运行失败",
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       if (streamsRef.current.get(run.key) === run) {
         streamsRef.current.delete(run.key);
@@ -303,13 +339,25 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
             && streamKey(sessionIdRef.current) === key,
           setMessages,
         });
-        run = { key, controller, frame, detached: false, startedAt: Date.now() };
+        const activityId = `agent-run-reconnect-${key}`;
+        startOperationActivity({
+          id: activityId,
+          source: "agent",
+          kind: "agent-run",
+          title: "Agent 运行",
+          target: "当前会话",
+          operation: "POST /api/v1/chat/stream",
+          phase: "reconnect",
+          message: "正在恢复 Agent 运行",
+        });
+        run = { key, controller, frame, detached: false, startedAt: Date.now(), activityId };
         streams.set(key, run);
         refreshRunningKeys();
         const eventHandlers = {
           frame,
           setMessages,
           setPlan,
+          setContextUsage,
           onFrontendAction: (data: Record<string, unknown>) => {
             const action = normalizeFrontendAction(data);
             if (action) useAppStore.getState().enqueueFrontendAction(action);
@@ -317,8 +365,9 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         };
         return chatReconnect(key, (event, data) => {
           if (!run || streamsRef.current.get(key) !== run) return;
-           const streamEvent = parseChatStreamEvent(event, data);
-           if (!streamEvent) return;
+          const streamEvent = parseChatStreamEvent(event, data);
+          if (!streamEvent) return;
+          updateOperationActivity(run.activityId, agentActivityPhase(event, data));
            if (streamEvent.type === "tool_trace" && isFileMutationTrace(streamEvent.trace)) {
              emitFilesChanged();
            }
@@ -335,6 +384,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         streams.delete(key);
         run.frame.flush();
         run.frame.cancel();
+        finishOperationActivity(run.activityId, "succeeded", { phase: "finished", message: "Agent 运行完成" });
         refreshRunningKeys();
         onReconcileRef.current?.(key);
         bumpSessions();
@@ -346,10 +396,11 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       if (run && streams.get(key) === run) {
         streams.delete(key);
         run.frame.cancel();
+        finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
         refreshRunningKeys();
       }
     };
-  }, [sessionId, sessionIdRef, setMessages, setPlan, refreshRunningKeys, bumpSessions]);
+  }, [sessionId, sessionIdRef, setMessages, setPlan, setContextUsage, refreshRunningKeys, bumpSessions]);
 
   useEffect(() => {
     const activeKey = streamKey(sessionId);
@@ -366,6 +417,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       for (const run of active) {
         run.frame.cancel();
         run.controller.abort();
+        finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
       }
     };
   }, []);
@@ -377,6 +429,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     streamsRef.current.delete(key);
     run.frame.cancel();
     run.controller.abort();
+    finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
     setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
     if (sessionIdRef.current) void cancelChatRun(sessionIdRef.current).catch(() => {});
     refreshRunningKeys();

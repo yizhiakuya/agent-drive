@@ -19,6 +19,8 @@ class ThinkingLevelTest {
         assertThat(request.parameters()).isInstanceOf(OpenAiChatRequestParameters.class);
         assertThat(((OpenAiChatRequestParameters) request.parameters()).reasoningEffort())
                 .isEqualTo("high");
+        assertThat(((OpenAiChatRequestParameters) request.parameters()).parallelToolCalls())
+                .isFalse();
     }
 
     @Test
