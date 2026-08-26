@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -65,7 +66,8 @@ public class BackendApiTool implements AgentTool {
         BackendApiRequest request = objectMapper.readValue(rawArguments, BackendApiRequest.class);
         UUID userId = context == null ? null : context.authenticatedUserId();
         String requestId = context == null ? null : context.requestId();
-        return execute(request, userId, requestId);
+        Consumer<Map<String, Object>> progress = context == null ? null : context::reportProgress;
+        return execute(request, userId, requestId, progress);
     }
 
     /**
@@ -142,6 +144,12 @@ public class BackendApiTool implements AgentTool {
      * @return 成功或失败的 JSON 响应
      */
     public String execute(BackendApiRequest request, UUID userId, String requestId) {
+        return execute(request, userId, requestId, null);
+    }
+
+    /** 执行 operation，并把业务层真实进度转成当前工具调用的回调。 */
+    public String execute(BackendApiRequest request, UUID userId, String requestId,
+                          Consumer<Map<String, Object>> progressListener) {
         long startedAt = System.nanoTime();
         String correlationId = safeId(requestId);
         if (request != null) {
@@ -150,7 +158,7 @@ public class BackendApiTool implements AgentTool {
                     parameterSummary(request));
         }
         try {
-            String result = executeWithoutLogging(request, userId);
+            String result = executeWithoutLogging(request, userId, progressListener);
             LOGGER.info("backend_api_end request_id={} action={} operation={} path={} http_status={} duration_ms={}",
                     correlationId, request == null ? "-" : request.action(),
                     request == null ? "-" : safeId(request.operation()), request == null ? "-" : operationPath(request),
@@ -177,7 +185,8 @@ public class BackendApiTool implements AgentTool {
      * @param userId 当前认证 owner；由服务端注入，不能由模型提交
      * @return 包含成功结果或结构化业务错误的 JSON
      */
-    private String executeWithoutLogging(BackendApiRequest request, UUID userId) {
+    private String executeWithoutLogging(BackendApiRequest request, UUID userId,
+                                         Consumer<Map<String, Object>> progressListener) {
         // 防止直接调用入口传入 null；协议错误以工具 JSON 返回，不抛出到模型循环外。
         if (request == null) {
             return jsonError("invalid_request", "request must not be null", null);
@@ -246,7 +255,7 @@ public class BackendApiTool implements AgentTool {
         result.put("risk", definition.risk());
         try {
             // dispatcher 使用服务端注入的 userId 路由到 owner-scoped Handler；模型不能越过这层。
-            Map<String, Object> dispatchResult = dispatcher.dispatch(definition, request, userId);
+            Map<String, Object> dispatchResult = dispatcher.dispatch(definition, request, userId, progressListener);
             result.put("result", dispatchResult);
 
             // Handler 返回的失败也要提升到外层，否则模型可能把嵌套失败误判为成功。

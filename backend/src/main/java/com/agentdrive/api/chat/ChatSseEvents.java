@@ -3,6 +3,7 @@ package com.agentdrive.api.chat;
 import com.agentdrive.infrastructure.SensitiveDataRedactor;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -121,12 +122,27 @@ public final class ChatSseEvents {
      */
     public static ChatSseEvent toolProgress(int step, String tool, String phase,
                                             String message, long elapsedMillis) {
+        return toolProgress(step, tool, phase, message, elapsedMillis, Map.of());
+    }
+
+    /** 创建带真实业务计数的工具进度事件；只复制有限的数值字段。 */
+    public static ChatSseEvent toolProgress(int step, String tool, String phase,
+                                            String message, long elapsedMillis,
+                                            Map<String, Object> progress) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("step", step);
         data.put("tool", tool == null ? "" : tool);
         data.put("phase", phase == null || phase.isBlank() ? "running" : phase);
         data.put("message", message == null ? "正在执行" : message);
         data.put("elapsed_ms", Math.max(0L, elapsedMillis));
+        if (progress != null) {
+            for (String key : List.of("completed", "total", "succeeded", "failed", "skipped")) {
+                Object value = progress.get(key);
+                if (value instanceof Number number && number.intValue() >= 0) {
+                    data.put(key, number.intValue());
+                }
+            }
+        }
         return new ChatSseEvent("tool_progress", data);
     }
 

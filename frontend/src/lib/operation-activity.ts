@@ -19,6 +19,7 @@ export interface OperationActivity {
   total?: number;
   succeeded?: number;
   failed?: number;
+  skipped?: number;
   error?: string;
   unread: boolean;
 }

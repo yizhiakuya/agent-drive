@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -607,7 +608,13 @@ public final class LangChainAgentRuntime implements ChatRuntime {
             } else {
                 Disposable progress = startToolProgress(step, request.name(), progressMessage, toolStartedAt);
                 try {
-                    output = invokeTool(request);
+                    output = invokeTool(request, progressData -> {
+                        if (progressData == null || terminal.get()) return;
+                        String phase = stringValue(progressData.get("phase"));
+                        String message = stringValue(progressData.get("message"));
+                        sink.next(ChatSseEvents.toolProgress(step, request.name(), phase, message,
+                                elapsedMillis(toolStartedAt), progressData));
+                    });
                     parsed = parseToolOutput(output);
                 } catch (Exception error) {
                     LOGGER.error("chat_tool_error request_id={} session_id={} owner={} route={} step={} tool={} operation={} duration_ms={}",
@@ -815,12 +822,13 @@ public final class LangChainAgentRuntime implements ChatRuntime {
          * @return 工具适配器返回的原始 JSON 文本；工具名未登记时返回 JSON 错误。
          * @throws Exception 工具参数或适配器执行失败时抛出。
          */
-        private String invokeTool(ToolExecutionRequest request) throws Exception {
+        private String invokeTool(ToolExecutionRequest request,
+                                  Consumer<Map<String, Object>> progressListener) throws Exception {
             AgentTool tool = agentTools.get(request.name());
             if (tool == null) {
                 return errorOutput(new IllegalArgumentException("tool is not registered: " + request.name()));
             }
-            return tool.executeRaw(request.arguments(), toolContext());
+            return tool.executeRaw(request.arguments(), toolContext(progressListener));
         }
 
         /**
@@ -829,7 +837,12 @@ public final class LangChainAgentRuntime implements ChatRuntime {
          * @return owner、request ID 和浏览器能力清单组成的工具上下文
          */
         private AgentToolContext toolContext() {
-            return new AgentToolContext(input.authenticatedUserId(), requestId(), input.frontendCapabilities());
+            return toolContext(null);
+        }
+
+        private AgentToolContext toolContext(Consumer<Map<String, Object>> progressListener) {
+            return new AgentToolContext(input.authenticatedUserId(), requestId(),
+                    input.frontendCapabilities(), progressListener);
         }
 
         /**

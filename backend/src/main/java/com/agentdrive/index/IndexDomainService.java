@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 索引业务资源的 owner-scoped 应用服务。
@@ -105,10 +106,19 @@ public final class IndexDomainService {
 
     /** 直接执行图片描述、视觉文档写入和视觉向量生成；多图片逐个执行。 */
     public Map<String, Object> indexVision(UUID userId, List<String> paths, boolean force) {
+        return indexVision(userId, paths, force, null);
+    }
+
+    /** 执行视觉索引并把目录批次进度传给当前 Agent 工具流。 */
+    public Map<String, Object> indexVision(UUID userId, List<String> paths, boolean force,
+                                           Consumer<Map<String, Object>> progressListener) {
         requireUser(userId);
         long startedAt = System.nanoTime();
         VisionPathSelection selection = expandVisionPaths(userId, normalizePaths(paths));
         List<String> normalizedPaths = selection.paths();
+        int progressTotal = normalizedPaths.size() + selection.skipped().size();
+        reportProgress(progressListener, "preparing", "已找到 " + progressTotal + " 个图片文件",
+                0, progressTotal, 0, 0, selection.skipped().size());
         try {
             vision.requireReady(userId);
             if (normalizedPaths.isEmpty()) {
@@ -119,7 +129,19 @@ public final class IndexDomainService {
                 recordIndexMetric("vision", userId, selection.skipped().size(), result, startedAt);
                 return result;
             }
-            Map<String, Object> described = vision.describeFiles(userId, normalizedPaths);
+            Consumer<Map<String, Object>> visionProgress = progress -> {
+                if (progress == null) return;
+                int completed = number(progress.get("completed"), 0);
+                int succeeded = number(progress.get("succeeded"), 0);
+                int failed = number(progress.get("failed"), 0);
+                reportProgress(progressListener, "vision",
+                        String.valueOf(progress.getOrDefault("message", "正在调用视觉模型分析图片")),
+                        completed + selection.skipped().size(), progressTotal, succeeded, failed,
+                        selection.skipped().size());
+            };
+            Map<String, Object> described = progressListener == null
+                    ? vision.describeFiles(userId, normalizedPaths)
+                    : vision.describeFiles(userId, normalizedPaths, visionProgress);
             Map<String, Map<String, Object>> descriptions = new LinkedHashMap<>();
             Object rawItems = described.get("items");
             if (rawItems instanceof List<?> items) {
@@ -131,21 +153,33 @@ public final class IndexDomainService {
                     }
                 }
             }
-            List<Map<String, Object>> results = normalizedPaths.stream().map(path -> {
+            List<Map<String, Object>> results = new java.util.ArrayList<>();
+            int completed = selection.skipped().size();
+            int succeeded = 0;
+            int failed = 0;
+            for (String path : normalizedPaths) {
                 Map<String, Object> item = descriptions.get(path);
+                Map<String, Object> resultItem;
                 if (item == null || !(item.get("description") instanceof String description)
                         || description.isBlank()) {
-                    Map<String, Object> failed = new LinkedHashMap<>();
-                    failed.put("path", path);
-                    failed.put("indexed", false);
-                    failed.put("status", "error");
-                    failed.put("error", item == null
+                    Map<String, Object> failedItem = new LinkedHashMap<>();
+                    failedItem.put("path", path);
+                    failedItem.put("indexed", false);
+                    failedItem.put("status", "error");
+                    failedItem.put("error", item == null
                             ? "vision description missing"
                             : String.valueOf(item.getOrDefault("error", "vision description failed")));
-                    return failed;
+                    resultItem = failedItem;
+                } else {
+                    resultItem = executeItem(path, () -> indexVisionDescription(userId, path, item, force));
                 }
-                return executeItem(path, () -> indexVisionDescription(userId, path, item, force));
-            }).toList();
+                results.add(resultItem);
+                completed++;
+                if (itemSucceeded(resultItem)) succeeded++;
+                else failed++;
+                reportProgress(progressListener, "writing", "正在写入视觉索引",
+                        completed, progressTotal, succeeded, failed, selection.skipped().size());
+            }
             Map<String, Object> result = batchResult("index.vision", results);
             addSkipped(result, selection.skipped());
             recordIndexMetric("vision", userId, normalizedPaths.size(), result, startedAt);
@@ -154,6 +188,20 @@ public final class IndexDomainService {
             BusinessMetrics.index("vision", userId, normalizedPaths.size(), 0, normalizedPaths.size(), elapsedMillis(startedAt), "");
             throw error;
         }
+    }
+
+    private void reportProgress(Consumer<Map<String, Object>> listener, String phase, String message,
+                                int completed, int total, int succeeded, int failed, int skipped) {
+        if (listener == null) return;
+        listener.accept(Map.of(
+                "phase", phase,
+                "message", message,
+                "completed", Math.max(0, completed),
+                "total", Math.max(0, total),
+                "succeeded", Math.max(0, succeeded),
+                "failed", Math.max(0, failed),
+                "skipped", Math.max(0, skipped)
+        ));
     }
 
     /**

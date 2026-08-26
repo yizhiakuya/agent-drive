@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /** Registers the Agent operation catalog and routes calls to owner-scoped domain handlers. */
 @Configuration
@@ -81,11 +82,19 @@ public class ChatBackendApiOperations {
             public Map<String, Object> dispatch(OperationDefinition operation,
                                                 BackendApiRequest request,
                                                 UUID userId) {
+                return dispatch(operation, request, userId, null);
+            }
+
+            @Override
+            public Map<String, Object> dispatch(OperationDefinition operation,
+                                                BackendApiRequest request,
+                                                UUID userId,
+                                                Consumer<Map<String, Object>> progressListener) {
                 if (userId == null) return BackendApiResponses.missingOwner();
                 BackendApiOperationHandler handler = routes.get(operation.operation());
                 return handler == null
                         ? BackendApiResponses.notImplemented(operation)
-                        : handler.dispatch(operation.operation(), request, userId);
+                        : handler.dispatch(operation.operation(), request, userId, progressListener);
             }
         };
     }

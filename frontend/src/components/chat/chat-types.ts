@@ -22,11 +22,16 @@ export interface Message {
   tool?: string;
   step?: number;
   arguments?: Record<string, unknown>;
-  status?: "running" | "done" | "error";
+  status?: "running" | "done" | "error" | "cancelled";
   startedAt?: number;
   progressMessage?: string;
   progressPhase?: string;
   elapsedMs?: number;
+  completed?: number;
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  skipped?: number;
   output?: string;
   parsed?: Record<string, unknown> | unknown[];
 }

@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 负责读取 owner 图片并调用已配置的视觉模型生成综合文字描述。
@@ -59,11 +60,17 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
      * @return items 数组，每项包含 path、mime_type、model 和 description，失败项带 error。
      */
     public Map<String, Object> describeFiles(UUID userId, List<String> paths) {
+        return describeFiles(userId, paths, null);
+    }
+
+    @Override
+    public Map<String, Object> describeFiles(UUID userId, List<String> paths,
+                                              Consumer<Map<String, Object>> progressListener) {
         Optional<VisionRuntimeConfig.Config> config = configs.find(userId);
         if (config.isEmpty() || config.get().apiKey() == null || config.get().apiKey().isBlank()) {
             return Map.of("ok", false, "error", "vision_not_configured", "items", List.of());
         }
-        List<Map<String, Object>> items = describeInBatches(userId, paths, config.get());
+        List<Map<String, Object>> items = describeInBatches(userId, paths, config.get(), progressListener);
         boolean anySuccess = items.stream().anyMatch(item -> item.get("description") instanceof String description
                 && !description.isBlank());
         Map<String, Object> result = new LinkedHashMap<>();
@@ -81,7 +88,8 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
      * No previous description is reused; each call may intentionally regenerate all descriptions.
      */
     private List<Map<String, Object>> describeInBatches(UUID userId, List<String> paths,
-                                                         VisionRuntimeConfig.Config config) {
+                                                         VisionRuntimeConfig.Config config,
+                                                         Consumer<Map<String, Object>> progressListener) {
         List<Map<String, Object>> items = new ArrayList<>();
         List<PreparedImage> pending = new ArrayList<>();
         long pendingBytes = 0;
@@ -92,6 +100,7 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
                 if (!pending.isEmpty() && (pending.size() >= MAX_BATCH_IMAGES
                         || pendingBytes + image.bytes().length > MAX_BATCH_BYTES)) {
                     appendBatch(items, pending, config);
+                    reportProgress(progressListener, items, paths.size());
                     pending = new ArrayList<>();
                     pendingBytes = 0;
                 }
@@ -101,8 +110,26 @@ public final class VisionDescriptionService implements VisionDescriptionPort {
                 items.add(failure(path, error));
             }
         }
-        if (!pending.isEmpty()) appendBatch(items, pending, config);
+        if (!pending.isEmpty()) {
+            appendBatch(items, pending, config);
+            reportProgress(progressListener, items, paths.size());
+        }
         return items;
+    }
+
+    private void reportProgress(Consumer<Map<String, Object>> listener,
+                                List<Map<String, Object>> items, int total) {
+        if (listener == null) return;
+        int succeeded = (int) items.stream().filter(item -> item.get("description") instanceof String text
+                && !text.isBlank()).count();
+        listener.accept(Map.of(
+                "phase", "vision",
+                "message", "正在调用视觉模型分析图片",
+                "completed", items.size(),
+                "total", Math.max(0, total),
+                "succeeded", succeeded,
+                "failed", Math.max(0, items.size() - succeeded)
+        ));
     }
 
     /** Calls the batch endpoint and falls back to independent calls on provider protocol failure. */

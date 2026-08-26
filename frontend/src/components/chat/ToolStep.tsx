@@ -9,11 +9,16 @@ export interface ToolStepData {
   tool: string;
   step?: number;
   arguments?: Record<string, unknown>;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   startedAt?: number;
   progressMessage?: string;
   progressPhase?: string;
   elapsedMs?: number;
+  completed?: number;
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  skipped?: number;
   output?: string;
   parsed?: Record<string, unknown> | unknown[];
 }
@@ -44,6 +49,9 @@ export function ToolStep({ step }: { step: ToolStepData }) {
   const progressMessage = step.progressMessage || fmtToolProgress(step.tool, step.arguments || {});
   const elapsedMs = step.elapsedMs ?? (step.startedAt ? Math.max(0, now - step.startedAt) : null);
   const elapsedLabel = elapsedMs === null ? null : `耗时 ${fmtElapsedMs(elapsedMs)}`;
+  const progressCount = typeof step.completed === "number"
+    ? `${step.total && step.total > 0 ? `${step.completed}/${step.total}` : `已处理 ${step.completed}`}`
+    : null;
   const statsSummary = fileStatsSummary(step.tool, step.arguments || {}, step.parsed);
 
   const statusBadge =
@@ -78,11 +86,23 @@ export function ToolStep({ step }: { step: ToolStepData }) {
           <div className="flex items-center gap-2 text-xs text-warn">
             <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate">{progressMessage}</span>
+            {progressCount && <span className="shrink-0 font-mono text-[11px] text-muted">{progressCount}</span>}
             {elapsedMs !== null && <span className="shrink-0 font-mono text-[11px] text-muted">{fmtElapsedMs(elapsedMs)}</span>}
           </div>
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted/60" role="progressbar" aria-label={`${progressMessage}，进行中`}>
-            <div className="h-full w-1/3 animate-[progress-slide_1.4s_ease-in-out_infinite] rounded-full bg-warn" />
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted/60" role="progressbar" aria-label={progressCount ? `${progressMessage}，${progressCount}` : `${progressMessage}，进行中`} aria-valuemin={progressCount ? 0 : undefined} aria-valuemax={progressCount && step.total ? step.total : undefined} aria-valuenow={progressCount ? step.completed : undefined}>
+            {progressCount && step.total && step.total > 0 ? (
+              <div className="h-full rounded-full bg-warn transition-[width]" style={{ width: `${Math.min(100, Math.max(0, (step.completed! / step.total) * 100))}%` }} />
+            ) : (
+              <div className="h-full w-1/3 animate-[progress-slide_1.4s_ease-in-out_infinite] rounded-full bg-warn" />
+            )}
           </div>
+          {(step.succeeded !== undefined || step.skipped !== undefined || step.failed !== undefined) && (
+            <div className="mt-1 text-[11px] text-muted">
+              {step.succeeded !== undefined && `成功 ${step.succeeded}`}
+              {step.skipped !== undefined && ` · 跳过 ${step.skipped}`}
+              {step.failed !== undefined && ` · 失败 ${step.failed}`}
+            </div>
+          )}
         </div>
       )}
       {open && hasResult && (

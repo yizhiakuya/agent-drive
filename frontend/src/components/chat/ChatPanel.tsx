@@ -772,6 +772,11 @@ export default function ChatPanel({ onOpenSessions, onNewSession }: ChatPanelPro
             progressMessage: m.progressMessage,
             progressPhase: m.progressPhase,
             elapsedMs: m.elapsedMs,
+            completed: m.completed,
+            total: m.total,
+            succeeded: m.succeeded,
+            failed: m.failed,
+            skipped: m.skipped,
             output: m.output,
             parsed: m.parsed,
           }} />;

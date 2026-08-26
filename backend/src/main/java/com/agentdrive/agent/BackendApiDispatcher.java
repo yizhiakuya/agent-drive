@@ -2,6 +2,7 @@ package com.agentdrive.agent;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 执行已通过 {@link OperationCatalog} 注册的后端操作。
@@ -36,5 +37,16 @@ public interface BackendApiDispatcher {
                                          BackendApiRequest request,
                                          UUID userId) {
         return dispatch(operation, request);
+    }
+
+    /**
+     * Owner-aware operation dispatch with an optional live progress callback.
+     * Existing dispatchers remain source-compatible and simply ignore progress.
+     */
+    default Map<String, Object> dispatch(OperationDefinition operation,
+                                         BackendApiRequest request,
+                                         UUID userId,
+                                         Consumer<Map<String, Object>> progressListener) {
+        return dispatch(operation, request, userId);
     }
 }

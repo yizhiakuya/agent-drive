@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /** Routes Agent index operations to the normal owner-scoped index domain service. */
 @Component
@@ -38,6 +39,12 @@ final class ChatBackendApiIndexHandler implements BackendApiOperationHandler {
 
     @Override
     public Map<String, Object> dispatch(String operation, BackendApiRequest request, UUID userId) {
+        return dispatch(operation, request, userId, null);
+    }
+
+    @Override
+    public Map<String, Object> dispatch(String operation, BackendApiRequest request, UUID userId,
+                                        Consumer<Map<String, Object>> progressListener) {
         return switch (operation) {
             case "GET /api/v1/index" -> index.overview(userId,
                     BackendApiParams.parameter(request, "prefix", ""),
@@ -46,8 +53,10 @@ final class ChatBackendApiIndexHandler implements BackendApiOperationHandler {
                     BackendApiParams.parameter(request, "path", ""));
             case "PUT /api/v1/index/file" -> index.indexFiles(userId, paths(request),
                     BackendApiParams.booleanParameter(request, "force"));
-            case "PUT /api/v1/index/vision" -> index.indexVision(userId, paths(request),
-                    BackendApiParams.booleanParameter(request, "force"));
+            case "PUT /api/v1/index/vision" -> progressListener == null
+                    ? index.indexVision(userId, paths(request), BackendApiParams.booleanParameter(request, "force"))
+                    : index.indexVision(userId, paths(request),
+                    BackendApiParams.booleanParameter(request, "force"), progressListener);
             case "PUT /api/v1/index/vectors" -> index.vectorize(userId,
                     paths(request), BackendApiParams.booleanParameter(request, "force"),
                     Math.max(1, Math.min(1000, BackendApiParams.integerParameter(request, "limit", 64))));

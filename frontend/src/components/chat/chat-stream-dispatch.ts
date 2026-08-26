@@ -62,7 +62,7 @@ function activityForOperation(operation: string | null) {
   return { kind: "agent-operation", title: "Agent 操作" };
 }
 
-function activityIdForTool(data: Record<string, unknown>) {
+export function activityIdForTool(data: Record<string, unknown>) {
   const tool = typeof data.tool === "string" ? data.tool : "tool";
   const step = typeof data.step === "number" ? data.step : 0;
   return `agent-${tool}-${step}`;
@@ -89,11 +89,13 @@ function traceCounts(trace: ToolTrace) {
   const result = nested || parsed;
   const items = Array.isArray(result.items) ? result.items : [];
   const failed = typeof result.failed === "number" ? result.failed : undefined;
+  const skipped = typeof result.skipped === "number" ? result.skipped : undefined;
   const completed = typeof result.embedded === "number" ? result.embedded : items.length || undefined;
   return {
     ...(completed === undefined ? {} : { completed }),
     ...(items.length > 0 ? { total: items.length } : {}),
     ...(failed === undefined ? {} : { failed, succeeded: Math.max(0, (items.length || completed || 0) - failed) }),
+    ...(skipped === undefined ? {} : { skipped }),
   };
 }
 
@@ -150,9 +152,14 @@ export function dispatchChatStreamEvent(
       setMessages((messages) => updateToolProgress(messages, event.data));
       if (event.data.tool === "backend_api") {
         const id = activityIdForTool(event.data);
-        updateOperationActivity(id, {
+      updateOperationActivity(id, {
           phase: typeof event.data.phase === "string" ? event.data.phase : "running",
           message: typeof event.data.message === "string" ? event.data.message : "正在执行操作",
+          ...(typeof event.data.completed === "number" ? { completed: event.data.completed } : {}),
+          ...(typeof event.data.total === "number" ? { total: event.data.total } : {}),
+          ...(typeof event.data.succeeded === "number" ? { succeeded: event.data.succeeded } : {}),
+          ...(typeof event.data.failed === "number" ? { failed: event.data.failed } : {}),
+          ...(typeof event.data.skipped === "number" ? { skipped: event.data.skipped } : {}),
         });
       }
       break;

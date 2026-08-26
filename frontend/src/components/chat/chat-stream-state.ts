@@ -84,10 +84,33 @@ export function updateToolProgress(messages: Message[], data: Record<string, unk
       ...(typeof data.message === "string" ? { progressMessage: data.message } : {}),
       ...(typeof data.phase === "string" ? { progressPhase: data.phase } : {}),
       ...(typeof data.elapsed_ms === "number" ? { elapsedMs: data.elapsed_ms } : {}),
+      ...(typeof data.completed === "number" ? { completed: data.completed } : {}),
+      ...(typeof data.total === "number" ? { total: data.total } : {}),
+      ...(typeof data.succeeded === "number" ? { succeeded: data.succeeded } : {}),
+      ...(typeof data.failed === "number" ? { failed: data.failed } : {}),
+      ...(typeof data.skipped === "number" ? { skipped: data.skipped } : {}),
     };
     break;
   }
   return copy;
+}
+
+/** 将停止/断线时仍在运行的工具步骤收敛为明确终态，避免卡在“执行中”。 */
+export function settleRunningToolSteps(
+  messages: Message[],
+  status: "cancelled" | "error",
+  message: string,
+  elapsedMs?: number,
+): Message[] {
+  return messages.map((item) => item.type === "tool_step" && item.status === "running"
+    ? {
+      ...item,
+      status,
+      progressPhase: status,
+      progressMessage: message,
+      ...(typeof elapsedMs === "number" ? { elapsedMs } : {}),
+    }
+    : item);
 }
 
 /** 识别当前及旧版 backend_api envelope 中的业务失败。 */

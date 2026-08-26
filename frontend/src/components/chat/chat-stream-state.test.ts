@@ -11,6 +11,7 @@ import {
   replaceAssistantMessage,
   isFailedToolResult,
   updateToolProgress,
+  settleRunningToolSteps,
 } from "./chat-stream-state";
 
 describe("chat stream state helpers", () => {
@@ -50,6 +51,12 @@ describe("chat stream state helpers", () => {
       progressPhase: "running",
       elapsedMs: 2300,
     })]);
+  });
+
+  it("停止时把仍在运行的工具步骤收敛为已停止", () => {
+    const messages = appendToolStep([], { step: 2, tool: "backend_api", arguments: {}, started_at: 10 });
+    expect(settleRunningToolSteps(messages, "cancelled", "工具执行已停止", 2300)[0])
+      .toMatchObject({ status: "cancelled", progressPhase: "cancelled", progressMessage: "工具执行已停止", elapsedMs: 2300 });
   });
 
   it("把上下文注入插入空助手占位之前", () => {

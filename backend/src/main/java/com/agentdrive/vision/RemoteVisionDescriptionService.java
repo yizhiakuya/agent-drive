@@ -22,6 +22,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 通过内部 HTTP 契约调用独立 Content Service 的视觉端口适配器。
@@ -80,6 +81,12 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
     /** 按最多四张、二十 MiB 原始字节批量请求内容服务。 */
     @Override
     public Map<String, Object> describeFiles(UUID userId, List<String> paths) {
+        return describeFiles(userId, paths, null);
+    }
+
+    @Override
+    public Map<String, Object> describeFiles(UUID userId, List<String> paths,
+                                              Consumer<Map<String, Object>> progressListener) {
         Optional<VisionRuntimeConfig.Config> config = configs.find(userId);
         if (config.isEmpty() || config.get().apiKey() == null || config.get().apiKey().isBlank()) {
             return Map.of("ok", false, "error", "vision_not_configured", "items", List.of());
@@ -94,6 +101,7 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
                 if (!pending.isEmpty() && (pending.size() >= MAX_BATCH_IMAGES
                         || pendingBytes + image.bytes().length > MAX_BATCH_BYTES)) {
                     appendBatch(items, pending, config.get());
+                    reportProgress(progressListener, items, paths.size());
                     pending = new ArrayList<>();
                     pendingBytes = 0;
                 }
@@ -103,7 +111,10 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
                 items.add(failure(path, error));
             }
         }
-        if (!pending.isEmpty()) appendBatch(items, pending, config.get());
+        if (!pending.isEmpty()) {
+            appendBatch(items, pending, config.get());
+            reportProgress(progressListener, items, paths.size());
+        }
 
         boolean anySuccess = items.stream().anyMatch(item -> item.get("description") instanceof String description
                 && !description.isBlank());
@@ -113,6 +124,21 @@ public final class RemoteVisionDescriptionService implements VisionDescriptionPo
         result.put("items", List.copyOf(items));
         if (!anySuccess) result.put("error", "vision_all_files_failed");
         return Map.copyOf(result);
+    }
+
+    private void reportProgress(Consumer<Map<String, Object>> listener,
+                                List<Map<String, Object>> items, int total) {
+        if (listener == null) return;
+        int succeeded = (int) items.stream().filter(item -> item.get("description") instanceof String text
+                && !text.isBlank()).count();
+        listener.accept(Map.of(
+                "phase", "vision",
+                "message", "正在调用视觉模型分析图片",
+                "completed", items.size(),
+                "total", Math.max(0, total),
+                "succeeded", succeeded,
+                "failed", Math.max(0, items.size() - succeeded)
+        ));
     }
 
     /** 检查 owner 配置并探测远程 Content Service。 */

@@ -644,7 +644,14 @@ describe("ChatPanel 主流程", () => {
 
   it("停止按钮中止流（AbortController）", async () => {
     const abortSpy = vi.spyOn(AbortController.prototype, "abort");
-    chatStream.mockImplementation((_msg, _h, _s, _c, _onEvent: unknown, signal: AbortSignal) => {
+    chatStream.mockImplementation((_msg, _h, _s, _c, onEvent: (event: string, data: Record<string, unknown>) => void, signal: AbortSignal) => {
+      onEvent("tool_start", {
+        step: 1,
+        tool: "backend_api",
+        operation: "PUT /api/v1/index/vision",
+        arguments: { operation: "PUT /api/v1/index/vision" },
+        started_at: Date.now(),
+      });
       // 只监听 signal，不立即结束，模拟长任务。
       return new Promise((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
@@ -658,6 +665,8 @@ describe("ChatPanel 主流程", () => {
     await act(async () => {});
     expect(abortSpy).toHaveBeenCalled();
     expect(screen.getByText("已停止本次任务。")).toBeInTheDocument();
+    expect(screen.getByText("已停止")).toBeInTheDocument();
+    expect(screen.queryByText("执行中")).not.toBeInTheDocument();
   });
 
   it("reasoning 默认收叠并支持展开", async () => {

@@ -3,6 +3,7 @@ package com.agentdrive.vision;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 图片内容理解的应用端口。
@@ -19,6 +20,15 @@ public interface VisionDescriptionPort {
      * @return 按图片返回描述或逐项错误
      */
     Map<String, Object> describeFiles(UUID userId, List<String> paths);
+
+    /**
+     * 批量描述并报告真实批次进度；旧实现默认复用无进度契约。
+     * @param progressListener 只接收 completed/total/succeeded/failed/phase 等安全计数
+     */
+    default Map<String, Object> describeFiles(UUID userId, List<String> paths,
+                                               Consumer<Map<String, Object>> progressListener) {
+        return describeFiles(userId, paths);
+    }
 
     /**
      * 检查当前 owner 的视觉配置和 Provider 是否可用。

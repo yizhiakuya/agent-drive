@@ -157,4 +157,5 @@ export const STEP_STATUS: Record<string, [string, string]> = {
   running: ["", "执行中"],
   done: ["", "完成"],
   error: ["", "失败"],
+  cancelled: ["", "已停止"],
 };

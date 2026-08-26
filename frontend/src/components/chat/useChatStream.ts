@@ -7,8 +7,8 @@ import { useAppStore } from "@/lib/store";
 import type { PlanStep } from "./PlanCard";
 import { createChatStreamFrame, type ChatStreamFrame } from "./chat-stream-frame";
 import { parseChatStreamEvent } from "./chat-stream-events";
-import { dispatchChatStreamEvent, isFileMutationTrace } from "./chat-stream-dispatch";
-import { buildChatHistory, removeEmptyAssistantMessages } from "./chat-stream-state";
+import { activityIdForTool, dispatchChatStreamEvent, isFileMutationTrace } from "./chat-stream-dispatch";
+import { buildChatHistory, removeEmptyAssistantMessages, settleRunningToolSteps } from "./chat-stream-state";
 import type { ContextUsage, InlineImage, InlineImagePreview, Message, PendingConfirmation, PermissionMode, ThinkingLevel } from "./chat-types";
 import { finishOperationActivity, startOperationActivity, updateOperationActivity } from "@/lib/operation-activity";
 
@@ -53,6 +53,7 @@ interface ActiveChatStream {
   detached: boolean;
   startedAt: number;
   activityId: string;
+  toolActivityIds: Set<string>;
 }
 
 function streamKey(sessionId: string | null): string {
@@ -93,6 +94,27 @@ function agentActivityPhase(event: string, data: Record<string, unknown>) {
     };
   }
   return { phase: "model", message: "正在等待模型响应" };
+}
+
+function settleRunToolActivities(
+  run: ActiveChatStream,
+  status: "cancelled" | "failed",
+  message: string,
+  error?: string,
+) {
+  for (const id of run.toolActivityIds) {
+    finishOperationActivity(id, status, {
+      phase: "finished",
+      message,
+      ...(error ? { error } : {}),
+    });
+  }
+}
+
+function trackToolActivity(run: ActiveChatStream, event: string, data: Record<string, unknown>) {
+  if ((event === "tool_start" || event === "tool_progress") && data.tool === "backend_api") {
+    run.toolActivityIds.add(activityIdForTool(data));
+  }
 }
 
 /**
@@ -193,7 +215,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       message: "正在等待模型响应",
       startedAt,
     });
-    const run = { key, controller, frame: null as unknown as ChatStreamFrame, detached: false, startedAt, activityId };
+    const run = {
+      key, controller, frame: null as unknown as ChatStreamFrame, detached: false, startedAt, activityId,
+      toolActivityIds: new Set<string>(),
+    };
     const frame = createChatStreamFrame({
       isCurrent: () => streamsRef.current.get(run.key)?.controller === controller
         && streamKey(sessionIdRef.current) === run.key,
@@ -220,6 +245,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
         if (streamsRef.current.get(run.key) !== run) return;
         const streamEvent = parseChatStreamEvent(event, data);
         if (!streamEvent) return;
+        trackToolActivity(run, event, data);
         updateOperationActivity(run.activityId, agentActivityPhase(event, data));
         const visible = isVisible(run);
         if (!visible) run.detached = true;
@@ -295,11 +321,12 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       // 80ms commit 会覆盖错误，直接替换末项也会吞掉已经完成的工具步骤。
       frame.flush();
       frame.cancel();
+      settleRunToolActivities(run, "failed", "工具执行异常中断", error instanceof Error ? error.message : String(error));
       if (visible) {
         setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
         const message = error instanceof Error ? error.message : String(error);
         setMessages((m) => [
-          ...removeEmptyAssistantMessages(m),
+          ...removeEmptyAssistantMessages(settleRunningToolSteps(m, "error", "工具执行异常中断", Date.now() - run.startedAt)),
           { type: "assistant", content: `出错了：${message}` },
         ]);
         if (run.detached && resolvedSid) onReconcile?.(resolvedSid);
@@ -350,7 +377,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
           phase: "reconnect",
           message: "正在恢复 Agent 运行",
         });
-        run = { key, controller, frame, detached: false, startedAt: Date.now(), activityId };
+        run = {
+          key, controller, frame, detached: false, startedAt: Date.now(), activityId,
+          toolActivityIds: new Set<string>(),
+        };
         streams.set(key, run);
         refreshRunningKeys();
         const eventHandlers = {
@@ -367,6 +397,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
           if (!run || streamsRef.current.get(key) !== run) return;
           const streamEvent = parseChatStreamEvent(event, data);
           if (!streamEvent) return;
+          trackToolActivity(run, event, data);
           updateOperationActivity(run.activityId, agentActivityPhase(event, data));
            if (streamEvent.type === "tool_trace" && isFileMutationTrace(streamEvent.trace)) {
              emitFilesChanged();
@@ -396,6 +427,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       if (run && streams.get(key) === run) {
         streams.delete(key);
         run.frame.cancel();
+        settleRunToolActivities(run, "cancelled", "工具执行已停止");
         finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
         refreshRunningKeys();
       }
@@ -417,6 +449,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       for (const run of active) {
         run.frame.cancel();
         run.controller.abort();
+        settleRunToolActivities(run, "cancelled", "工具执行已停止");
         finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
       }
     };
@@ -429,13 +462,15 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     streamsRef.current.delete(key);
     run.frame.cancel();
     run.controller.abort();
+    settleRunToolActivities(run, "cancelled", "工具执行已停止");
     finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
     setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
     if (sessionIdRef.current) void cancelChatRun(sessionIdRef.current).catch(() => {});
     refreshRunningKeys();
     setMessages((m) => {
       // 清掉空助手占位气泡后追加停止提示（工具步骤保留）
-      const copy = m.filter((x) => !(x.type === "assistant" && !x.content && !x.reasoning));
+      const copy = settleRunningToolSteps(m, "cancelled", "工具执行已停止", Date.now() - run.startedAt)
+        .filter((x) => !(x.type === "assistant" && !x.content && !x.reasoning));
       copy.push({ type: "system", content: "已停止本次任务。" });
       return copy;
     });

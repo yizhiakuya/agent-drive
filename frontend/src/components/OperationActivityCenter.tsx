@@ -80,9 +80,10 @@ function ActivityRow({ activity }: { activity: OperationActivity }) {
               <div className={`h-full rounded-full transition-[width] ${activity.status === "failed" ? "bg-danger" : activity.status === "partial" ? "bg-warn" : "bg-success"}`} style={{ width: `${value}%` }} />
             </div>
           )}
-          {(activity.succeeded !== undefined || activity.failed !== undefined || activity.error) && (
+          {(activity.succeeded !== undefined || activity.failed !== undefined || activity.skipped !== undefined || activity.error) && (
             <div className="mt-1.5 text-[11px] text-muted">
               {activity.succeeded !== undefined && `成功 ${activity.succeeded}`}
+              {activity.skipped !== undefined && ` · 跳过 ${activity.skipped}`}
               {activity.failed !== undefined && ` · 失败 ${activity.failed}`}
               {activity.error && <span className="text-danger"> · {activity.error}</span>}
             </div>

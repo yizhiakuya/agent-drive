@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -111,6 +112,45 @@ class IndexDomainServiceTest {
         verify(vision).describeFiles(owner, List.of("photos/a.png"));
         assertThat(result).containsEntry("status", "partial").containsEntry("skipped", 1);
         assertThat((List<?>) result.get("items")).hasSize(1);
+    }
+
+    @Test
+    void reportsDirectoryVisionProgressWithRealBatchCounters() {
+        IndexStore index = mock(IndexStore.class);
+        IndexingService indexing = mock(IndexingService.class);
+        VisionDescriptionPort vision = mock(VisionDescriptionPort.class);
+        EmbeddingService embeddings = mock(EmbeddingService.class);
+        UUID owner = UUID.randomUUID();
+        when(index.files(owner, "photos")).thenReturn(List.of(
+                Map.of("path", "photos/a.png"), Map.of("path", "photos/b.png")));
+        when(vision.isImage("photos/a.png")).thenReturn(true);
+        when(vision.isImage("photos/b.png")).thenReturn(true);
+        when(vision.describeFiles(eq(owner), eq(List.of("photos/a.png", "photos/b.png")),
+                org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<Map<String, Object>> progress = invocation.getArgument(2);
+            progress.accept(Map.of("phase", "vision", "message", "正在调用视觉模型分析图片",
+                    "completed", 1, "total", 2, "succeeded", 1, "failed", 0));
+            progress.accept(Map.of("phase", "vision", "message", "正在调用视觉模型分析图片",
+                    "completed", 2, "total", 2, "succeeded", 2, "failed", 0));
+            return Map.of("ok", true, "items", List.of(
+                    Map.of("path", "photos/a.png", "description", "一张图片"),
+                    Map.of("path", "photos/b.png", "description", "另一张图片")));
+        });
+        when(indexing.indexDescription(eq(owner), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString())).thenReturn(Map.of("indexed", true));
+        when(embeddings.embed(eq(owner), org.mockito.ArgumentMatchers.anyList(), eq(64), eq(false)))
+                .thenReturn(Map.of("vectorized", true));
+
+        List<Map<String, Object>> progress = new ArrayList<>();
+        Map<String, Object> result = new IndexDomainService(index, indexing, embeddings,
+                emptyConfig(), vision).indexVision(owner, List.of("photos"), false, progress::add);
+
+        assertThat(result).containsEntry("status", "succeeded");
+        assertThat(progress).anySatisfy(item -> assertThat(item)
+                .containsEntry("completed", 1).containsEntry("total", 2));
+        assertThat(progress.get(progress.size() - 1))
+                .containsEntry("completed", 2).containsEntry("succeeded", 2);
     }
 
     @Test
