@@ -82,9 +82,11 @@ public interface IndexStore {
      */
     List<Map<String, Object>> files(UUID userId, String prefix);
 
-    /** 返回当前 revision 尚未拥有视觉描述文档的候选图片路径。 */
-    default List<String> visionPathsNeedingDescription(UUID userId, List<String> paths) {
-        return paths == null ? List.of() : List.copyOf(paths);
+    /** 查询当前 owner 索引状态缺口；kind 为 document 或 vector。 */
+    default List<Map<String, Object>> missing(UUID userId, String prefix, String kind,
+                                               String documentType, String fingerprint,
+                                               int limit, int offset) {
+        return List.of();
     }
 
     /**

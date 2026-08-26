@@ -99,10 +99,14 @@ public class MybatisIndexStore implements IndexStore {
     }
 
     @Override
-    public List<String> visionPathsNeedingDescription(UUID userId, List<String> paths) {
+    public List<Map<String, Object>> missing(UUID userId, String prefix, String kind,
+                                              String documentType, String fingerprint,
+                                              int limit, int offset) {
         requireUser(userId);
-        if (paths == null || paths.isEmpty()) return List.of();
-        return mapper.selectVisionPathsNeedingDescription(userId.toString(), paths);
+        return mapper.selectMissing(userId.toString(),
+                prefix == null || prefix.isBlank() ? null : prefix,
+                kind, documentType, fingerprint,
+                Math.max(1, Math.min(limit, 1001)), Math.max(0, offset));
     }
 
     /**

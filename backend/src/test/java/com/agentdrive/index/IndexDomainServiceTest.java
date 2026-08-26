@@ -54,6 +54,24 @@ class IndexDomainServiceTest {
     }
 
     @Test
+    void exposesGenericMissingIndexQueryWithoutChoosingVisionSpecificPaths() {
+        IndexStore index = mock(IndexStore.class);
+        EmbeddingRuntimeConfig config = emptyConfig();
+        UUID owner = UUID.randomUUID();
+        when(index.missing(owner, "photos", "document", "vision", null, 11, 0))
+                .thenReturn(List.of(Map.of("path", "photos/missing.png", "missing_kind", "document")));
+
+        Map<String, Object> result = new IndexDomainService(index, mock(IndexingService.class),
+                mock(EmbeddingService.class), config, mock(VisionDescriptionPort.class))
+                .missing(owner, "photos", "document", "vision", 10, 0);
+
+        assertThat(result).containsEntry("kind", "document")
+                .containsEntry("document_type", "vision")
+                .containsEntry("returned", 1)
+                .containsEntry("has_more", false);
+    }
+
+    @Test
     void executesBatchVisionDirectlyWithoutTaskMonitor() {
         IndexStore index = mock(IndexStore.class);
         IndexingService indexing = mock(IndexingService.class);
@@ -69,8 +87,6 @@ class IndexDomainServiceTest {
             invocation.<java.util.function.Consumer<List<Map<String, Object>>>>getArgument(3).accept(items);
             return Map.of("ok", true, "items", items);
         });
-        when(index.visionPathsNeedingDescription(owner, List.of("photos/a.png", "photos/b.png")))
-                .thenReturn(List.of("photos/a.png", "photos/b.png"));
         when(indexing.indexDescription(eq(owner), eq("photos/a.png"), org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(Map.of("indexed", true));
         when(indexing.indexDescription(eq(owner), eq("photos/b.png"), org.mockito.ArgumentMatchers.anyString()))
@@ -104,8 +120,6 @@ class IndexDomainServiceTest {
         when(vision.isImage("photos/a.png")).thenReturn(true);
         when(vision.isImage("photos/b.heic")).thenReturn(false);
         when(vision.isImage("photos/note.txt")).thenReturn(false);
-        when(index.visionPathsNeedingDescription(owner, List.of("photos/a.png")))
-                .thenReturn(List.of("photos/a.png"));
         when(vision.describeFiles(eq(owner), eq(List.of("photos/a.png")),
                 org.mockito.ArgumentMatchers.<java.util.function.Consumer<Map<String, Object>>>isNull(),
                 org.mockito.ArgumentMatchers.<java.util.function.Consumer<List<Map<String, Object>>>>any())).thenAnswer(invocation -> {
@@ -139,8 +153,6 @@ class IndexDomainServiceTest {
                 Map.of("path", "photos/a.png"), Map.of("path", "photos/b.png")));
         when(vision.isImage("photos/a.png")).thenReturn(true);
         when(vision.isImage("photos/b.png")).thenReturn(true);
-        when(index.visionPathsNeedingDescription(owner, List.of("photos/a.png", "photos/b.png")))
-                .thenReturn(List.of("photos/a.png", "photos/b.png"));
         when(vision.describeFiles(eq(owner), eq(List.of("photos/a.png", "photos/b.png")),
                 org.mockito.ArgumentMatchers.<java.util.function.Consumer<Map<String, Object>>>isNull(),
                 org.mockito.ArgumentMatchers.<java.util.function.Consumer<List<Map<String, Object>>>>any())).thenAnswer(invocation -> {
@@ -168,39 +180,6 @@ class IndexDomainServiceTest {
                 .containsEntry("completed", 1).containsEntry("total", 2));
         assertThat(progress.get(progress.size() - 1))
                 .containsEntry("completed", 2).containsEntry("succeeded", 2);
-    }
-
-    @Test
-    void incrementalVisionSkipsFilesWithExistingCurrentVisionDocuments() {
-        IndexStore index = mock(IndexStore.class);
-        IndexingService indexing = mock(IndexingService.class);
-        VisionDescriptionPort vision = mock(VisionDescriptionPort.class);
-        EmbeddingService embeddings = mock(EmbeddingService.class);
-        UUID owner = UUID.randomUUID();
-        List<String> requested = List.of("photos/existing.png", "photos/missing.png");
-        when(index.files(owner, "photos")).thenReturn(requested.stream()
-                .map(path -> Map.<String, Object>of("path", path)).toList());
-        when(vision.isImage(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
-        when(index.visionPathsNeedingDescription(owner, requested)).thenReturn(List.of("photos/missing.png"));
-        when(vision.describeFiles(eq(owner), eq(List.of("photos/missing.png")),
-                org.mockito.ArgumentMatchers.<java.util.function.Consumer<Map<String, Object>>>isNull(),
-                org.mockito.ArgumentMatchers.<java.util.function.Consumer<List<Map<String, Object>>>>any())).thenAnswer(invocation -> {
-            Map<String, Object> item = Map.of("path", "photos/missing.png", "description", "待处理图片");
-            invocation.<java.util.function.Consumer<List<Map<String, Object>>>>getArgument(3).accept(List.of(item));
-            return Map.of("ok", true, "items", List.of(item));
-        });
-        when(indexing.indexDescription(owner, "photos/missing.png", "待处理图片"))
-                .thenReturn(Map.of("indexed", true));
-        when(embeddings.embed(owner, List.of("photos/missing.png"), 64, false))
-                .thenReturn(Map.of("vectorized", true));
-
-        Map<String, Object> result = new IndexDomainService(index, indexing, embeddings,
-                emptyConfig(), vision).indexVision(owner, List.of("photos"), false);
-
-        verify(vision).describeFiles(eq(owner), eq(List.of("photos/missing.png")),
-                org.mockito.ArgumentMatchers.<java.util.function.Consumer<Map<String, Object>>>isNull(),
-                org.mockito.ArgumentMatchers.<java.util.function.Consumer<List<Map<String, Object>>>>any());
-        assertThat(result).containsEntry("skipped_existing", 1).containsEntry("status", "succeeded");
     }
 
     @Test

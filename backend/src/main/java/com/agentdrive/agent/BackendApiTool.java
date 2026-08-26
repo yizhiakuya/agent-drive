@@ -585,6 +585,9 @@ public class BackendApiTool implements AgentTool {
             schema.put("query_params", parameterSet(List.of("limit"), List.of()));
         } else if ("GET".equals(method) && "/api/v1/index".equals(path)) {
             schema.put("query_params", parameterSet(List.of("prefix", "limit"), List.of()));
+        } else if ("GET".equals(method) && "/api/v1/index/missing".equals(path)) {
+            schema.put("query_params", parameterSet(
+                    List.of("prefix", "kind", "document_type", "limit", "offset"), List.of()));
         } else if ("GET".equals(method) && "/api/v1/index/file".equals(path)) {
             schema.put("query_params", parameterSet(List.of("path"), List.of("path")));
         } else if ("PUT".equals(method) && Set.of("/api/v1/index/file", "/api/v1/index/vision").contains(path)) {

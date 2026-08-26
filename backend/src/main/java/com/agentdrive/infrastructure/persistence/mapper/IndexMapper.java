@@ -53,9 +53,14 @@ public interface IndexMapper {
                                                  @Param("prefix") String prefix,
                                                  @Param("limit") int limit);
 
-    /** 查询当前 revision 尚未建立 vision 文档的文件。 */
-    List<String> selectVisionPathsNeedingDescription(@Param("userId") String userId,
-                                                     @Param("paths") List<String> paths);
+    /** 查询当前 owner 索引状态缺口。 */
+    List<Map<String, Object>> selectMissing(@Param("userId") String userId,
+                                            @Param("prefix") String prefix,
+                                            @Param("kind") String kind,
+                                            @Param("documentType") String documentType,
+                                            @Param("fingerprint") String fingerprint,
+                                            @Param("limit") int limit,
+                                            @Param("offset") int offset);
 
     /**
      * 在 owner 当前 revision 的有效向量中按 cosine distance 检索文件。

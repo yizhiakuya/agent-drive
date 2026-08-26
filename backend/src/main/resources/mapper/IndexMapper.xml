@@ -123,23 +123,44 @@
         LIMIT #{limit}
     </select>
 
-    <select id="selectVisionPathsNeedingDescription" resultType="string">
-        SELECT f.path
+    <select id="selectMissing" resultType="map">
+        SELECT f.id::text AS id, f.path, f.is_dir, f.size_bytes, f.revision,
+               CASE
+                 WHEN #{kind, jdbcType=VARCHAR} = 'document' THEN 'document'
+                 ELSE 'vector'
+               END AS missing_kind,
+               #{documentType, jdbcType=VARCHAR} AS document_type
         FROM files f
         WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
           AND f.is_dir = false
-          AND f.path IN
-          <foreach collection="paths" item="path" open="(" separator="," close=")">
-              #{path, jdbcType=VARCHAR}
-          </foreach>
-          AND NOT EXISTS (
-              SELECT 1
-              FROM documents d
-              WHERE d.file_id = f.id
-                AND d.source_revision = f.revision
-                AND d.document_type = 'vision'
-          )
+          AND (#{prefix, jdbcType=VARCHAR} IS NULL OR f.path = #{prefix, jdbcType=VARCHAR}
+               OR f.path LIKE CONCAT(#{prefix, jdbcType=VARCHAR}, '/%'))
+          <choose>
+            <when test="kind == 'document'">
+              AND NOT EXISTS (
+                SELECT 1 FROM documents d
+                WHERE d.file_id = f.id
+                  AND d.source_revision = f.revision
+                  AND (#{documentType, jdbcType=VARCHAR} IS NULL OR d.document_type = #{documentType, jdbcType=VARCHAR})
+              )
+            </when>
+            <when test="kind == 'vector'">
+              AND EXISTS (
+                SELECT 1
+                FROM documents d
+                JOIN document_chunks c ON c.document_id = d.id
+                WHERE d.file_id = f.id
+                  AND d.source_revision = f.revision
+                  AND c.source_revision = f.revision
+                  AND (#{documentType, jdbcType=VARCHAR} IS NULL OR d.document_type = #{documentType, jdbcType=VARCHAR})
+                  AND (#{fingerprint, jdbcType=VARCHAR} IS NULL
+                       OR c.embedding IS NULL
+                       OR c.embedding_fingerprint IS DISTINCT FROM #{fingerprint, jdbcType=VARCHAR})
+              )
+            </when>
+          </choose>
         ORDER BY f.path ASC
+        LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="semanticSearch" resultType="map">

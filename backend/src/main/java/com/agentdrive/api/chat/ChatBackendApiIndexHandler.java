@@ -17,6 +17,7 @@ import java.util.function.Consumer;
 final class ChatBackendApiIndexHandler implements BackendApiOperationHandler {
     private static final Set<String> OPERATIONS = Set.of(
             "GET /api/v1/index",
+            "GET /api/v1/index/missing",
             "GET /api/v1/index/file",
             "PUT /api/v1/index/file",
             "PUT /api/v1/index/vision",
@@ -51,6 +52,12 @@ final class ChatBackendApiIndexHandler implements BackendApiOperationHandler {
                     Math.max(1, Math.min(1000, BackendApiParams.integerParameter(request, "limit", 200))));
             case "GET /api/v1/index/file" -> index.file(userId,
                     BackendApiParams.parameter(request, "path", ""));
+            case "GET /api/v1/index/missing" -> index.missing(userId,
+                    BackendApiParams.parameter(request, "prefix", ""),
+                    BackendApiParams.parameter(request, "kind", "vector"),
+                    BackendApiParams.parameter(request, "document_type", "all"),
+                    Math.max(1, Math.min(1000, BackendApiParams.integerParameter(request, "limit", 200))),
+                    Math.max(0, BackendApiParams.integerParameter(request, "offset", 0)));
             case "PUT /api/v1/index/file" -> index.indexFiles(userId, paths(request),
                     BackendApiParams.booleanParameter(request, "force"));
             case "PUT /api/v1/index/vision" -> progressListener == null

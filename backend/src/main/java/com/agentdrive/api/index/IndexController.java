@@ -51,6 +51,21 @@ public final class IndexController {
         return authenticated(exchange, owner -> index.file(owner, path));
     }
 
+    /** 查询当前 owner 的通用索引缺口，支持 document/vector 和 text/vision 过滤。 */
+    @GetMapping("/missing")
+    public Mono<Map<String, Object>> missing(
+            @RequestParam(defaultValue = "") String prefix,
+            @RequestParam(defaultValue = "vector") String kind,
+            @RequestParam(name = "document_type", defaultValue = "all") String documentType,
+            @RequestParam(defaultValue = "200") int limit,
+            @RequestParam(defaultValue = "0") int offset,
+            ServerWebExchange exchange) {
+        if (limit < 1 || limit > 1000 || offset < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid pagination");
+        }
+        return authenticated(exchange, owner -> index.missing(owner, prefix, kind, documentType, limit, offset));
+    }
+
     /** 直接抽取并写入单个文本文件索引。 */
     @PutMapping("/file")
     public Mono<Map<String, Object>> indexFile(@RequestBody(required = false) IndexRequest request,

@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -67,6 +68,57 @@ public final class IndexDomainService {
         return result;
     }
 
+    /**
+     * 查询 owner 当前 revision 的索引缺口，供 Agent 选择待处理路径。
+     * kind=document 查询缺失正文/视觉文档，kind=vector 查询缺少当前 fingerprint 向量的文件。
+     */
+    public Map<String, Object> missing(UUID userId, String prefix, String kind,
+                                       String documentType, int limit, int offset) {
+        requireUser(userId);
+        String normalizedPrefix = normalizePrefix(prefix);
+        String normalizedKind = kind == null || kind.isBlank()
+                ? "vector" : kind.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!Set.of("document", "vector").contains(normalizedKind)) {
+            throw new IllegalArgumentException("kind must be document or vector");
+        }
+        String normalizedType = documentType == null || documentType.isBlank()
+                || "all".equalsIgnoreCase(documentType) ? null
+                : documentType.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalizedType != null && !Set.of("text", "vision").contains(normalizedType)) {
+            throw new IllegalArgumentException("document_type must be text, vision, or all");
+        }
+        String fingerprint = null;
+        if ("vector".equals(normalizedKind)) {
+            EmbeddingRuntimeConfig.Config config = embeddingConfig.find(userId)
+                    .orElseThrow(() -> new IllegalStateException("embedding_not_configured"));
+            if (config.apiKey() == null || config.apiKey().isBlank()) {
+                throw new IllegalStateException("embedding_not_configured");
+            }
+            fingerprint = EmbeddingFingerprint.of(config.provider(), config.baseUrl(), config.model());
+        }
+        int requestedLimit = Math.max(1, Math.min(limit, 1000));
+        int requestedOffset = Math.max(0, offset);
+        List<Map<String, Object>> rows = index.missing(userId, normalizedPrefix, normalizedKind,
+                normalizedType, fingerprint, requestedLimit + 1, requestedOffset);
+        boolean hasMore = rows.size() > requestedLimit;
+        List<Map<String, Object>> items = rows.stream().limit(requestedLimit).toList();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("operation", "index.missing");
+        result.put("status", "succeeded");
+        result.put("kind", normalizedKind);
+        result.put("document_type", normalizedType == null ? "all" : normalizedType);
+        result.put("prefix", normalizedPrefix);
+        result.put("items", items);
+        result.put("total_matches", hasMore ? requestedOffset + requestedLimit + 1 : requestedOffset + items.size());
+        result.put("returned", items.size());
+        result.put("offset", requestedOffset);
+        result.put("limit", requestedLimit);
+        result.put("has_more", hasMore);
+        result.put("next_offset", hasMore ? requestedOffset + requestedLimit : null);
+        return result;
+    }
+
     /** 返回单个文件的索引元数据；不存在时抛出稳定业务异常。 */
     public Map<String, Object> file(UUID userId, String path) {
         requireUser(userId);
@@ -114,12 +166,11 @@ public final class IndexDomainService {
                                            Consumer<Map<String, Object>> progressListener) {
         requireUser(userId);
         long startedAt = System.nanoTime();
-        VisionPathSelection selection = expandVisionPaths(userId, normalizePaths(paths), force);
+        VisionPathSelection selection = expandVisionPaths(userId, normalizePaths(paths));
         List<String> normalizedPaths = selection.paths();
-        int progressTotal = normalizedPaths.size() + selection.skipped().size() + selection.alreadyIndexed().size();
+        int progressTotal = normalizedPaths.size() + selection.skipped().size();
         reportProgress(progressListener, "preparing", "已找到 " + progressTotal + " 个图片文件",
-                selection.skipped().size() + selection.alreadyIndexed().size(), progressTotal,
-                selection.alreadyIndexed().size(), 0, selection.skipped().size());
+                selection.skipped().size(), progressTotal, 0, 0, selection.skipped().size());
         try {
             vision.requireReady(userId);
             if (normalizedPaths.isEmpty()) {
@@ -127,16 +178,12 @@ public final class IndexDomainService {
                 result.put("status", selection.skipped().isEmpty() ? "succeeded" : "partial");
                 result.put("ok", selection.skipped().isEmpty());
                 addSkipped(result, selection.skipped());
-                result.put("skipped_existing", selection.alreadyIndexed().size());
-                if (!selection.alreadyIndexed().isEmpty()) {
-                    result.put("skipped_existing_paths", selection.alreadyIndexed().stream().limit(64).toList());
-                }
                 recordIndexMetric("vision", userId, selection.skipped().size(), result, startedAt);
                 return result;
             }
             List<Map<String, Object>> results = new java.util.ArrayList<>();
-            int completed = selection.skipped().size() + selection.alreadyIndexed().size();
-            int succeeded = selection.alreadyIndexed().size();
+            int completed = selection.skipped().size();
+            int succeeded = 0;
             int failed = 0;
             final int[] counters = {completed, succeeded, failed};
             Consumer<List<Map<String, Object>>> batchListener = batch -> {
@@ -200,10 +247,6 @@ public final class IndexDomainService {
             }
             Map<String, Object> result = batchResult("index.vision", results);
             addSkipped(result, selection.skipped());
-            result.put("skipped_existing", selection.alreadyIndexed().size());
-            if (!selection.alreadyIndexed().isEmpty()) {
-                result.put("skipped_existing_paths", selection.alreadyIndexed().stream().limit(64).toList());
-            }
             recordIndexMetric("vision", userId, normalizedPaths.size(), result, startedAt);
             return result;
         } catch (RuntimeException error) {
@@ -230,7 +273,7 @@ public final class IndexDomainService {
      * 将目录视觉索引请求展开为服务端支持的图片文件，避免 Agent 把目录误传给单图接口。
      * 非图片文件不进入视觉批次；HEIF 等图片扩展名会作为 skipped 返回，不触发重复失败调用。
      */
-    private VisionPathSelection expandVisionPaths(UUID userId, List<String> requested, boolean force) {
+    private VisionPathSelection expandVisionPaths(UUID userId, List<String> requested) {
         LinkedHashSet<String> supported = new LinkedHashSet<>();
         LinkedHashSet<String> skipped = new LinkedHashSet<>();
         for (String path : requested) {
@@ -255,13 +298,7 @@ public final class IndexDomainService {
                 else if (looksLikeImage(childPath)) skipped.add(childPath);
             }
         }
-        if (force || supported.isEmpty()) {
-            return new VisionPathSelection(List.copyOf(supported), List.copyOf(skipped), List.of());
-        }
-        List<String> needingDescription = index.visionPathsNeedingDescription(userId, List.copyOf(supported));
-        LinkedHashSet<String> needs = new LinkedHashSet<>(needingDescription);
-        List<String> alreadyIndexed = supported.stream().filter(path -> !needs.contains(path)).toList();
-        return new VisionPathSelection(needingDescription, List.copyOf(skipped), alreadyIndexed);
+        return new VisionPathSelection(List.copyOf(supported), List.copyOf(skipped));
     }
 
     private boolean looksLikeImage(String path) {
@@ -279,7 +316,7 @@ public final class IndexDomainService {
         }
     }
 
-    private record VisionPathSelection(List<String> paths, List<String> skipped, List<String> alreadyIndexed) {
+    private record VisionPathSelection(List<String> paths, List<String> skipped) {
     }
 
     /** 同步向量化指定范围的当前文档块；空 paths 表示 owner 全部文档。 */

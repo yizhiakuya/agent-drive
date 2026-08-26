@@ -25,6 +25,7 @@ public class ChatBackendApiOperations {
                 http("GET", "/api/v1/config", "读取当前 owner 的 LLM provider 配置（不返回 API key）"),
                 http("GET", "/api/v1/config/status", "读取当前 owner 的 LLM 与 embedding 配置状态"),
                 http("GET", "/api/v1/index", "读取当前 owner 的索引状态和索引文件列表"),
+                http("GET", "/api/v1/index/missing", "查询当前 owner 缺失索引文档或向量的文件"),
                 http("GET", "/api/v1/index/file", "读取单个文件的索引元数据"),
                 http("PUT", "/api/v1/index/file", "直接抽取并写入单个文本文件索引"),
                 http("PUT", "/api/v1/index/vision", "直接识别、写入视觉描述并向量化图片或目录"),
