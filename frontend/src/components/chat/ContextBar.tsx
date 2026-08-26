@@ -15,7 +15,10 @@ type ContextUsage = {
 
 export function ContextBar({ usage }: { usage: ContextUsage }) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
-  const { used = 0, total = 262144, percent = 0 } = usage;
+  const total = Number.isFinite(usage.total) && usage.total > 0 ? usage.total : 262144;
+  const rawUsed = Number.isFinite(usage.used) ? usage.used : 0;
+  const used = Math.min(total, Math.max(0, rawUsed));
+  const percent = Number.isFinite(usage.percent) ? usage.percent : (used * 100) / total;
   const pct = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
   const color = pct > 80 ? "var(--danger)" : pct > 50 ? "var(--warn)" : "var(--accent2)";
   const radius = 15;
@@ -23,7 +26,7 @@ export function ContextBar({ usage }: { usage: ContextUsage }) {
   const offset = circumference * (1 - pct / 100);
   const remaining = Math.max(0, total - used);
   const estimatePrefix = usage.estimated ? "估算 " : "";
-  const compactPrefix = usage.compacted ? "已自动压缩 · " : "";
+  const compactPrefix = usage.compacted || rawUsed > total ? "已自动压缩 · " : "";
   const label = `${compactPrefix}${estimatePrefix}上下文窗口 ${Math.round(pct)}%，已用 ${fmtTokens(used)} / ${fmtTokens(total)}`;
 
   useEffect(() => {

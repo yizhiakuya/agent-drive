@@ -206,6 +206,18 @@ describe("ChatPanel 主流程", () => {
     expect(screen.getByTestId("context-usage-summary")).not.toHaveTextContent("估算 0 / 262.1K");
   });
 
+  it("历史上下文超过窗口上限时钳制并标记自动压缩", async () => {
+    getSession.mockResolvedValue({
+      meta: { context_usage: { used: 320400, total: 262144, percent: 122.2 } },
+      messages: [{ role: "assistant", content: "过大的历史消息" }],
+    } as never);
+    render(<ChatPanel />);
+    await act(async () => { useAppStore.getState().setSessionId("session-over-limit"); });
+    await waitFor(() => expect(screen.getByTestId("context-usage-summary")).toHaveTextContent("已自动压缩"));
+    expect(screen.getByTestId("context-usage-summary")).toHaveTextContent("262.1K / 262.1K");
+    expect(screen.getByTestId("context-usage-summary")).not.toHaveTextContent("320.4K");
+  });
+
   it("切换会话不会中止原会话流，返回后从持久历史收敛", async () => {
     const completion = deferred<Record<string, unknown>>();
     let emit!: (event: string, data: Record<string, unknown>) => void;

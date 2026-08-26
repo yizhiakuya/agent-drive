@@ -99,7 +99,14 @@ function estimateContextUsage(messages: Message[]): ContextUsage | null {
   if (characters <= 0) return null;
   const used = Math.max(1, Math.ceil((characters + messages.length * 4) / 4));
   const total = DEFAULT_CONTEXT_USAGE.total;
-  return { used, total, percent: (used * 100) / total, estimated: true };
+  const bounded = Math.min(total, used);
+  return {
+    used: bounded,
+    total,
+    percent: (bounded * 100) / total,
+    estimated: true,
+    ...(used > total ? { compacted: true } : {}),
+  };
 }
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
