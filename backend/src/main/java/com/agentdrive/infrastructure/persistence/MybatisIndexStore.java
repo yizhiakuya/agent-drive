@@ -98,6 +98,13 @@ public class MybatisIndexStore implements IndexStore {
                 bounded);
     }
 
+    @Override
+    public List<String> visionPathsNeedingDescription(UUID userId, List<String> paths) {
+        requireUser(userId);
+        if (paths == null || paths.isEmpty()) return List.of();
+        return mapper.selectVisionPathsNeedingDescription(userId.toString(), paths);
+    }
+
     /**
      * 执行 owner-scoped pgvector 语义搜索，并将返回上限限制在合理范围。
      *

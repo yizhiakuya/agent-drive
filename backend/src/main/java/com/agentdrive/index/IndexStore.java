@@ -82,6 +82,11 @@ public interface IndexStore {
      */
     List<Map<String, Object>> files(UUID userId, String prefix);
 
+    /** 返回当前 revision 尚未拥有视觉描述文档的候选图片路径。 */
+    default List<String> visionPathsNeedingDescription(UUID userId, List<String> paths) {
+        return paths == null ? List.of() : List.copyOf(paths);
+    }
+
     /**
      * 分页读取索引文件；实现应把 limit 下推到数据库，避免概览请求先加载整棵文件树。
      * 默认实现保留旧适配器兼容性，生产 MyBatis 实现提供真正的 SQL 限制。

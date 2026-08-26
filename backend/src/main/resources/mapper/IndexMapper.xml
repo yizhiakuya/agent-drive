@@ -123,6 +123,25 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectVisionPathsNeedingDescription" resultType="string">
+        SELECT f.path
+        FROM files f
+        WHERE f.user_id = CAST(#{userId, jdbcType=VARCHAR} AS uuid)
+          AND f.is_dir = false
+          AND f.path IN
+          <foreach collection="paths" item="path" open="(" separator="," close=")">
+              #{path, jdbcType=VARCHAR}
+          </foreach>
+          AND NOT EXISTS (
+              SELECT 1
+              FROM documents d
+              WHERE d.file_id = f.id
+                AND d.source_revision = f.revision
+                AND d.document_type = 'vision'
+          )
+        ORDER BY f.path ASC
+    </select>
+
     <select id="semanticSearch" resultType="map">
         <bind name="escapedPrefix"
               value="@com.agentdrive.infrastructure.persistence.SqlLikeEscaper@escape(prefix)" />

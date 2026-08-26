@@ -114,11 +114,12 @@ public final class IndexDomainService {
                                            Consumer<Map<String, Object>> progressListener) {
         requireUser(userId);
         long startedAt = System.nanoTime();
-        VisionPathSelection selection = expandVisionPaths(userId, normalizePaths(paths));
+        VisionPathSelection selection = expandVisionPaths(userId, normalizePaths(paths), force);
         List<String> normalizedPaths = selection.paths();
-        int progressTotal = normalizedPaths.size() + selection.skipped().size();
+        int progressTotal = normalizedPaths.size() + selection.skipped().size() + selection.alreadyIndexed().size();
         reportProgress(progressListener, "preparing", "已找到 " + progressTotal + " 个图片文件",
-                0, progressTotal, 0, 0, selection.skipped().size());
+                selection.skipped().size() + selection.alreadyIndexed().size(), progressTotal,
+                selection.alreadyIndexed().size(), 0, selection.skipped().size());
         try {
             vision.requireReady(userId);
             if (normalizedPaths.isEmpty()) {
@@ -126,6 +127,10 @@ public final class IndexDomainService {
                 result.put("status", selection.skipped().isEmpty() ? "succeeded" : "partial");
                 result.put("ok", selection.skipped().isEmpty());
                 addSkipped(result, selection.skipped());
+                result.put("skipped_existing", selection.alreadyIndexed().size());
+                if (!selection.alreadyIndexed().isEmpty()) {
+                    result.put("skipped_existing_paths", selection.alreadyIndexed().stream().limit(64).toList());
+                }
                 recordIndexMetric("vision", userId, selection.skipped().size(), result, startedAt);
                 return result;
             }
@@ -136,7 +141,8 @@ public final class IndexDomainService {
                 int failed = number(progress.get("failed"), 0);
                 reportProgress(progressListener, "vision",
                         String.valueOf(progress.getOrDefault("message", "正在调用视觉模型分析图片")),
-                        completed + selection.skipped().size(), progressTotal, succeeded, failed,
+                        completed + selection.skipped().size() + selection.alreadyIndexed().size(), progressTotal,
+                        succeeded + selection.alreadyIndexed().size(), failed,
                         selection.skipped().size());
             };
             Map<String, Object> described = progressListener == null
@@ -154,8 +160,8 @@ public final class IndexDomainService {
                 }
             }
             List<Map<String, Object>> results = new java.util.ArrayList<>();
-            int completed = selection.skipped().size();
-            int succeeded = 0;
+            int completed = selection.skipped().size() + selection.alreadyIndexed().size();
+            int succeeded = selection.alreadyIndexed().size();
             int failed = 0;
             for (String path : normalizedPaths) {
                 Map<String, Object> item = descriptions.get(path);
@@ -182,6 +188,10 @@ public final class IndexDomainService {
             }
             Map<String, Object> result = batchResult("index.vision", results);
             addSkipped(result, selection.skipped());
+            result.put("skipped_existing", selection.alreadyIndexed().size());
+            if (!selection.alreadyIndexed().isEmpty()) {
+                result.put("skipped_existing_paths", selection.alreadyIndexed().stream().limit(64).toList());
+            }
             recordIndexMetric("vision", userId, normalizedPaths.size(), result, startedAt);
             return result;
         } catch (RuntimeException error) {
@@ -208,7 +218,7 @@ public final class IndexDomainService {
      * 将目录视觉索引请求展开为服务端支持的图片文件，避免 Agent 把目录误传给单图接口。
      * 非图片文件不进入视觉批次；HEIF 等图片扩展名会作为 skipped 返回，不触发重复失败调用。
      */
-    private VisionPathSelection expandVisionPaths(UUID userId, List<String> requested) {
+    private VisionPathSelection expandVisionPaths(UUID userId, List<String> requested, boolean force) {
         LinkedHashSet<String> supported = new LinkedHashSet<>();
         LinkedHashSet<String> skipped = new LinkedHashSet<>();
         for (String path : requested) {
@@ -233,7 +243,13 @@ public final class IndexDomainService {
                 else if (looksLikeImage(childPath)) skipped.add(childPath);
             }
         }
-        return new VisionPathSelection(List.copyOf(supported), List.copyOf(skipped));
+        if (force || supported.isEmpty()) {
+            return new VisionPathSelection(List.copyOf(supported), List.copyOf(skipped), List.of());
+        }
+        List<String> needingDescription = index.visionPathsNeedingDescription(userId, List.copyOf(supported));
+        LinkedHashSet<String> needs = new LinkedHashSet<>(needingDescription);
+        List<String> alreadyIndexed = supported.stream().filter(path -> !needs.contains(path)).toList();
+        return new VisionPathSelection(needingDescription, List.copyOf(skipped), alreadyIndexed);
     }
 
     private boolean looksLikeImage(String path) {
@@ -251,7 +267,7 @@ public final class IndexDomainService {
         }
     }
 
-    private record VisionPathSelection(List<String> paths, List<String> skipped) {
+    private record VisionPathSelection(List<String> paths, List<String> skipped, List<String> alreadyIndexed) {
     }
 
     /** 同步向量化指定范围的当前文档块；空 paths 表示 owner 全部文档。 */

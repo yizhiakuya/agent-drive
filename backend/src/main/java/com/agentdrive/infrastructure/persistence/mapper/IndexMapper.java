@@ -53,6 +53,10 @@ public interface IndexMapper {
                                                  @Param("prefix") String prefix,
                                                  @Param("limit") int limit);
 
+    /** 查询当前 revision 尚未建立 vision 文档的文件。 */
+    List<String> selectVisionPathsNeedingDescription(@Param("userId") String userId,
+                                                     @Param("paths") List<String> paths);
+
     /**
      * 在 owner 当前 revision 的有效向量中按 cosine distance 检索文件。
      *
