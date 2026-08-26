@@ -1,5 +1,5 @@
 /* Agent Drive 离线壳：静态资源缓存优先，API 不缓存 */
-const CACHE = "agent-drive-v123";
+const CACHE = "agent-drive-v124";
 const PRECACHE = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (e) => {
