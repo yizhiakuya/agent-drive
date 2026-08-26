@@ -99,9 +99,15 @@ public final class IndexDomainService {
         int requestedLimit = Math.max(1, Math.min(limit, 1000));
         int requestedOffset = Math.max(0, offset);
         List<Map<String, Object>> rows = index.missing(userId, normalizedPrefix, normalizedKind,
-                normalizedType, fingerprint, requestedLimit + 1, requestedOffset);
-        boolean hasMore = rows.size() > requestedLimit;
-        List<Map<String, Object>> items = rows.stream().limit(requestedLimit).toList();
+                normalizedType, fingerprint, requestedLimit, requestedOffset);
+        int totalMatches = rows.isEmpty()
+                ? 0 : number(rows.get(0).get("total_matches"), requestedOffset + rows.size());
+        boolean hasMore = requestedOffset + rows.size() < totalMatches;
+        List<Map<String, Object>> items = rows.stream().limit(requestedLimit).map(row -> {
+            Map<String, Object> item = new LinkedHashMap<>(row);
+            item.remove("total_matches");
+            return item;
+        }).toList();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("operation", "index.missing");
@@ -110,7 +116,7 @@ public final class IndexDomainService {
         result.put("document_type", normalizedType == null ? "all" : normalizedType);
         result.put("prefix", normalizedPrefix);
         result.put("items", items);
-        result.put("total_matches", hasMore ? requestedOffset + requestedLimit + 1 : requestedOffset + items.size());
+        result.put("total_matches", totalMatches);
         result.put("returned", items.size());
         result.put("offset", requestedOffset);
         result.put("limit", requestedLimit);

@@ -103,6 +103,7 @@ class ChatBackendApiOperationsTest {
         OperationCatalog catalog = new ChatBackendApiOperations().operationCatalog();
 
         assertThat(catalog.find("GET /api/v1/index")).isPresent();
+        assertThat(catalog.find("GET /api/v1/index/missing")).isPresent();
         assertThat(catalog.find("GET /api/v1/index/file")).isPresent();
         assertThat(catalog.find("PUT /api/v1/index/file")).isPresent();
         assertThat(catalog.find("PUT /api/v1/index/vision")).isPresent();

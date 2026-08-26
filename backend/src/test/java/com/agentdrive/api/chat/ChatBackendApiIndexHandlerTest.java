@@ -31,4 +31,22 @@ class ChatBackendApiIndexHandlerTest {
         assertThat(result).containsEntry("status", "queued");
         verify(index).indexVision(eq(owner), eq(paths), eq(false));
     }
+
+    @Test
+    void routesGenericMissingIndexQueryWithOwnerAndFilters() {
+        UUID owner = UUID.randomUUID();
+        IndexDomainService index = mock(IndexDomainService.class);
+        when(index.missing(owner, "photos", "vector", "vision", 20, 40)).thenReturn(Map.of(
+                "ok", true, "operation", "index.missing", "items", List.of(),
+                "total_matches", 40, "returned", 0, "has_more", false));
+        ChatBackendApiIndexHandler handler = new ChatBackendApiIndexHandler(index);
+
+        Map<String, Object> result = handler.dispatch("GET /api/v1/index/missing",
+                new BackendApiRequest("call", null, "GET /api/v1/index/missing",
+                        null, Map.of("prefix", "photos", "kind", "vector", "document_type", "vision",
+                                "limit", 20, "offset", 40), null, null), owner);
+
+        assertThat(result).containsEntry("operation", "index.missing");
+        verify(index).missing(eq(owner), eq("photos"), eq("vector"), eq("vision"), eq(20), eq(40));
+    }
 }

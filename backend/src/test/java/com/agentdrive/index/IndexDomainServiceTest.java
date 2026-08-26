@@ -58,8 +58,9 @@ class IndexDomainServiceTest {
         IndexStore index = mock(IndexStore.class);
         EmbeddingRuntimeConfig config = emptyConfig();
         UUID owner = UUID.randomUUID();
-        when(index.missing(owner, "photos", "document", "vision", null, 11, 0))
-                .thenReturn(List.of(Map.of("path", "photos/missing.png", "missing_kind", "document")));
+        when(index.missing(owner, "photos", "document", "vision", null, 10, 0))
+                .thenReturn(List.of(Map.of("path", "photos/missing.png", "missing_kind", "document",
+                        "total_matches", 1)));
 
         Map<String, Object> result = new IndexDomainService(index, mock(IndexingService.class),
                 mock(EmbeddingService.class), config, mock(VisionDescriptionPort.class))
@@ -69,6 +70,29 @@ class IndexDomainServiceTest {
                 .containsEntry("document_type", "vision")
                 .containsEntry("returned", 1)
                 .containsEntry("has_more", false);
+    }
+
+    @Test
+    void missingVectorQueryReturnsOnlyFilesWithInvalidOrAbsentCurrentVectors() {
+        IndexStore index = mock(IndexStore.class);
+        EmbeddingRuntimeConfig config = mock(EmbeddingRuntimeConfig.class);
+        UUID owner = UUID.randomUUID();
+        when(config.find(owner)).thenReturn(Optional.of(new EmbeddingRuntimeConfig.Config(
+                "jina", "https://api.jina.ai/v1", "jina-embeddings-v3", "secret")));
+        when(index.missing(eq(owner), eq("photos"), eq("vector"), eq("vision"),
+                eq(EmbeddingFingerprint.of("jina", "https://api.jina.ai/v1", "jina-embeddings-v3")),
+                eq(25), eq(0)))
+                .thenReturn(List.of(Map.of("path", "photos/missing.png", "missing_kind", "vector",
+                        "total_matches", 1)));
+
+        Map<String, Object> result = new IndexDomainService(index, mock(IndexingService.class),
+                mock(EmbeddingService.class), config, mock(VisionDescriptionPort.class))
+                .missing(owner, "photos", "vector", "vision", 25, 0);
+
+        assertThat(result).containsEntry("kind", "vector")
+                .containsEntry("document_type", "vision")
+                .containsEntry("total_matches", 1)
+                .containsEntry("returned", 1);
     }
 
     @Test

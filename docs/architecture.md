@@ -73,7 +73,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 - 聊天 runtime 由 owner session 级 `ChatRunRegistry` relay 持有，不绑定单个 SSE 客户端；浏览器刷新、切换页面或网络断开不会主动取消运行。Agent 默认不因固定工具步数结束，目标完成、用户取消或运行基础设施熔断才终止；进程内最多保留 8 个 active run，单次运行 10 分钟超时。初始流返回 `X-Session-ID`，`GET /api/v1/chat/{sessionId}/active`、`GET /api/v1/chat/{sessionId}/stream` 和 `POST /api/v1/chat/{sessionId}/cancel` 先做 owner 会话校验后提供状态、持久事件回放和显式停止，非流式入口也通过同一 registry。`chat_run_events` 让进程重启后的事件可审计；没有本地 relay 时重连端点以 250ms 有界数据库轮询追踪跨进程新事件，终态或 10 分钟上限后结束，不创建后台任务队列。
 - `ChatRequest.file_context` 只接收 owner 内相对路径列表；后端在当前认证 owner 下读取文件/文件夹摘要后再以 `untrusted_data` 边界注入模型，正文中的命令不会获得指令权限。文件选择器附件先上传到 owner 的 `聊天附件` 目录；剪贴板图片只作为受限 `inline_images` Base64 随本轮请求发送，单张原图上限 50 MiB，应用侧保持原始字节并以视觉 detail `HIGH` 请求较高质量；视觉索引同样原样发送图片 bytes，并在 OpenAI 兼容请求中设置 `image_url.detail=high`，后端在模型不支持图片时拒绝，不写入会话或文件系统。模型输出的 `[[file:path]]` / `[[folder:path]]` 由前端转换成 allowlist 内的 `files.open` / `files.open_folder` 动作，不能触发任意 URL。
 - Skill 目录每轮注入摘要；成功读取过的 Skill 名称从当前会话的 owner-scoped `read_skill` transcript 轨迹恢复，下一轮由当前 registry 重新注入正文并避免重复工具调用。Skill 更新或停用不信任旧正文，始终以 registry 当前版本为准。
-- 索引资源由独立 `IndexDomainService` 和 `/api/v1/index` 提供 owner-scoped CRUD：读取状态/写入文本或视觉文档、直接向量化、清空向量、清理失效索引和重建全文。文本索引与向量化是两个同步 operation；批量调用返回 `succeeded/partial/failed` 及逐项错误，provider/路径错误返回结构化 `ok/status/code/detail`；Agent 不暴露任务创建接口。
+- 索引资源由独立 `IndexDomainService` 和 `/api/v1/index` 提供 owner-scoped CRUD：读取状态/查询通用缺口、写入文本或视觉文档、直接向量化、清空向量、清理失效索引和重建全文。Agent 先按 `kind=document|vector` 查询缺口，再把路径交给对应同步 operation；批量调用返回 `succeeded/partial/failed` 及逐项错误，视觉批次完成后立即持久化并返回真实计数，provider/路径错误返回结构化 `ok/status/code/detail`；Agent 不暴露任务创建接口。
 - 设置页的 `POST /api/v1/config/models` 返回模型目录及 `model_capabilities`，但该配置/探测 operation 不进入 Agent catalog；Agent 只能读取脱敏配置状态并使用已保存的 owner provider。Provider 明确声明的图片/模态能力优先，未知模型默认拒绝；Anthropic 只按已知 Claude 3/4 视觉系列放行。前端能力提示仅用于交互，聊天后端仍按当前配置重新校验 `inline_images`。
 - 模型只看到稳定的 `backend_api`、`frontend_api`、`read_skill` 及当前会话 `plan` 辅助工具。上下文编译器始终装配规范系统提示、owner 的 `Agent/AGENT.md` 和启用 Skill 摘要目录，并对已加载正文施加数量和字符预算；涉及整理、自动化、规则、偏好或记忆时再装配 `USER.md`、`MEMORY.md`，简单只读文件请求不重复发送无关个人文档。同来源正文未变化时不重复写 transcript。目录明确要求名称/说明匹配时先按 exact name 读取 Skill；正文只通过 `read_skill` 按需进入工具结果。`plan` 的每次调用必须返回完整步骤数组，仅用于当前会话 UI，不创建后台任务。业务能力仍须使用精确登记 operation，Skill 不能新增工具或权限。模型不能提供任意 URL、请求头、凭据、JavaScript 或 Java 类名。
 - 只有显式声明为 `probe`/`idempotent` 的 operation 才按 `session_id + tool + arguments` 使用持久 replay；普通 GET 不缓存，失败结果不缓存，mutation 后清空 session replay。ask/auto 模式下 red 写操作使用签名确认和一次性 nonce，客户端只回传 nonce/签名元数据；full 模式按用户授权直接执行。工具执行只把 `Exception` 编码为可恢复结果，JVM `Error` 交给外层终止流。
@@ -89,7 +89,7 @@ PostgreSQL 保存所有结构化运行状态，包括：
 
 ## 6. 业务错误与执行边界
 
-所有 Controller 使用统一的 `status/code/detail/ok` 错误结构；参数错误、资源不存在、冲突和 provider 不可用返回稳定领域说明，未分类 500 只向客户端返回通用 detail，真实异常以脱敏 throwable 和 request ID 写入 journal。Agent 的 `backend_api` 会把 dispatcher 的业务失败提升到 envelope 顶层并保留完整 `result`，模型和前端不能把失败误当成普通成功返回；历史旧 envelope 的嵌套失败也按失败展示。Agent 视觉配置/模型探测省略地址时沿用当前 owner 已保存地址，直接设置 API 的默认地址行为不变。索引/视觉/向量 API 同步返回真实执行结果，provider 前置检查失败时不写入任何任务记录。
+所有 Controller 使用统一的 `status/code/detail/ok` 错误结构；参数错误、资源不存在、冲突和 provider 不可用返回稳定领域说明，未分类 500 只向客户端返回通用 detail，真实异常以脱敏 throwable 和 request ID 写入 journal。Agent 的 `backend_api` 会把 dispatcher 的业务失败提升到 envelope 顶层并保留完整 `result`，模型和前端不能把失败误当成普通成功返回；历史旧 envelope 的嵌套失败也按失败展示。Agent 视觉配置/模型探测省略地址时沿用当前 owner 已保存地址，直接设置 API 的默认地址行为不变。索引/视觉/向量 API 同步返回真实执行结果，视觉批次每批完成立即落库，连接中断后通用缺口查询只返回剩余未完成项，provider 前置检查失败时不写入任何任务记录。
 
 ## 7. 前端与 Android
 

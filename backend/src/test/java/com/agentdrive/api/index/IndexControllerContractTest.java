@@ -47,6 +47,29 @@ class IndexControllerContractTest {
                 .expectStatus().isBadRequest();
     }
 
+    @Test
+    void exposesOwnerScopedGenericMissingIndexQuery() {
+        UUID owner = UUID.randomUUID();
+        IndexDomainService index = mock(IndexDomainService.class);
+        when(index.missing(owner, "photos", "vector", "vision", 10, 0)).thenReturn(Map.of(
+                "ok", true, "operation", "index.missing", "kind", "vector",
+                "document_type", "vision", "items", java.util.List.of(Map.of("path", "photos/a.png")),
+                "total_matches", 1, "returned", 1, "offset", 0, "limit", 10,
+                "has_more", false));
+        WebTestClient client = WebTestClient.bindToController(new IndexController(
+                index, new WebRequestPrincipalResolver(authenticator(owner)))).build();
+
+        client.get().uri("/api/v1/index/missing?prefix=photos&kind=vector&document_type=vision&limit=10&offset=0")
+                .header("Authorization", "Bearer session-token")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.operation").isEqualTo("index.missing")
+                .jsonPath("$.kind").isEqualTo("vector")
+                .jsonPath("$.total_matches").isEqualTo(1)
+                .jsonPath("$.items[0].path").isEqualTo("photos/a.png");
+    }
+
     private static CredentialAuthenticator authenticator(UUID owner) {
         return credential -> "session-token".equals(credential)
                 ? Optional.of(new AuthenticatedPrincipal(owner, AuthenticatedPrincipal.CredentialKind.SESSION))
