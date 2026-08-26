@@ -116,6 +116,15 @@ describe("PlanCard 计划卡片", () => {
     render(<PlanCard plan={[{ text: "执行目录级视觉索引", status: "in_progress" }]} phase="model" modelElapsedMs={125000} />);
     expect(screen.getByText("模型思考 02:05")).toBeInTheDocument();
   });
+
+  it("计划卡可以收起，并显示停止终态", () => {
+    render(<PlanCard plan={[{ text: "执行目录级视觉索引", status: "cancelled" }]} />);
+    const details = screen.getByText(/执行计划（0\/1）/).closest("details");
+    expect(details).toHaveAttribute("open");
+    fireEvent.click(screen.getByText(/执行计划（0\/1）/));
+    expect(details).not.toHaveAttribute("open");
+    expect(screen.getByText("· 已停止")).toBeInTheDocument();
+  });
 });
 
 describe("ToolStep 工具步骤", () => {

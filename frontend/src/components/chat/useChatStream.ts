@@ -139,6 +139,12 @@ function currentModelElapsedMs(run: ActiveChatStream) {
     : 0));
 }
 
+function settlePlanSteps(steps: PlanStep[], status: "cancelled" | "failed") {
+  return steps.map((step) => step.status === "in_progress"
+    ? { ...step, status }
+    : step);
+}
+
 /**
  * 流式对话发送 hook：按 session 隔离 chatStream、80ms 节流帧、事件→消息映射、
  * 会话建立/列表刷新/计划流、AbortController 生命周期与错误兜底。
@@ -353,6 +359,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       settleRunToolActivities(run, "failed", "工具执行异常中断", error instanceof Error ? error.message : String(error));
       if (visible) {
         setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
+        setPlan((steps) => settlePlanSteps(steps, "failed"));
         const message = error instanceof Error ? error.message : String(error);
         setMessages((m) => [
           ...removeEmptyAssistantMessages(settleRunningToolSteps(m, "error", "工具执行异常中断", Date.now() - run.startedAt)),
@@ -497,6 +504,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
     finishOperationActivity(run.activityId, "cancelled", { phase: "finished", message: "Agent 运行已取消" });
     setTotalElapsedMs(Math.max(0, Date.now() - run.startedAt));
     setModelElapsedMs(currentModelElapsedMs(run));
+    setPlan((steps) => settlePlanSteps(steps, "cancelled"));
     if (sessionIdRef.current) void cancelChatRun(sessionIdRef.current).catch(() => {});
     refreshRunningKeys();
     setMessages((m) => {
@@ -506,7 +514,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamRetur
       copy.push({ type: "system", content: "已停止本次任务。" });
       return copy;
     });
-  }, [refreshRunningKeys, sessionIdRef, setMessages]);
+  }, [refreshRunningKeys, sessionIdRef, setMessages, setPlan]);
 
   return { send, stop, busy, totalElapsedMs, modelElapsedMs };
 }
